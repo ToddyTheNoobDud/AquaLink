@@ -339,6 +339,7 @@ class Player extends EventEmitter {
     }
 
     async trackEnd(player, track, payload) {
+        this.aqua.emit("trackEnd", player, track, payload);
         this.addToPreviousTrack(track);
         if (this.shouldDeleteMessage && this.nowPlayingMessage) {
             try {
