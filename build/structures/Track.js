@@ -10,6 +10,7 @@ class Track {
     this.identifier = info.identifier || '';
     this.isSeekable = Boolean(info.isSeekable);
     this.author = info.author || '';
+    this.position = info.position || 0;
     this.length = info.length || 0;
     this.duration = info.length || 0;
     this.isStream = Boolean(info.isStream);
@@ -29,6 +30,7 @@ class Track {
     return {
       identifier: this.identifier,
       isSeekable: this.isSeekable,
+      position: this.position,
       author: this.author,
       length: this.length,
       isStream: this.isStream,
