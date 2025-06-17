@@ -59,11 +59,10 @@ class Player extends EventEmitter {
         this._dataStore = new Map();
 
         this.on("playerUpdate", (packet) => {
-            this.position = packet.state.position;
-            this.connected = packet.state.connected;
-            this.ping = packet.state.ping;
-
-            this.aqua.emit("playerUpdate", this, packet);
+                this.position = packet.state.position ?? this.position;
+                this.timestamp = packet.state.timestamp ?? this.timestamp;
+                this.ping = packet.state.ping ?? this.ping;
+                this.aqua.emit("playerUpdate", this, { packet });
         });
 
         this.on("event", async (payload) => {
