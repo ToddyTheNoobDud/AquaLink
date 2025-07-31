@@ -87,7 +87,7 @@
 
 ## 💻 Quick Start
 
-\`\`\`javascript
+\`\`\`bash
 npm install aqualink discord.js
 \`\`\`
 
