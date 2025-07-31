@@ -87,19 +87,13 @@
 
 ## 💻 Quick Start
 
-```javascript
-npm install aqualink
+\`\`\`javascript
+npm install aqualink discord.js
+\`\`\`
 
-// If you're using Module, use this:
-// import { createRequire } from 'module';
-// const require = createRequire(import.meta.url);
-
-//const { Aqua } = require('aqualink');
-
-
-
+\`\`\`javascript
 const { Aqua } = require("aqualink");
-const { Client, Collection, GatewayDispatchEvents } = require("discord.js");
+const { Client, GatewayDispatchEvents } = require("discord.js");
 
 const client = new Client({
     intents: [
@@ -114,40 +108,39 @@ const client = new Client({
 const nodes = [
     {
         host: "127.0.0.1",
-        password: "yourpass",
-        port: 233,
+        password: "your_password",
+        port: 2333,
         secure: false,
-        name: "localhost"
+        name: "main-node"
     }
 ];
 
-const aqua = Aqua(client, nodes, {
-  defaultSearchPlatform: "ytsearch",
+const aqua = new Aqua(client, nodes, {
+  defaultSearchPlatform: "youtube",
   restVersion: "v4",
-  autoResume: false,
+  autoResume: true,
   infiniteReconnects: true,
+  autoplayPlatform: ['spotify', 'youtube', 'soundcloud'], // Add your preferred platforms
+  nodeResolver: 'LeastLoad' // or 'RoundRobin'
 });
 
 client.aqua = aqua;
 
-
 client.once("ready", () => {
     client.aqua.init(client.user.id);
-    console.log("Ready!");
+    console.log(\`Logged in as \${client.user.tag}\`);
 });
 
-
 client.on("raw", (d) => {
-    if (![GatewayDispatchEvents.VoiceStateUpdate, GatewayDispatchEvents.VoiceServerUpdate,].includes(d.t)) return;
+    if (![GatewayDispatchEvents.VoiceStateUpdate, GatewayDispatchEvents.VoiceServerUpdate].includes(d.t)) return;
     client.aqua.updateVoiceState(d);
 });
 
 client.on("messageCreate", async (message) => {
-    if (message.author.bot) return;
+    if (message.author.bot || !message.content.startsWith("!play")) return;
 
-    if (!message.content.startsWith("!play")) return;
-
-    const query = message.content.slice(6);
+    const query = message.content.slice(6).trim();
+    if (!query) return message.channel.send("Please provide a song to play.");
 
     const player = client.aqua.createConnection({
         guildId: message.guild.id,
@@ -156,39 +149,51 @@ client.on("messageCreate", async (message) => {
         deaf: true,
     });
 
-    const resolve = await client.aqua.resolve({ query, requester: message.member });
+    try {
+        const resolve = await client.aqua.resolve({ query, requester: message.member });
+        const { loadType, tracks, playlistInfo } = resolve;
 
-    if (resolve.loadType === 'playlist') {
-        await message.channel.send(`Added ${resolve.tracks.length} songs from ${resolve.playlistInfo.name} playlist.`);
-        for (const track of resolve.tracks) {
-            player.queue.add(track)
+        if (loadType === 'playlist') {
+            for (const track of tracks) {
+                player.queue.add(track);
+            }
+            message.channel.send(\`Added \${tracks.length} songs from \${playlistInfo.name}.\`);
+        } else if (loadType === 'search' || loadType === 'track') {
+            const track = tracks[0];
+            player.queue.add(track);
+            message.channel.send(\`Added **\${track.title}** to the queue.\`);
+        } else {
+            return message.channel.send("No results found.");
         }
-        if (!player.playing && !player.paused) return player.play();
 
-    } else if (resolve.loadType === 'search' || resolve.loadType === 'track') {
-        const track = resolve.tracks.shift();
-        track.info.requester = message.member;
-
-        player.queue.add(track);
-
-        await message.channel.send(`Added **${track.info.title}** to the queue.`);
-
-        if (!player.playing && !player.paused) return player.play();
-
-    } else {
-        return message.channel.send(`There were no results found for your query.`);
+        if (!player.playing && !player.paused) {
+            player.play();
+        }
+    } catch (error) {
+        console.error("Playback error:", error);
+        message.channel.send("An error occurred while trying to play the song.");
     }
 });
 
 client.aqua.on("nodeConnect", (node) => {
-    console.log(`Node connected: ${node.name}`);
-});
-client.aqua.on("nodeError", (node, error) => {
-    console.log(`Node "${node.name}" encountered an error: ${error.message}.`);
+    console.log(\`Node connected: \${node.name}\`);
 });
 
-client.login("Yourtokenhere");
-```
+client.aqua.on("nodeError", (node, error) => {
+    console.log(\`Node "\${node.name}" encountered an error: \${error.message}.\`);
+});
+
+client.aqua.on('trackStart', (player, track) => {
+    player.textChannel.send(\`Now playing: **\${track.title}**\`);
+});
+
+client.aqua.on('queueEnd', (player) => {
+    player.textChannel.send('The queue has ended.');
+    player.destroy();
+});
+
+client.login("YOUR_DISCORD_BOT_TOKEN");
+\`\`\`
 
 ## 🌟 Featured Projects
 
@@ -313,7 +318,7 @@ For detailed usage, API references, and examples, check out our official documen
           <sub><b>SoulDevs</b></sub>
         </a>
         <br />
-        <a href="#code-SoulDevs title="Code">💻</a>
+        <a href="#code-SoulDevs" title="Code">💻</a>
       </td>
     </tr>
   </tbody>
