@@ -116,11 +116,11 @@ const nodes = [
 ];
 
 const aqua = new Aqua(client, nodes, {
-    defaultSearchPlatform: "youtube",
+    defaultSearchPlatform: "ytsearch",
     restVersion: "v4",
     autoResume: true,
     infiniteReconnects: true,
-    autoplayPlatform: ['spotify', 'youtube', 'soundcloud'],
+    autoplayPlatform: ['spsearch', 'ytsearch', 'scsearch'],
     nodeResolver: 'LeastLoad'
 });
 
