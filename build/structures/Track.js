@@ -33,7 +33,9 @@ class Track {
         author: this.author,
         length: this.duration,
         isStream: this.isStream,
-        title: this.title,
+        get title() {
+          return this.title;
+        },
         uri: this.uri,
         sourceName: this.sourceName,
         artworkUrl: this.artworkUrl
