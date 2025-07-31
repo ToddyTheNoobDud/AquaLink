@@ -13,9 +13,9 @@ const GUILD_ID_REGEX = /^\d+$/
 
 const DEFAULT_OPTIONS = Object.freeze({
   nodeResolver: 'LeastLoad',
-  autoplayPlatform: ['spotify', 'youtube'],
+  autoplayPlatform: ['spsearch', 'ytsearch'],
   shouldDeleteMessage: false,
-  defaultSearchPlatform: 'youtube',
+  defaultSearchPlatform: 'ytsearch',
   leaveOnEnd: true,
   restVersion: 'v4',
   plugins: [],
