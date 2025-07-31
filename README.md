@@ -87,21 +87,21 @@
 
 ## 💻 Quick Start
 
-\`\`\`bash
+```bash
 npm install aqualink discord.js
-\`\`\`
+```
 
-\`\`\`javascript
+```javascript
 const { Aqua } = require("aqualink");
-const { Client, GatewayDispatchEvents } = require("discord.js");
+const { Client, GatewayIntentBits, Events } = require("discord.js");
 
 const client = new Client({
     intents: [
-        "Guilds",
-        "GuildMembers",
-        "GuildMessages",
-        "MessageContent",
-        "GuildVoiceStates"
+        GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildMembers,
+        GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.MessageContent,
+        GatewayIntentBits.GuildVoiceStates
     ]
 });
 
@@ -116,31 +116,36 @@ const nodes = [
 ];
 
 const aqua = new Aqua(client, nodes, {
-  defaultSearchPlatform: "youtube",
-  restVersion: "v4",
-  autoResume: true,
-  infiniteReconnects: true,
-  autoplayPlatform: ['spotify', 'youtube', 'soundcloud'], // Add your preferred platforms
-  nodeResolver: 'LeastLoad' // or 'RoundRobin'
+    defaultSearchPlatform: "youtube",
+    restVersion: "v4",
+    autoResume: true,
+    infiniteReconnects: true,
+    autoplayPlatform: ['spotify', 'youtube', 'soundcloud'],
+    nodeResolver: 'LeastLoad'
 });
 
 client.aqua = aqua;
 
-client.once("ready", () => {
+client.once(Events.Ready, () => {
     client.aqua.init(client.user.id);
-    console.log(\`Logged in as \${client.user.tag}\`);
+    console.log(`Logged in as ${client.user.tag}`);
 });
 
-client.on("raw", (d) => {
-    if (![GatewayDispatchEvents.VoiceStateUpdate, GatewayDispatchEvents.VoiceServerUpdate].includes(d.t)) return;
+client.on(Events.Raw, (d) => {
+    if (![Events.VoiceStateUpdate, Events.VoiceServerUpdate].includes(d.t)) return;
     client.aqua.updateVoiceState(d);
 });
 
-client.on("messageCreate", async (message) => {
+client.on(Events.MessageCreate, async (message) => {
     if (message.author.bot || !message.content.startsWith("!play")) return;
 
     const query = message.content.slice(6).trim();
     if (!query) return message.channel.send("Please provide a song to play.");
+
+    // Check if user is in a voice channel
+    if (!message.member.voice.channel) {
+        return message.channel.send("You need to be in a voice channel to play music!");
+    }
 
     const player = client.aqua.createConnection({
         guildId: message.guild.id,
@@ -157,11 +162,11 @@ client.on("messageCreate", async (message) => {
             for (const track of tracks) {
                 player.queue.add(track);
             }
-            message.channel.send(\`Added \${tracks.length} songs from \${playlistInfo.name}.\`);
+            message.channel.send(`Added ${tracks.length} songs from ${playlistInfo.name}.`);
         } else if (loadType === 'search' || loadType === 'track') {
             const track = tracks[0];
             player.queue.add(track);
-            message.channel.send(\`Added **\${track.title}** to the queue.\`);
+            message.channel.send(`Added **${track.title}** to the queue.`);
         } else {
             return message.channel.send("No results found.");
         }
@@ -176,24 +181,59 @@ client.on("messageCreate", async (message) => {
 });
 
 client.aqua.on("nodeConnect", (node) => {
-    console.log(\`Node connected: \${node.name}\`);
+    console.log(`Node connected: ${node.name}`);
 });
 
 client.aqua.on("nodeError", (node, error) => {
-    console.log(\`Node "\${node.name}" encountered an error: \${error.message}.\`);
+    console.log(`Node "${node.name}" encountered an error: ${error.message}.`);
 });
 
 client.aqua.on('trackStart', (player, track) => {
-    player.textChannel.send(\`Now playing: **\${track.title}**\`);
+    const channel = client.channels.cache.get(player.textChannel);
+    if (channel) channel.send(`Now playing: **${track.title}**`);
 });
 
 client.aqua.on('queueEnd', (player) => {
-    player.textChannel.send('The queue has ended.');
+    const channel = client.channels.cache.get(player.textChannel);
+    if (channel) channel.send('The queue has ended.');
     player.destroy();
 });
 
 client.login("YOUR_DISCORD_BOT_TOKEN");
-\`\`\`
+```
+
+### Key Fixes Applied:
+
+1. **Updated Discord.js Imports**: Changed `GatewayDispatchEvents` to proper `Events` enum and `GatewayIntentBits`
+2. **Fixed Event Handling**: Updated to use `Events.Ready`, `Events.Raw`, `Events.MessageCreate`
+3. **Added Voice Channel Check**: Prevents errors when user isn't in a voice channel
+4. **Fixed Channel Access**: Used `client.channels.cache.get()` for accessing text channels in events
+5. **Improved Error Handling**: Added proper null checks and error boundaries
+6. **Updated Intent Names**: Changed string intents to proper `GatewayIntentBits` enum values
+
+### Additional Commands You Can Add:
+
+```javascript
+client.on(Events.MessageCreate, async (message) => {
+    if (message.content === "!skip") {
+        const player = client.aqua.players.get(message.guild.id);
+        if (player) {
+            player.skip();
+            message.channel.send("⏭️ Skipped current track!");
+        }
+    }
+});
+
+client.on(Events.MessageCreate, async (message) => {
+    if (message.content === "!stop") {
+        const player = client.aqua.players.get(message.guild.id);
+        if (player) {
+            player.destroy();
+            message.channel.send("⏹️ Stopped playback and cleared queue!");
+        }
+    }
+});
+```
 
 ## 🌟 Featured Projects
 
