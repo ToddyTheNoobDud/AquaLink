@@ -12,8 +12,10 @@ const URL_REGEX = /^https?:\/\//
 const GUILD_ID_REGEX = /^\d+$/
 
 const DEFAULT_OPTIONS = Object.freeze({
+  nodeResolver: 'LeastLoad',
+  autoplayPlatform: ['spotify', 'youtube'],
   shouldDeleteMessage: false,
-  defaultSearchPlatform: 'ytsearch',
+  defaultSearchPlatform: 'youtube',
   leaveOnEnd: true,
   restVersion: 'v4',
   plugins: [],
@@ -27,7 +29,11 @@ const DEFAULT_OPTIONS = Object.freeze({
     resumePlayback: true,
     cooldownTime: 5000,
     maxFailoverAttempts: 5
-  }
+  },
+  partialTrack: [
+    'pluginInfo', 'title', 'author', 'length', 'uri', 'requester', 'artworkUrl',
+    'sourceName', 'identifier', 'isSeekable', 'isStream', 'position', 'isrc'
+  ],
 })
 
 const CLEANUP_INTERVAL = 60000
@@ -51,6 +57,7 @@ class Aqua extends EventEmitter {
     this.clientId = null
     this.initiated = false
     this.version = pkgVersion
+    this.manager = this
 
     this.options = { ...DEFAULT_OPTIONS, ...options }
     this.failoverOptions = { ...DEFAULT_OPTIONS.failoverOptions, ...options.failoverOptions }
@@ -62,6 +69,9 @@ class Aqua extends EventEmitter {
     this.plugins = this.options.plugins
     this.autoResume = this.options.autoResume
     this.infiniteReconnects = this.options.infiniteReconnects
+    this.partialTrack = this.options.partialTrack
+    this.autoplayPlatform = this.options.autoplayPlatform
+    this.nodeResolver = this.options.nodeResolver
     this.send = this.options.send || this._defaultSend
 
     this._nodeStates = new Map()
@@ -109,7 +119,15 @@ class Aqua extends EventEmitter {
       }
     }
 
+    if (this.nodeResolver === 'LeastLoad') {
+      return connectedNodes.sort((a, b) => this._getNodeLoad(a) - this._getNodeLoad(b))
+    }
+
     return connectedNodes.sort((a, b) => (a.rest?.calls || 0) - (b.rest?.calls || 0))
+  }
+
+  hasAvailableNodes() {
+    return this.leastUsedNodes.length > 0
   }
 
   async init(clientId) {
