@@ -276,7 +276,7 @@ For detailed usage, API references, and examples, check out our official documen
 - Advanced features
 - Troubleshooting
 
-🔗 Visit: **[Aqualink Docs](https://toddythenoobdud.github.io/aqualink.github.io)**
+🔗 Visit: **[Aqualink Docs](https://roddynnn.github.io/docs)**
 
 ## 👑 Premium Bots Using Aqualink
 
