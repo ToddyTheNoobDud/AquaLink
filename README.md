@@ -268,7 +268,7 @@ client.on(Events.MessageCreate, async (message) => {
 
 For detailed usage, API references, and examples, check out our official documentation:
 
-[![Docs](https://img.shields.io/badge/Documentation-0099FF?style=for-the-badge&logo=readthedocs&logoColor=white)](https://toddythenoobdud.github.io/aqualink.github.io)
+  [![Docs](https://img.shields.io/badge/Documentation-0099FF?style=for-the-badge&logo=readthedocs&logoColor=white)](https://roddynnn.github.io/docs/)
 
 📌 **Get Started Quickly**
 - Installation guide
