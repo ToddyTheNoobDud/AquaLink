@@ -335,7 +335,7 @@ For detailed usage, API references, and examples, check out our official documen
         <a href="https://github.com/pomicee">
           <img src="https://avatars.githubusercontent.com/u/134554554?v=4?s=100" width="100px;" alt="pomicee"/>
           <br />
-          <sub><b>pomicee</b></sub>
+          <sub><b>asynico</b></sub>
         </a>
         <br />
         <a href="#code-pomicee" title="Code">💻</a>
