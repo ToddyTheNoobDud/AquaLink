@@ -80,7 +80,7 @@ class Node {
     const headers = Object.create(null)
     headers.Authorization = this.password
     headers['User-Id'] = this.aqua.clientId
-    headers['Client-Name'] = `Aqua/${this.aqua.version} (https://github.com/ToddyTheNoobDud/AquaLink)`
+    headers['Client-Name'] = `Aqua/${this.aqua.version} https://github.com/ToddyTheNoobDud/AquaLink`
     if (this.sessionId) headers['Session-Id'] = this.sessionId
     return headers
   }
