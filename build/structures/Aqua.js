@@ -28,6 +28,7 @@ const DEFAULT_OPTIONS = Object.freeze({
   plugins: [],
   autoResume: false,
   infiniteReconnects: false,
+  nodeResolver: 'LeastLoad',
   failoverOptions: Object.freeze({
     enabled: true,
     maxRetries: 3,
@@ -77,6 +78,7 @@ class Aqua extends EventEmitter {
     this.plugins = this.options.plugins
     this.autoResume = this.options.autoResume
     this.infiniteReconnects = this.options.infiniteReconnects
+    this.nodeResolver = this.options.nodeResolver
     this.send = this.options.send || this._createDefaultSend()
 
     this._nodeStates = new Map() // nodeId -> { connected, failoverInProgress }
@@ -585,7 +587,7 @@ class Aqua extends EventEmitter {
     const candidateNodes = options.region ? this.fetchRegion(options.region) : this.leastUsedNodes
     if (!candidateNodes.length) throw new Error('No nodes available')
 
-    const node = this._chooseLeastBusyNode(candidateNodes)
+    const node = this._chooseNode(candidateNodes)
     if (!node) throw new Error('No suitable node found')
 
     return this.createPlayer(node, options)
@@ -654,7 +656,7 @@ class Aqua extends EventEmitter {
 
   _getRequestNode(nodes) {
     if (!nodes) {
-      const chosen = this._chooseLeastBusyNode(this.leastUsedNodes)
+      const chosen = this._chooseNode(this.leastUsedNodes)
       if (!chosen) throw new Error('No nodes available')
       return chosen
     }
@@ -663,7 +665,7 @@ class Aqua extends EventEmitter {
 
     if (Array.isArray(nodes)) {
       const candidates = nodes.filter(n => n?.connected)
-      const chosen = this._chooseLeastBusyNode(candidates.length ? candidates : this.leastUsedNodes)
+      const chosen = this._chooseNode(candidates.length ? candidates : this.leastUsedNodes)
       if (!chosen) throw new Error('No nodes available')
       return chosen
     }
@@ -671,7 +673,7 @@ class Aqua extends EventEmitter {
     if (typeof nodes === 'string') {
       const node = this.nodeMap.get(nodes)
       if (node?.connected) return node
-      const chosen = this._chooseLeastBusyNode(this.leastUsedNodes)
+      const chosen = this._chooseNode(this.leastUsedNodes)
       if (!chosen) throw new Error('No nodes available')
       return chosen
     }
@@ -679,20 +681,27 @@ class Aqua extends EventEmitter {
     throw new TypeError(`Invalid nodes parameter: ${typeof nodes}`)
   }
 
-  _chooseLeastBusyNode(nodes) {
+  _chooseNode(nodes) {
     if (!nodes?.length) return null
-    if (nodes.length === 1) return nodes[0]
 
-    let best = nodes[0]
-    let bestScore = this._getCachedNodeLoad(best)
-    for (let i = 1; i < nodes.length; i++) {
-      const score = this._getCachedNodeLoad(nodes[i])
-      if (score < bestScore) {
-        bestScore = score
-        best = nodes[i]
+    switch (this.nodeResolver) {
+      case 'LeastLoad': {
+        if (nodes.length === 1) return nodes[0]
+
+        let best = nodes[0]
+        let bestScore = this._getCachedNodeLoad(best)
+        for (let i = 1; i < nodes.length; i++) {
+          const score = this._getCachedNodeLoad(nodes[i])
+          if (score < bestScore) {
+            bestScore = score
+            best = nodes[i]
+          }
+        }
+        return best
       }
+      default:
+        throw new Error(`Invalid nodeResolver: ${this.nodeResolver}`)
     }
-    return best
   }
 
   _constructResponse(response, requester, requestNode) {
@@ -842,7 +851,7 @@ class Aqua extends EventEmitter {
     try {
       let player = this.players.get(p.g)
       if (!player) {
-        const targetNode = this._chooseLeastBusyNode(this.leastUsedNodes)
+        const targetNode = this._chooseNode(this.leastUsedNodes)
         if (!targetNode) return
         player = this.createPlayer(targetNode, {
           guildId: p.g,
