@@ -174,7 +174,8 @@ class Filters {
     return this.updateFilters()
   }
 
-  async updateFilters() {
+  async updateFilters(filters = this.filters) {
+    this.filters = filters
     await this.player.nodes.rest.updatePlayer({
       guildId: this.player.guildId,
       data: { filters: this.filters }
