@@ -37,7 +37,42 @@ const DEFAULT_OPTIONS = Object.freeze({
     preservePosition: true,
     resumePlayback: true,
     cooldownTime: 5000,
-    maxFailoverAttempts: 5
+    maxFailoverAttempts: 5,
+    healthCheck: {
+      enabled: true,
+      interval: 30000,
+      timeout: 5000
+    }
+  }),
+  resilienceOptions: Object.freeze({
+    enabled: true,
+    strategy: 'priority',
+    maxRetries: 5,
+    retryDelay: 2000,
+    retryBackoff: true,
+    maxRetryDelay: 10000,
+    preservePosition: true,
+    resumePlayback: true,
+    cooldownTime: 30000,
+    maxFailoverAttempts: 10,
+    healthCheck: {
+      enabled: true,
+      interval: 15000,
+      timeout: 3000,
+      maxFailures: 3,
+      recoveryDelay: 60000
+    },
+    notifications: {
+      enabled: true,
+      events: ['failover', 'recovery', 'exhausted'],
+      webhook: 'https://discord.com/api/webhooks/id/token'
+    },
+    persistence: {
+      enabled: true,
+      saveQueue: true,
+      saveFilters: true,
+      saveVolume: true
+    }
   })
 })
 
@@ -85,6 +120,7 @@ class Aqua extends EventEmitter {
 
     this.options = Object.assign({}, DEFAULT_OPTIONS, options)
     this.failoverOptions = Object.assign({}, DEFAULT_OPTIONS.failoverOptions, options.failoverOptions)
+    this.resilienceOptions = Object.assign({}, DEFAULT_OPTIONS.resilienceOptions, options.resilienceOptions)
     this.shouldDeleteMessage = this.options.shouldDeleteMessage
     this.defaultSearchPlatform = this.options.defaultSearchPlatform
     this.leaveOnEnd = this.options.leaveOnEnd
@@ -117,6 +153,7 @@ class Aqua extends EventEmitter {
 
     this._bindEventHandlers()
     this._startCleanupTimer()
+    this._startHealthCheckTimer()
   }
 
   _getDomainLists() {
@@ -257,7 +294,7 @@ class Aqua extends EventEmitter {
     const node = new Node(this, options, this.options)
     if (!node.players) node.players = new Set()
     this.nodeMap.set(nodeId, node)
-    this._nodeStates.set(nodeId, { connected: false, failoverInProgress: false })
+    this._nodeStates.set(nodeId, { connected: false, failoverInProgress: false, failures: 0 })
     try {
       await node.connect()
       this._nodeStates.set(nodeId, { connected: true, failoverInProgress: false })
@@ -367,36 +404,59 @@ class Aqua extends EventEmitter {
   }
 
   async handleNodeFailover(failedNode) {
-    if (!this.failoverOptions.enabled) return
+    const resilience = this.resilienceOptions.enabled ? this.resilienceOptions : this.failoverOptions
+    if (!resilience.enabled) return
+
     const nodeId = failedNode.name || failedNode.host
     const now = Date.now()
     const nodeState = this._nodeStates.get(nodeId)
     if (nodeState?.failoverInProgress) return
     const lastAttempt = this._lastFailoverAttempt.get(nodeId)
-    if (lastAttempt && (now - lastAttempt) < this.failoverOptions.cooldownTime) return
+    if (lastAttempt && (now - lastAttempt) < resilience.cooldownTime) return
     const attempts = this._failoverQueue.get(nodeId) || 0
-    if (attempts >= this.failoverOptions.maxFailoverAttempts) return
-    this._nodeStates.set(nodeId, { connected: false, failoverInProgress: true })
+    if (attempts >= resilience.maxFailoverAttempts) {
+      if (this.resilienceOptions.notifications.enabled && this.resilienceOptions.notifications.events.includes('exhausted')) {
+        this._sendWebhookNotification('exhausted', failedNode)
+      }
+      return
+    }
+    this._nodeStates.set(nodeId, { ...nodeState, connected: false, failoverInProgress: true })
     this._lastFailoverAttempt.set(nodeId, now)
     this._failoverQueue.set(nodeId, attempts + 1)
     try {
       this.emit('nodeFailover', failedNode)
+      if (this.resilienceOptions.notifications.enabled && this.resilienceOptions.notifications.events.includes('failover')) {
+        this._sendWebhookNotification('failover', failedNode)
+      }
       const affectedPlayers = Array.from(failedNode.players || [])
       if (!affectedPlayers.length) {
-        this._nodeStates.set(nodeId, { connected: false, failoverInProgress: false })
+        this._nodeStates.set(nodeId, { ...nodeState, connected: false, failoverInProgress: false })
         return
       }
       const availableNodes = this._getAvailableNodes(failedNode)
       if (!availableNodes.length) throw new Error('No failover nodes available')
-      const results = await this._migratePlayersOptimized(affectedPlayers, availableNodes)
+
+      let sortedNodes
+      if (resilience.strategy === 'priority') {
+        sortedNodes = availableNodes.sort((a, b) => a.priority - b.priority || this._getCachedNodeLoad(a) - this._getCachedNodeLoad(b))
+      } else if (resilience.strategy === 'load-based') {
+        sortedNodes = availableNodes.sort((a, b) => this._getCachedNodeLoad(a) - this._getCachedNodeLoad(b))
+      } else { 
+        sortedNodes = availableNodes
+      }
+
+      const results = await this._migratePlayersOptimized(affectedPlayers, sortedNodes)
       const successful = results.filter(r => r.success).length
       if (successful) {
         this.emit('nodeFailoverComplete', failedNode, successful, results.length - successful)
+        if (this.resilienceOptions.notifications.enabled && this.resilienceOptions.notifications.events.includes('recovery')) {
+          this._sendWebhookNotification('recovery', failedNode, successful)
+        }
       }
     } catch (error) {
       this.emit('error', null, new Error(`Failover failed: ${error?.message || String(error)}`))
     } finally {
-      this._nodeStates.set(nodeId, { connected: false, failoverInProgress: false })
+      this._nodeStates.set(nodeId, { ...nodeState, connected: false, failoverInProgress: false })
     }
   }
 
@@ -425,9 +485,10 @@ class Aqua extends EventEmitter {
   }
 
   async _migratePlayer(player, pickNode) {
+    const resilience = this.resilienceOptions.enabled ? this.resilienceOptions : this.failoverOptions
     const playerState = this._capturePlayerState(player)
     if (!playerState) throw new Error('Failed to capture state')
-    for (const retry of _range(0, this.failoverOptions.maxRetries)) {
+    for (let retry = 0; retry < resilience.maxRetries; retry++) {
       try {
         const targetNode = pickNode()
         const newPlayer = await this._createPlayerOnNode(targetNode, playerState)
@@ -435,15 +496,19 @@ class Aqua extends EventEmitter {
         this.emit('playerMigrated', player, newPlayer, targetNode)
         return newPlayer
       } catch (error) {
-        if (retry === this.failoverOptions.maxRetries - 1) throw error
-        await _delay(this.failoverOptions.retryDelay * Math.pow(1.5, retry))
+        if (retry === resilience.maxRetries - 1) throw error
+        let delay = resilience.retryDelay
+        if (resilience.retryBackoff) {
+          delay = Math.min(delay * Math.pow(1.5, retry), resilience.maxRetryDelay)
+        }
+        await _delay(delay)
       }
     }
   }
 
   _capturePlayerState(player) {
     if (!player) return null
-    return {
+    const state = {
       guildId: player.guildId,
       textChannel: player.textChannel,
       voiceChannel: player.voiceChannel,
@@ -457,6 +522,10 @@ class Aqua extends EventEmitter {
       deaf: player.deaf ?? false,
       connected: !!player.connected
     }
+    if (this.resilienceOptions.persistence.enabled && this.resilienceOptions.persistence.saveFilters) {
+      state.filters = player.filters.filters
+    }
+    return state
   }
 
   async _createPlayerOnNode(targetNode, playerState) {
@@ -470,6 +539,7 @@ class Aqua extends EventEmitter {
   }
 
   async _restorePlayerState(newPlayer, playerState) {
+    const resilience = this.resilienceOptions.enabled ? this.resilienceOptions : this.failoverOptions
     const operations = []
     if (typeof playerState.volume === 'number') {
       if (typeof newPlayer.setVolume === 'function') {
@@ -481,11 +551,11 @@ class Aqua extends EventEmitter {
     if (playerState.queue?.length && newPlayer.queue?.add) {
       newPlayer.queue.add(...playerState.queue)
     }
-    if (playerState.current && this.failoverOptions.preservePosition) {
+    if (playerState.current && resilience.preservePosition) {
       if (newPlayer.queue?.add) {
         newPlayer.queue.add(playerState.current, { toFront: true })
       }
-      if (this.failoverOptions.resumePlayback) {
+      if (resilience.resumePlayback) {
         operations.push(newPlayer.play())
         if (playerState.position > 0) {
           setTimeout(() => newPlayer.seek?.(playerState.position), SEEK_DELAY)
@@ -496,6 +566,9 @@ class Aqua extends EventEmitter {
       }
     }
     Object.assign(newPlayer, { repeat: playerState.repeat, shuffle: playerState.shuffle })
+    if (playerState.filters && this.resilienceOptions.persistence.saveFilters) {
+      await newPlayer.filters.updateFilters(playerState.filters)
+    }
     await Promise.allSettled(operations)
   }
 
@@ -523,8 +596,8 @@ class Aqua extends EventEmitter {
     if (!region) return this.leastUsedNodes
     const lowerRegion = region.toLowerCase()
     const filtered = Array.from(this.nodeMap.values())
-      .filter(node => node.connected && node.regions?.includes(lowerRegion))
-      .sort((a, b) => this._getCachedNodeLoad(a) - this._getCachedNodeLoad(b))
+      .filter(node => node.connected && node.region === lowerRegion)
+      .sort((a, b) => a.priority - b.priority || this._getCachedNodeLoad(a) - this._getCachedNodeLoad(b))
     return Object.freeze(filtered)
   }
 
@@ -783,6 +856,9 @@ class Aqua extends EventEmitter {
   }
 
   async savePlayer(filePath = './AquaPlayers.jsonl') {
+    const persistence = this.resilienceOptions.persistence
+    if (!persistence.enabled) return
+
     const lockFile = `${filePath}.lock`
     try {
       await fs.promises.writeFile(lockFile, process.pid.toString(), { flag: 'wx' }).catch(() => null)
@@ -798,12 +874,15 @@ class Aqua extends EventEmitter {
           u: player.current?.uri || null,
           p: player.position || 0,
           ts: player.timestamp || 0,
-          q: player.queue?.tracks?.slice(0, 10).map(tr => tr.uri) || [],
+          q: persistence.saveQueue ? player.queue?.tracks?.slice(0, 10).map(tr => tr.uri) || [] : [],
           r: requester ? JSON.stringify({ id: requester.id, username: requester.username }) : null,
-          vol: player.volume,
+          vol: persistence.saveVolume ? player.volume : 100,
           pa: player.paused,
           pl: player.playing,
           nw: player.nowPlayingMessage?.id || null
+        }
+        if (persistence.saveFilters) {
+          data.f = player.filters.filters
         }
         buffer.push(JSON.stringify(data))
         if (buffer.length >= 100) {
@@ -822,16 +901,19 @@ class Aqua extends EventEmitter {
   }
 
   async _restorePlayer(p) {
+    const persistence = this.resilienceOptions.persistence
+    if (!persistence.enabled) return
+
     try {
       const player = this.players.get(p.g) || this.createPlayer(this._chooseLeastBusyNode(this.leastUsedNodes), {
         guildId: p.g,
         textChannel: p.t,
         voiceChannel: p.v,
-        defaultVolume: p.vol || 65,
+        defaultVolume: persistence.saveVolume ? p.vol || 65 : 65,
         deaf: true
       })
       const requester = this._parseRequester(p.r)
-      const tracksToResolve = [p.u, ...(p.q || [])].filter(Boolean).slice(0, 20)
+      const tracksToResolve = persistence.saveQueue ? [p.u, ...(p.q || [])].filter(Boolean).slice(0, 20) : [p.u].filter(Boolean)
       const resolved = await Promise.all(tracksToResolve.map(uri => this.resolve({ query: uri, requester }).catch(() => null)))
       const validTracks = resolved.filter(r => r?.tracks?.length).flatMap(r => r.tracks)
       if (validTracks.length && player.queue?.add) {
@@ -839,12 +921,15 @@ class Aqua extends EventEmitter {
         player.queue.add(...validTracks)
       }
       if (p.u && validTracks[0]) {
-        if (p.vol != null) {
+        if (persistence.saveVolume && p.vol != null) {
           if (typeof player.setVolume === 'function') {
             await player.setVolume(p.vol)
           } else {
             player.volume = p.vol
           }
+        }
+        if (persistence.saveFilters && p.f) {
+          await player.filters.updateFilters(p.f)
         }
         await player.play()
         if (p.p > 0) setTimeout(() => player.seek?.(p.p), SEEK_DELAY)
@@ -922,6 +1007,10 @@ class Aqua extends EventEmitter {
   }
 
   destroy() {
+    if (this._healthCheckTimer) {
+      clearInterval(this._healthCheckTimer)
+      this._healthCheckTimer = null
+    }
     if (this._cleanupTimer) {
       clearInterval(this._cleanupTimer)
       this._cleanupTimer = null
@@ -949,6 +1038,99 @@ class Aqua extends EventEmitter {
     this._leastUsedNodesCache = null
     this.removeAllListeners()
     return Promise.all(tasks)
+  }
+
+  _startHealthCheckTimer() {
+    if (!this.resilienceOptions.enabled || !this.resilienceOptions.healthCheck.enabled) return
+    this._healthCheckTimer = setInterval(() => this._performHealthCheck(), this.resilienceOptions.healthCheck.interval)
+    if (this._healthCheckTimer.unref) this._healthCheckTimer.unref()
+  }
+
+  async _performHealthCheck() {
+    const healthCheckOptions = this.resilienceOptions.healthCheck
+    for (const node of this.nodeMap.values()) {
+      if (!node.connected) continue
+
+      const nodeId = node.name || node.host
+      const nodeState = this._nodeStates.get(nodeId) || { failures: 0 }
+
+      try {
+        const stats = await Promise.race([
+          node.rest.getStats(),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), healthCheckOptions.timeout))
+        ])
+        if (stats) {
+          nodeState.failures = 0
+          this._nodeStates.set(nodeId, { ...this._nodeStates.get(nodeId), ...nodeState })
+        } else {
+          throw new Error('No stats returned')
+        }
+      } catch (error) {
+        nodeState.failures = (nodeState.failures || 0) + 1
+        this._nodeStates.set(nodeId, { ...this._nodeStates.get(nodeId), ...nodeState })
+        this.emit('debug', `Health check failed for node ${nodeId}: ${error.message}. Failures: ${nodeState.failures}`)
+
+        if (nodeState.failures >= healthCheckOptions.maxFailures) {
+          this.emit('debug', `Node ${nodeId} exceeded max health check failures. Triggering failover.`)
+          node.connected = false 
+          this.emit('nodeDisconnect', node, { code: 4000, reason: 'Health check failed' })
+
+          setTimeout(() => {
+            if (!node.isDestroyed) {
+              node.connect().catch(err => this.emit('error', null, `Error reconnecting node ${nodeId}: ${err.message}`))
+            }
+          }, healthCheckOptions.recoveryDelay)
+        }
+      }
+    }
+  }
+
+  _sendWebhookNotification(event, node, details) {
+    const webhookUrl = this.resilienceOptions.notifications.webhook
+    if (!webhookUrl || !webhookUrl.startsWith('https://discord.com/api/webhooks/')) return
+
+    const embed = {
+      title: `Node ${event.charAt(0).toUpperCase() + event.slice(1)}`,
+      description: `Node \`${node.name || node.host}\` has experienced a **${event}** event.`,
+      color: event === 'failover' || event === 'exhausted' ? 0xFF0000 : 0x00FF00,
+      timestamp: new Date().toISOString(),
+      fields: []
+    }
+
+    if (details) {
+      embed.fields.push({ name: 'Details', value: `Successfully migrated ${details} players.` })
+    }
+
+    const payload = {
+      embeds: [embed]
+    }
+
+    const body = JSON.stringify(payload)
+    const { request } = require('node:https')
+    const url = new URL(webhookUrl)
+    const options = {
+      method: 'POST',
+      hostname: url.hostname,
+      path: url.pathname,
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(body)
+      }
+    }
+
+    const req = request(options, res => {
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        this.emit('error', null, new Error(`Webhook failed with status ${res.statusCode}`))
+      }
+      res.resume()
+    })
+
+    req.on('error', err => {
+      this.emit('error', null, new Error(`Webhook request error: ${err.message}`))
+    })
+
+    req.write(body)
+    req.end()
   }
 }
 
