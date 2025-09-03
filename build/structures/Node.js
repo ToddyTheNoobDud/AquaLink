@@ -30,9 +30,9 @@ class Node {
     this.password = connOptions.password || 'youshallnotpass'
     this.sessionId = connOptions.sessionId || null
     this.regions = connOptions.regions || []
-    this.secure = !!connOptions.secure
+    this.ssl = !!connOptions.ssl
 
-    this.wsUrl = `ws${this.secure ? 's' : ''}://${this.host}:${this.port}/v4/websocket`
+    this.wsUrl = `ws${this.ssl ? 's' : ''}://${this.host}:${this.port}/v4/websocket`
 
     this.rest = new Rest(aqua, this)
 
@@ -482,3 +482,4 @@ class Node {
 }
 
 module.exports = Node
+
