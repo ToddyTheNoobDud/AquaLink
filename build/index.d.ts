@@ -46,7 +46,7 @@ declare module "aqualink" {
         name: string;
         port: number;
         password: string;
-        secure: boolean;
+        ssl: boolean;
         sessionId: string | null;
         regions: string[];
         wsUrl: string;
@@ -314,7 +314,7 @@ declare module "aqualink" {
         name?: string;
         port?: number;
         password?: string;
-        secure?: boolean;
+        ssl?: boolean;
         sessionId?: string;
         regions?: string[];
     }
