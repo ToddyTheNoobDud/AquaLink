@@ -125,7 +125,7 @@ class Rest {
     })
 
     this.defaultHeaders = Object.freeze({
-      Authorization: String(node.password ?? EMPTY_STRING),
+      Authorization: String(node.auth ?? EMPTY_STRING),
       Accept: 'application/json, */*;q=0.5',
       'Accept-Encoding': 'gzip, deflate, br',
       'User-Agent': `Aqua-Lavalink/${API_VERSION} (Node.js ${process.version})`
@@ -467,3 +467,4 @@ class Rest {
 }
 
 module.exports = Rest
+
