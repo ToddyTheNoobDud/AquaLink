@@ -62,7 +62,7 @@ class Node {
     this.host = connOptions.host || 'localhost'
     this.name = connOptions.name || this.host
     this.port = connOptions.port || 2333
-    this.password = connOptions.password || 'youshallnotpass'
+    this.auth = connOptions.auth || 'youshallnotpass'
     this.sessionId = connOptions.sessionId || null
     this.regions = connOptions.regions || []
     this.ssl = !!connOptions.ssl
@@ -112,7 +112,7 @@ class Node {
 
   _buildHeaders() {
     const headers = Object.create(null)
-    headers.Authorization = this.password
+    headers.Authorization = this.auth
     headers['User-Id'] = this.aqua.clientId
     headers['Client-Name'] = this._clientName
     if (this.sessionId) headers['Session-Id'] = this.sessionId
@@ -423,5 +423,6 @@ class Node {
     this.aqua.emit('debug', this.name, out)
   }
 }
+
 
 module.exports = Node
