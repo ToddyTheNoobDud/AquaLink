@@ -1,5 +1,7 @@
 'use strict'
 
+const { AqualinkEvents } = require('./AqualinkEvents')
+
 const POOL_SIZE = 12
 const LISTENER_CHECK_INTERVAL = 4000
 const UPDATE_TIMEOUT = 4000
@@ -157,7 +159,7 @@ class Connection {
 
       if (this.voiceChannel !== channel_id) {
         if (this._stateFlags & STATE_FLAGS.HAS_MOVE) {
-          this._aqua.emit('playerMove', this.voiceChannel, channel_id)
+          this._aqua.emit(AqualinkEvents.PlayerMove, this.voiceChannel, channel_id)
         }
         this.voiceChannel = channel_id
         this._player.voiceChannel = channel_id
@@ -195,14 +197,14 @@ class Connection {
     try {
       if (typeof this._player.destroy === 'function') this._player.destroy()
     } catch (error) {
-      this._aqua.emit('debug', new Error(`Player destroy failed: ${error.message}`))
+      this._aqua.emit(AqualinkEvents.Debug, new Error(`Player destroy failed: ${error.message}`))
     } finally {
       this._stateFlags &= ~STATE_FLAGS.DISCONNECTING
     }
   }
 
   async attemptResume() {
-    this._aqua.emit('debug', `Attempt voice: G: ${this._guildId} E: ${this.endpoint} T: ${this.token} S: ${this.sessionId}`)
+    this._aqua.emit(AqualinkEvents.Debug, `Attempt voice: G: ${this._guildId} E: ${this.endpoint} T: ${this.token} S: ${this.sessionId}`)
     // if we have SessionID and guild id, but does  not have endpoint and token, try rebuilding the connection
 
     if (this._destroyed || !this.sessionId || this._reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) return false
@@ -303,7 +305,7 @@ class Connection {
                             error.code === 'ENOTFOUND' ||
                             error.code === 'ETIMEDOUT'
       if (!isNetworkError) {
-        this._aqua.emit('debug', new Error(`Voice update failed: ${error.message}`))
+        this._aqua.emit(AqualinkEvents.Debug, new Error(`Voice update failed: ${error.message}`))
       }
       throw error
     }
