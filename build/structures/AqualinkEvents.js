@@ -1,0 +1,37 @@
+'use strict';
+
+const AqualinkEvents = {
+  TrackStart: 'trackStart',
+  TrackEnd: 'trackEnd',
+  TrackError: 'trackError',
+  TrackStuck: 'trackStuck',
+  TrackChange: 'trackChange',
+  SocketClosed: 'socketClosed',
+  LyricsLine: 'lyricsLine',
+  LyricsFound: 'lyricsFound',
+  LyricsNotFound: 'lyricsNotFound',
+  QueueEnd: 'queueEnd',
+  PlayerUpdate: 'playerUpdate',
+  PlayerMove: 'playerMove',
+  PlayerReconnected: 'playerReconnected',
+  AutoplayFailed: 'autoplayFailed',
+  ReconnectionFailed: 'reconnectionFailed',
+  NodeConnect: 'nodeConnect',
+  NodeCreate: 'nodeCreate',
+  NodeError: 'nodeError',
+  NodeDisconnect: 'nodeDisconnect',
+  NodeReconnect: 'nodeReconnect',
+  NodeDestroy: 'nodeDestroy',
+  NodeReady: 'nodeReady',
+  NodeCustomOp: 'nodeCustomOp',
+  NodeFailover: 'nodeFailover',
+  NodeFailoverComplete: 'nodeFailoverComplete',
+  Debug: 'debug',
+  Error: 'error',
+  PlayerCreate: 'playerCreate',
+  PlayerDestroy: 'playerDestroy',
+  PlayersRebuilt: 'playersRebuilt',
+  PlayerMigrated: 'playerMigrated',
+};
+
+module.exports = { AqualinkEvents };
