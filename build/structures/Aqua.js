@@ -3,6 +3,7 @@
 const fs = require('node:fs')
 const readline = require('node:readline')
 const { EventEmitter } = require('tseep')
+const { AqualinkEvents } = require('./AqualinkEvents')
 const Node = require('./Node')
 const Player = require('./Player')
 const Track = require('./Track')
@@ -106,7 +107,7 @@ class Aqua extends EventEmitter {
     this._nodeLoadCache = new Map()
     this._nodeLoadCacheTime = new Map()
 
-    this.on('nodeReady', this._onNodeReady.bind(this))
+    this.on(AqualinkEvents.NodeReady, this._onNodeReady.bind(this))
     this._bindEventHandlers()
   }
 
@@ -148,8 +149,8 @@ class Aqua extends EventEmitter {
       this._invalidateCache()
       queueMicrotask(() => this._storeBrokenPlayers(node))
     }
-    this.on('nodeConnect', this._onNodeConnect)
-    this.on('nodeDisconnect', this._onNodeDisconnect)
+    this.on(AqualinkEvents.NodeConnect, this._onNodeConnect)
+    this.on(AqualinkEvents.NodeDisconnect, this._onNodeDisconnect)
   }
 
   get leastUsedNodes() {
@@ -221,7 +222,7 @@ class Aqua extends EventEmitter {
       try {
         await plugin.load(this)
       } catch (err) {
-        this.emit('error', null, new Error(`Plugin error: ${err?.message || String(err)}`))
+        this.emit(AqualinkEvents.Error, null, new Error(`Plugin error: ${err?.message || String(err)}`))
       }
     }))
   }
@@ -237,7 +238,7 @@ class Aqua extends EventEmitter {
       await node.connect()
       this._nodeStates.set(nodeId, { connected: true, failoverInProgress: false })
       this._invalidateCache()
-      this.emit('nodeCreate', node)
+      this.emit(AqualinkEvents.NodeCreate, node)
       return node
     } catch (error) {
       this._cleanupNode(nodeId)
@@ -250,7 +251,7 @@ class Aqua extends EventEmitter {
     if (node) {
       try { node.destroy?.() } catch { }
       this._cleanupNode(identifier)
-      this.emit('nodeDestroy', node)
+      this.emit(AqualinkEvents.NodeDestroy, node)
     }
   }
 
@@ -306,7 +307,7 @@ class Aqua extends EventEmitter {
       }
     }
     for (const guildId of successes) this._brokenPlayers.delete(guildId)
-    if (successes.length) this.emit('playersRebuilt', node, successes.length)
+    if (successes.length) this.emit(AqualinkEvents.PlayersRebuilt, node, successes.length)
     this._performCleanup()
   }
 
@@ -348,7 +349,7 @@ class Aqua extends EventEmitter {
     this._lastFailoverAttempt.set(nodeId, now)
     this._failoverQueue.set(nodeId, attempts + 1)
     try {
-      this.emit('nodeFailover', failedNode)
+      this.emit(AqualinkEvents.NodeFailover, failedNode)
       const affectedPlayers = Array.from(failedNode.players || [])
       if (!affectedPlayers.length) {
         this._nodeStates.set(nodeId, { connected: false, failoverInProgress: false })
@@ -358,9 +359,9 @@ class Aqua extends EventEmitter {
       if (!availableNodes.length) throw new Error('No failover nodes available')
       const results = await this._migratePlayersOptimized(affectedPlayers, availableNodes)
       const successful = results.filter(r => r.success).length
-      if (successful) this.emit('nodeFailoverComplete', failedNode, successful, results.length - successful)
+      if (successful) this.emit(AqualinkEvents.NodeFailoverComplete, failedNode, successful, results.length - successful)
     } catch (error) {
-      this.emit('error', null, new Error(`Failover failed: ${error?.message || String(error)}`))
+      this.emit(AqualinkEvents.Error, null, new Error(`Failover failed: ${error?.message || String(error)}`))
     } finally {
       this._nodeStates.set(nodeId, { connected: false, failoverInProgress: false })
     }
@@ -398,7 +399,7 @@ class Aqua extends EventEmitter {
         const targetNode = pickNode()
         const newPlayer = await this._createPlayerOnNode(targetNode, playerState)
         await this._restorePlayerState(newPlayer, playerState)
-        this.emit('playerMigrated', player, newPlayer, targetNode)
+        this.emit(AqualinkEvents.PlayerMigrated, player, newPlayer, targetNode)
         return newPlayer
       } catch (error) {
         if (retry === this.failoverOptions.maxRetries - 1) throw error
@@ -507,7 +508,7 @@ class Aqua extends EventEmitter {
     node?.players?.add?.(player)
     player.once('destroy', () => this._handlePlayerDestroy(player))
     player.connect(options)
-    this.emit('playerCreate', player)
+    this.emit(AqualinkEvents.PlayerCreate, player)
     return player
   }
 
@@ -515,7 +516,7 @@ class Aqua extends EventEmitter {
     const node = player.nodes
     node?.players?.delete?.(player)
     if (this.players.get(player.guildId) === player) this.players.delete(player.guildId)
-    this.emit('playerDestroy', player)
+    this.emit(AqualinkEvents.PlayerDestroy, player)
   }
 
   async destroyPlayer(guildId) {
@@ -643,7 +644,7 @@ class Aqua extends EventEmitter {
       if (batch.length) await Promise.allSettled(batch.map(p => this._restorePlayer(p)))
       await fs.promises.writeFile(filePath, '')
     } catch (error) {
-      this.emit('debug', 'Aqua', `Load players error: ${error?.message || String(error)}`)
+      this.emit(AqualinkEvents.Debug, 'Aqua', `Load players error: ${error?.message || String(error)}`)
     } finally {
       await fs.promises.unlink(lockFile).catch(() => { })
     }
@@ -680,9 +681,9 @@ class Aqua extends EventEmitter {
       }
       if (buffer.length) ws.write(buffer.join('\n') + '\n')
       await new Promise(resolve => ws.end(resolve))
-      this.emit('debug', 'Aqua', `Saved ${count} players to ${filePath}`)
+      this.emit(AqualinkEvents.Debug, 'Aqua', `Saved ${count} players to ${filePath}`)
     } catch (error) {
-      this.emit('error', null, new Error(`Save players failed: ${error?.message || String(error)}`))
+      this.emit(AqualinkEvents.Error, null, new Error(`Save players failed: ${error?.message || String(error)}`))
     } finally {
       await fs.promises.unlink(lockFile).catch(() => { })
     }
@@ -721,7 +722,7 @@ class Aqua extends EventEmitter {
         }
       }
     } catch (error) {
-      this.emit('debug', 'Aqua', `Error restoring player for guild ${p.g}: ${error?.message || String(error)}`)
+      this.emit(AqualinkEvents.Debug, 'Aqua', `Error restoring player for guild ${p.g}: ${error?.message || String(error)}`)
     }
   }
 
@@ -742,18 +743,18 @@ class Aqua extends EventEmitter {
       const onReady = () => {
         if (this.leastUsedNodes.length) {
           clearTimeout(timer)
-          this.off('nodeConnect', onReady)
-          this.off('nodeCreate', onReady)
+          this.off(AqualinkEvents.NodeConnect, onReady)
+          this.off(AqualinkEvents.NodeCreate, onReady)
           resolve()
         }
       }
       const timer = setTimeout(() => {
-        this.off('nodeConnect', onReady)
-        this.off('nodeCreate', onReady)
+        this.off(AqualinkEvents.NodeConnect, onReady)
+        this.off(AqualinkEvents.NodeCreate, onReady)
         reject(new Error('Timeout waiting for first node'))
       }, timeout)
-      this.on('nodeConnect', onReady)
-      this.on('nodeCreate', onReady)
+      this.on(AqualinkEvents.NodeConnect, onReady)
+      this.on(AqualinkEvents.NodeCreate, onReady)
       onReady()
     })
   }
@@ -812,7 +813,7 @@ class Aqua extends EventEmitter {
       this._nodeLoadCacheTime.clear();
     }
 
-    this.emit("debug", `Cleanup: broken=${this._brokenPlayers.size}, failover=${this._failoverQueue.size}, players=${this.players.size}`);
+    this.emit(AqualinkEvents.Debug, `Cleanup: broken=${this._brokenPlayers.size}, failover=${this._failoverQueue.size}, players=${this.players.size}`);
   }
 
   _getAvailableNodes(excludeNode) {
@@ -825,8 +826,8 @@ class Aqua extends EventEmitter {
       this._cleanupTimer = null
     }
     if (this._onNodeConnect) {
-      this.off('nodeConnect', this._onNodeConnect)
-      this.off('nodeDisconnect', this._onNodeDisconnect)
+      this.off(AqualinkEvents.NodeConnect, this._onNodeConnect)
+      this.off(AqualinkEvents.NodeDisconnect, this._onNodeDisconnect)
     }
     const destroyTasks = []
     for (const player of this.players.values()) {
