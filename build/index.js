@@ -8,5 +8,6 @@ const Queue = require("./structures/Queue");
 const Rest = require("./structures/Rest");
 const Track = require("./structures/Track");
 const SearchPlatforms = require("./structures/SearchPlatforms");
+const { AqualinkEvents } = require("./structures/AqualinkEvents");
 
-module.exports = { Connection, Filters, Node, Aqua, Player, Plugin, Queue, Rest, Track, SearchPlatforms };
+module.exports = { Connection, Filters, Node, Aqua, Player, Plugin, Queue, Rest, Track, SearchPlatforms, AqualinkEvents };
