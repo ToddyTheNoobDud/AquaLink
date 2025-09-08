@@ -302,7 +302,7 @@ class Player extends EventEmitter {
       this.nowPlayingMessage = null;
     }
 
-
+    this.emit('destroy');
 
     this.removeAllListeners();
     this.off(AqualinkEvents.PlayerUpdate, this._boundPlayerUpdate);
