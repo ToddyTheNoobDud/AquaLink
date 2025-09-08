@@ -1,5 +1,6 @@
 'use strict'
 
+const { AqualinkEvents } = require('./AqualinkEvents')
 const { Buffer } = require('node:buffer')
 const { Agent: HttpsAgent, request: httpsRequest } = require('node:https')
 const { Agent: HttpAgent, request: httpRequest } = require('node:http')
@@ -471,7 +472,7 @@ class Rest {
     const title = track?.info?.title
 
     if (!track || (!gid && !hasEncoded && !title)) {
-      this.aqua?.emit?.('error', '[Aqua/Lyrics] Invalid track object')
+      this.aqua?.emit?.(AqualinkEvents.Error, '[Aqua/Lyrics] Invalid track object')
       return null
     }
 
