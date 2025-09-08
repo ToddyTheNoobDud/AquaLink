@@ -1,6 +1,7 @@
 'use strict'
 
 const { EventEmitter } = require('tseep')
+const { AqualinkEvents } = require('./AqualinkEvents')
 const Connection = require('./Connection')
 const Queue = require('./Queue')
 const Filters = require('./Filters')
@@ -9,9 +10,9 @@ const { spAutoPlay, scAutoPlay } = require('../handlers/autoplay')
 const LOOP_MODES = Object.freeze({ NONE: 0, TRACK: 1, QUEUE: 2 })
 const LOOP_MODE_NAMES = Object.freeze(['none', 'track', 'queue'])
 const EVENT_HANDLERS = Object.freeze({
-  TrackStartEvent: 'trackStart', TrackEndEvent: 'trackEnd', TrackExceptionEvent: 'trackError',
-  TrackStuckEvent: 'trackStuck', TrackChangeEvent: 'trackChange', WebSocketClosedEvent: 'socketClosed',
-  LyricsLineEvent: 'lyricsLine', LyricsFoundEvent: 'lyricsFound', LyricsNotFoundEvent: 'lyricsNotFound'
+  TrackStartEvent: AqualinkEvents.TrackStart, TrackEndEvent: AqualinkEvents.TrackEnd, TrackExceptionEvent: AqualinkEvents.TrackError,
+  TrackStuckEvent: AqualinkEvents.TrackStuck, TrackChangeEvent: AqualinkEvents.TrackChange, WebSocketClosedEvent: AqualinkEvents.SocketClosed,
+  LyricsLineEvent: AqualinkEvents.LyricsLine, LyricsFoundEvent: AqualinkEvents.LyricsFound, LyricsNotFoundEvent: AqualinkEvents.LyricsNotFound
 })
 const WATCHDOG_INTERVAL = 15000
 const VOICE_DOWN_THRESHOLD = 10000
@@ -157,9 +158,9 @@ class Player extends EventEmitter {
     this._boundPlayerUpdate = this._handlePlayerUpdate.bind(this)
     this._boundEvent = this._handleEvent.bind(this)
     this._boundAquaPlayerMove = this._handleAquaPlayerMove.bind(this)
-    this.on('playerUpdate', this._boundPlayerUpdate)
+    this.on(AqualinkEvents.PlayerUpdate, this._boundPlayerUpdate)
     this.on('event', this._boundEvent)
-    this.aqua.on('playerMove', this._boundAquaPlayerMove)
+    this.aqua.on(AqualinkEvents.PlayerMove, this._boundAquaPlayerMove)
   }
 
   _startWatchdog() {
@@ -182,7 +183,7 @@ class Player extends EventEmitter {
     } else {
       this._voiceDownSince = 0
     }
-    this.aqua.emit('playerUpdate', this, packet)
+    this.aqua.emit(AqualinkEvents.PlayerUpdate, this, packet)
   }
 
   async _handleEvent(payload) {
@@ -304,12 +305,12 @@ class Player extends EventEmitter {
 
 
     this.removeAllListeners();
-    this.off('playerUpdate', this._boundPlayerUpdate);
+    this.off(AqualinkEvents.PlayerUpdate, this._boundPlayerUpdate);
     this.off('event', this._boundEvent);
 
     if (this.aqua && this._boundAquaPlayerMove) {
-      this.aqua.removeListener('playerMove', this._boundAquaPlayerMove);
-      this.aqua.off('playerMove', this._boundAquaPlayerMove);
+      this.aqua.removeListener(AqualinkEvents.PlayerMove, this._boundAquaPlayerMove);
+      this.aqua.off(AqualinkEvents.PlayerMove, this._boundAquaPlayerMove);
     }
 
     if (this._updateBatcher) {
@@ -542,7 +543,7 @@ class Player extends EventEmitter {
     if (this.destroyed) return
     this.playing = true
     this.paused = false
-    this.aqua.emit('trackStart', this, track)
+    this.aqua.emit(AqualinkEvents.TrackStart, this, track)
   }
 
   async trackEnd(player, track, payload) {
@@ -556,9 +557,9 @@ class Player extends EventEmitter {
     if (isFailure) {
       if (!this.queue?.size) {
         this.clearData()
-        this.aqua.emit('queueEnd', this)
+        this.aqua.emit(AqualinkEvents.QueueEnd, this)
       } else {
-        this.aqua.emit('trackEnd', this, track, reason)
+        this.aqua.emit(AqualinkEvents.TrackEnd, this, track, reason)
         await this.play()
       }
       return
@@ -569,7 +570,7 @@ class Player extends EventEmitter {
       else if (l === 2) this.queue.push(track)
     }
     if (this.queue?.size) {
-      this.aqua.emit('trackEnd', this, track, reason)
+      this.aqua.emit(AqualinkEvents.TrackEnd, this, track, reason)
       await this.play()
     } else if (this.isAutoplayEnabled && !isReplaced) {
       await this.autoplay()
@@ -579,26 +580,26 @@ class Player extends EventEmitter {
         this.clearData()
         this.destroy()
       }
-      this.aqua.emit('queueEnd', this)
+      this.aqua.emit(AqualinkEvents.QueueEnd, this)
     }
   }
 
   async trackError(player, track, payload) {
     if (!this.destroyed) {
-      this.aqua.emit('trackError', this, track, payload)
+      this.aqua.emit(AqualinkEvents.TrackError, this, track, payload)
       this.stop()
     }
   }
 
   async trackStuck(player, track, payload) {
     if (!this.destroyed) {
-      this.aqua.emit('trackStuck', this, track, payload)
+      this.aqua.emit(AqualinkEvents.TrackStuck, this, track, payload)
       this.stop()
     }
   }
 
   async trackChange(player, track, payload) {
-    !this.destroyed && this.aqua.emit('trackChange', this, track, payload)
+    !this.destroyed && this.aqua.emit(AqualinkEvents.TrackChange, this, track, payload)
   }
 
   async _attemptVoiceResume() {
@@ -612,11 +613,11 @@ class Player extends EventEmitter {
       const onUpdate = payload => {
         if (payload?.state?.connected || _functions.isNum(payload?.state?.time)) {
           clearTimeout(timeout)
-          this.off('playerUpdate', onUpdate)
+          this.off(AqualinkEvents.PlayerUpdate, onUpdate)
           resolve()
         }
       }
-      this.on('playerUpdate', onUpdate)
+      this.on(AqualinkEvents.PlayerUpdate, onUpdate)
     })
   }
 
@@ -624,7 +625,7 @@ class Player extends EventEmitter {
     if (this.destroyed) return
     const code = payload?.code
     if (code === 4022) {
-      this.aqua.emit('socketClosed', this, payload)
+      this.aqua.emit(AqualinkEvents.SocketClosed, this, payload)
       this.destroy()
       return
     }
@@ -639,13 +640,13 @@ class Player extends EventEmitter {
       }
     }
     if (![4015, 4009, 4006].includes(code)) {
-      this.aqua.emit('socketClosed', this, payload)
+      this.aqua.emit(AqualinkEvents.SocketClosed, this, payload)
       return
     }
     const aqua = this.aqua
     const vcId = _functions.toId(this.voiceChannel)
     if (!vcId) {
-      aqua?.emit?.('socketClosed', this, payload)
+      aqua?.emit?.(AqualinkEvents.SocketClosed, this, payload)
       return
     }
     const state = {
@@ -678,28 +679,28 @@ class Player extends EventEmitter {
           state.position > 5000 && setTimeout(() => !np.destroyed && np.seek(state.position), SEEK_DELAY)
           state.paused && setTimeout(() => !np.destroyed && np.pause(true), PAUSE_DELAY)
         }
-        aqua.emit('playerReconnected', np, { oldPlayer: this, restoredState: state })
+        aqua.emit(AqualinkEvents.PlayerReconnected, np, { oldPlayer: this, restoredState: state })
       } catch (error) {
         const retriesLeft = RECONNECT_MAX - attempt
-        aqua.emit('reconnectionFailed', this, { error, code, payload, retriesLeft })
+        aqua.emit(AqualinkEvents.ReconnectionFailed, this, { error, code, payload, retriesLeft })
         retriesLeft > 0
           ? setTimeout(() => tryReconnect(attempt + 1), Math.min(RETRY_BACKOFF_BASE * attempt, RETRY_BACKOFF_MAX))
-          : aqua.emit('socketClosed', this, payload)
+          : aqua.emit(AqualinkEvents.SocketClosed, this, payload)
       }
     }
     tryReconnect(1)
   }
 
   async lyricsLine(player, track, payload) {
-    !this.destroyed && this.aqua.emit('lyricsLine', this, track, payload)
+    !this.destroyed && this.aqua.emit(AqualinkEvents.LyricsLine, this, track, payload)
   }
 
   async lyricsFound(player, track, payload) {
-    !this.destroyed && this.aqua.emit('lyricsFound', this, track, payload)
+    !this.destroyed && this.aqua.emit(AqualinkEvents.LyricsFound, this, track, payload)
   }
 
   async lyricsNotFound(player, track, payload) {
-    !this.destroyed && this.aqua.emit('lyricsNotFound', this, track, payload)
+    !this.destroyed && this.aqua.emit(AqualinkEvents.LyricsNotFound, this, track, payload)
   }
 
   _handleAquaPlayerMove(oldChannel, newChannel) {
