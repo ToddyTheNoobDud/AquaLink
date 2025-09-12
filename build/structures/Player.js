@@ -18,7 +18,11 @@ const EVENT_HANDLERS = Object.freeze({
   WebSocketClosedEvent: 'socketClosed',
   LyricsLineEvent: 'lyricsLine',
   LyricsFoundEvent: 'lyricsFound',
-  LyricsNotFoundEvent: 'lyricsNotFound'
+  LyricsNotFoundEvent: 'lyricsNotFound',
+  SegmentsLoaded: 'segmentsLoaded',
+  SegmentSkipped: 'segmentSkipped',
+  ChapterStarted: 'chapterStarted',
+  ChaptersLoaded: 'chaptersLoaded'
 })
 
 const WATCHDOG_INTERVAL = 15000
@@ -34,6 +38,17 @@ const PREVIOUS_TRACKS_SIZE = 50
 const PREVIOUS_IDS_MAX = 20
 const AUTOPLAY_MAX = 3
 const INVALID_LOADS = new Set(['error', 'empty', 'LOAD_FAILED', 'NO_MATCHES'])
+
+const SPONSOR_BLOCK_CATEGORIES = Object.freeze({
+  SPONSOR: 'sponsor',
+  SELFPROMO: 'selfpromo', 
+  INTERACTION: 'interaction',
+  INTRO: 'intro',
+  OUTRO: 'outro',
+  PREVIEW: 'preview',
+  MUSIC_OFFTOPIC: 'music_offtopic',
+  FILLER: 'filler'
+})
 
 const _functions = {
   clamp: v => (v = +v, v !== v ? 100 : v < 0 ? 0 : v > 200 ? 200 : v),
@@ -132,6 +147,7 @@ class CircularBuffer {
 class Player extends EventEmitter {
   static LOOP_MODES = LOOP_MODES
   static EVENT_HANDLERS = EVENT_HANDLERS
+  static SPONSOR_BLOCK_CATEGORIES = SPONSOR_BLOCK_CATEGORIES
 
   constructor(aqua, nodes, options = {}) {
     super()
@@ -145,6 +161,13 @@ class Player extends EventEmitter {
       deaf: options.deaf !== false, mute: !!options.mute, autoplayRetries: 0,
       reconnectionRetries: 0, _voiceDownSince: 0, _voiceRecovering: false
     })
+
+    this.sponsorBlockEnabled = options.sponsorBlockEnabled || aqua.sponsorBlock || false
+    this.sponsorBlockCategories = options.sponsorBlockCategories || aqua.sponsorBlockCategories || []
+    this.segments = []
+    this.chapters = []
+    this.currentSegment = null
+    this.currentChapter = null
 
     this.volume = _functions.clamp(+options.defaultVolume || 100)
     this.loop = this._parseLoop(options.loop)
@@ -229,6 +252,53 @@ class Player extends EventEmitter {
     return this
   }
 
+  setSponsorBlock(enabled, categories) {
+    if (this.destroyed) return this
+    this.sponsorBlockEnabled = !!enabled
+    if (Array.isArray(categories)) {
+      this.sponsorBlockCategories = categories
+    }
+
+    this.batchUpdatePlayer({ 
+      guildId: this.guildId,
+      sponsorBlockEnabled: this.sponsorBlockEnabled,
+      sponsorBlockCategories: this.sponsorBlockCategories
+    })
+    return this
+  }
+
+  getSponsorBlockSegments() {
+    return this.segments || []
+  }
+
+  getChapters() {
+    return this.chapters || []
+  }
+
+  getCurrentSegment() {
+    if (!this.segments?.length || !this.position) return null
+    return this.segments.find(segment => 
+      this.position >= segment.start && this.position <= segment.end
+    ) || null
+  }
+
+  getCurrentChapter() {
+    if (!this.chapters?.length || !this.position) return null
+    return this.chapters.find(chapter => 
+      this.position >= chapter.start && 
+      (!chapter.end || this.position <= chapter.end)
+    ) || null
+  }
+
+  skipCurrentSegment() {
+    if (this.destroyed) return this
+    const segment = this.getCurrentSegment()
+    if (segment && segment.end) {
+      this.seek(segment.end + 100) 
+    }
+    return this
+  }
+
   async play() {
     if (this.destroyed || !this.connected || !this.queue?.size) return this
     const item = this.queue.shift()
@@ -239,6 +309,12 @@ class Player extends EventEmitter {
       this.playing = true
       this.paused = false
       this.position = 0
+      
+      this.segments = []
+      this.chapters = []
+      this.currentSegment = null
+      this.currentChapter = null
+      
       await this.batchUpdatePlayer({ guildId: this.guildId, encodedTrack: this.current.track }, true)
       return this
     } catch (error) {
@@ -337,6 +413,11 @@ class Player extends EventEmitter {
     this.autoplayRetries = this.reconnectionRetries = 0
     this.voiceChannel = null
 
+    this.segments = []
+    this.chapters = []
+    this.currentSegment = null
+    this.currentChapter = null
+
     if (this.shouldDeleteMessage && this.nowPlayingMessage) {
       this.nowPlayingMessage.delete()
       this.nowPlayingMessage = null
@@ -400,6 +481,12 @@ class Player extends EventEmitter {
     if (this.destroyed || !this.playing) return this
     this.playing = this.paused = false
     this.position = 0
+    
+    this.segments = []
+    this.chapters = []
+    this.currentSegment = null
+    this.currentChapter = null
+    
     this.batchUpdatePlayer({ guildId: this.guildId, encodedTrack: null }, true)
     return this
   }
@@ -549,10 +636,46 @@ class Player extends EventEmitter {
     }
   }
 
+  async segmentsLoaded(player, track, payload) {
+    if (this.destroyed) return
+    this.segments = payload?.segments || []
+    this.aqua.emit(AqualinkEvents.SponsorBlockSegmentsLoaded, this, track, payload)
+  }
+
+  async segmentSkipped(player, track, payload) {
+    if (this.destroyed) return
+    const segment = payload?.segment
+    if (segment) {
+      this.currentSegment = segment
+      if (this.sponsorBlockEnabled && segment.end) {
+        this.seek(segment.end + 100)
+      }
+    }
+    this.aqua.emit(AqualinkEvents.SponsorBlockSegmentSkipped, this, track, payload)
+  }
+
+  async chapterStarted(player, track, payload) {
+    if (this.destroyed) return
+    this.currentChapter = payload?.chapter || null
+    this.aqua.emit(AqualinkEvents.SponsorBlockChapterStarted, this, track, payload)
+  }
+
+  async chaptersLoaded(player, track, payload) {
+    if (this.destroyed) return
+    this.chapters = payload?.chapters || []
+    this.aqua.emit(AqualinkEvents.SponsorBlockChaptersLoaded, this, track, payload)
+  }
+
   async trackStart(player, track) {
     if (this.destroyed) return
     this.playing = true
     this.paused = false
+    
+    this.segments = []
+    this.chapters = []
+    this.currentSegment = null
+    this.currentChapter = null
+    
     this.aqua.emit(AqualinkEvents.TrackStart, this, track)
   }
 
@@ -561,6 +684,12 @@ class Player extends EventEmitter {
     track && this.previousTracks?.push(track)
     this.shouldDeleteMessage && _functions.safeDel(this.nowPlayingMessage)
     this.current = null
+    
+    this.segments = []
+    this.chapters = []
+    this.currentSegment = null
+    this.currentChapter = null
+    
     const reason = payload?.reason
     const isFailure = reason === 'loadFailed' || reason === 'cleanup'
     const isReplaced = reason === 'replaced'
@@ -659,14 +788,16 @@ class Player extends EventEmitter {
       volume: this.volume, position: this.position, paused: this.paused, loop: this.loop,
       isAutoplayEnabled: this.isAutoplayEnabled, currentTrack: this.current,
       queue: this.queue?.toArray() || [], previousIdentifiers: [...this.previousIdentifiers],
-      autoplaySeed: this.autoplaySeed
+      autoplaySeed: this.autoplaySeed, sponsorBlockEnabled: this.sponsorBlockEnabled,
+      sponsorBlockCategories: [...this.sponsorBlockCategories]
     }
     this.destroy({ preserveClient: true, skipRemote: true })
     const tryReconnect = async attempt => {
       try {
         const np = await aqua.createConnection({
           guildId: this.guildId, voiceChannel: vcId, textChannel: _functions.toId(this.textChannel),
-          deaf: this.deaf, mute: this.mute, defaultVolume: state.volume
+          deaf: this.deaf, mute: this.mute, defaultVolume: state.volume,
+          sponsorBlockEnabled: state.sponsorBlockEnabled
         })
         if (!np) throw new Error('Failed to create player')
         np.reconnectionRetries = 0
@@ -674,6 +805,7 @@ class Player extends EventEmitter {
         np.isAutoplayEnabled = state.isAutoplayEnabled
         np.autoplaySeed = state.autoplaySeed
         np.previousIdentifiers = new Set(state.previousIdentifiers)
+        np.sponsorBlockCategories = state.sponsorBlockCategories
         const ct = state.currentTrack
         ct && np.queue.unshift(ct)
         const q = state.queue
@@ -746,6 +878,12 @@ class Player extends EventEmitter {
     this.position = this.timestamp = 0
     this.queue?.forEach(track => track?.dispose?.())
     this.queue?.clear()
+    
+    this.segments = []
+    this.chapters = []
+    this.currentSegment = null
+    this.currentChapter = null
+    
     return this
   }
 
