@@ -71,7 +71,7 @@ npm install ToddyTheNoobDud/aqualink
 # 🎯 Stable release (recommended for production)
 yarn add aqualink
 
-# 🚧 Latest development build
+# 🚧 Latest development build 
 yarn add ToddyTheNoobDud/aqualink
 ```
 
@@ -84,7 +84,7 @@ yarn add ToddyTheNoobDud/aqualink
 # 🎯 Stable release (recommended for production)
 bun add aqualink
 
-# 🚧 Latest development build
+# 🚧 Latest development build 
 bun add ToddyTheNoobDud/aqualink
 ```
 
