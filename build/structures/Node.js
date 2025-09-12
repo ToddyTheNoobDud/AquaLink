@@ -10,6 +10,8 @@ const WS_PATH = '/v4/websocket'
 const OPEN_BRACE = 123
 const LYRICS_PREFIX = 'Lyrics'
 const LYRICS_PREFIX_LEN = LYRICS_PREFIX.length
+const SPONSORBLOCK_PREFIX = 'SponsorBlock'
+const SPONSORBLOCK_PREFIX_LEN = SPONSORBLOCK_PREFIX.length
 
 const _functions = Object.freeze({
   buildWsUrl(host, port, ssl) {
@@ -32,6 +34,9 @@ const _functions = Object.freeze({
   isLyricsOp(op) {
     return typeof op === 'string' && op.length >= LYRICS_PREFIX_LEN && op.startsWith(LYRICS_PREFIX)
   },
+  isSponsorBlockOp(op) {
+    return typeof op === 'string' && op.length >= SPONSORBLOCK_PREFIX_LEN && op.startsWith(SPONSORBLOCK_PREFIX)
+  },
   reasonToString(reason) {
     if (!reason) return 'No reason provided'
     if (typeof reason === 'string') return reason
@@ -42,6 +47,23 @@ const _functions = Object.freeze({
   },
   assignIfPresent(target, src, keys) {
     for (const k of keys) if (src[k] !== undefined) target[k] = src[k]
+  },
+  validateSponsorBlockSegment(segment) {
+    return segment && 
+           typeof segment === 'object' &&
+           typeof segment.start === 'number' &&
+           typeof segment.end === 'number' &&
+           segment.start >= 0 &&
+           segment.end > segment.start &&
+           typeof segment.category === 'string'
+  },
+  validateSponsorBlockChapter(chapter) {
+    return chapter &&
+           typeof chapter === 'object' &&
+           typeof chapter.start === 'number' &&
+           chapter.start >= 0 &&
+           typeof chapter.name === 'string' &&
+           (chapter.end === undefined || typeof chapter.end === 'number')
   }
 })
 
@@ -79,6 +101,9 @@ class Node {
     this.timeout = options.timeout ?? Node.DEFAULT_HANDSHAKE_TIMEOUT
     this.maxPayload = options.maxPayload ?? Node.DEFAULT_MAX_PAYLOAD
     this.skipUTF8Validation = options.skipUTF8Validation ?? true
+
+    this.sponsorBlockEnabled = options.sponsorBlockEnabled ?? false
+    this.supportedSponsorBlockFeatures = new Set()
 
     this.connected = false
     this.info = null
@@ -127,7 +152,10 @@ class Node {
 
     if (!this.aqua?.bypassChecks?.nodeFetchInfo && !this.info) {
       this.rest.makeRequest('GET', '/v4/info')
-        .then(info => { this.info = info })
+        .then(info => { 
+          this.info = info 
+          this._processSponsorBlockCapabilities(info)
+        })
         .catch(err => {
           this.info = null
           this._emitError(`Failed to fetch node info: ${err?.message || err}`)
@@ -135,6 +163,46 @@ class Node {
     }
 
     this.aqua.emit(AqualinkEvents.NodeConnect, this)
+  }
+
+  _processSponsorBlockCapabilities(info) {
+    if (!info || !info.plugins) return
+
+    const sponsorBlockPlugin = info.plugins.find(p => 
+      p.name?.toLowerCase().includes('sponsorblock') || 
+      p.name?.toLowerCase().includes('sponsor-block')
+    )
+
+    if (sponsorBlockPlugin) {
+      this.supportedSponsorBlockFeatures.add('segments')
+      this.supportedSponsorBlockFeatures.add('chapters')
+      this.supportedSponsorBlockFeatures.add('categories')
+      
+      if (sponsorBlockPlugin.version) {
+        const version = sponsorBlockPlugin.version
+        if (this._compareVersions(version, '1.0.0') >= 0) {
+          this.supportedSponsorBlockFeatures.add('live-skipping')
+        }
+        if (this._compareVersions(version, '1.1.0') >= 0) {
+          this.supportedSponsorBlockFeatures.add('custom-categories')
+        }
+      }
+
+      this._emitDebug(`SponsorBlock capabilities detected: ${Array.from(this.supportedSponsorBlockFeatures).join(', ')}`)
+    }
+  }
+
+  _compareVersions(v1, v2) {
+    const parts1 = v1.split('.').map(n => parseInt(n, 10))
+    const parts2 = v2.split('.').map(n => parseInt(n, 10))
+    
+    for (let i = 0; i < Math.max(parts1.length, parts2.length); i++) {
+      const a = parts1[i] || 0
+      const b = parts2[i] || 0
+      if (a > b) return 1
+      if (a < b) return -1
+    }
+    return 0
   }
 
   _handleError(error) {
@@ -191,8 +259,145 @@ class Node {
       return
     }
 
+    if (_functions.isSponsorBlockOp(op)) {
+      this._handleSponsorBlockOp(op, payload)
+      return
+    }
+
     this.aqua.emit(AqualinkEvents.NodeCustomOp, this, op, payload)
     this._emitDebug(() => `Unknown string op from Lavalink: ${op}`)
+  }
+
+  _handleSponsorBlockOp(op, payload) {
+    const player = payload.guildId ? this.aqua?.players?.get?.(payload.guildId) : null
+    if (!player) {
+      this._emitDebug(`SponsorBlock event ${op} received but no player found for guild ${payload.guildId}`)
+      return
+    }
+
+    switch (op) {
+      case 'SponsorBlockSegmentsLoaded':
+        this._handleSegmentsLoaded(player, payload)
+        break
+      case 'SponsorBlockSegmentSkipped':
+        this._handleSegmentSkipped(player, payload)
+        break
+      case 'SponsorBlockChaptersLoaded':
+        this._handleChaptersLoaded(player, payload)
+        break
+      case 'SponsorBlockChapterStarted':
+        this._handleChapterStarted(player, payload)
+        break
+      case 'SponsorBlockSegmentEntered':
+        this._handleSegmentEntered(player, payload)
+        break
+      case 'SponsorBlockSegmentExited':
+        this._handleSegmentExited(player, payload)
+        break
+      default:
+        this._emitDebug(`Unknown SponsorBlock operation: ${op}`)
+        this.aqua.emit(AqualinkEvents.NodeCustomOp, this, op, payload)
+    }
+  }
+
+  _handleSegmentsLoaded(player, payload) {
+    if (!payload.segments || !Array.isArray(payload.segments)) {
+      this._emitDebug('Invalid segments data received')
+      return
+    }
+
+    const validSegments = payload.segments.filter(_functions.validateSponsorBlockSegment)
+    if (validSegments.length !== payload.segments.length) {
+      this._emitDebug(`Filtered ${payload.segments.length - validSegments.length} invalid segments`)
+    }
+
+    if (typeof player.segmentsLoaded === 'function') {
+      player.segmentsLoaded(player, player.current, { 
+        ...payload, 
+        segments: validSegments 
+      })
+    }
+
+    this.aqua.emit('SponsorBlockSegmentsLoaded', player, player.current, { 
+      ...payload, 
+      segments: validSegments 
+    })
+  }
+
+  _handleSegmentSkipped(player, payload) {
+    if (!payload.segment || !_functions.validateSponsorBlockSegment(payload.segment)) {
+      this._emitDebug('Invalid segment data in skip event')
+      return
+    }
+
+    if (typeof player.segmentSkipped === 'function') {
+      player.segmentSkipped(player, player.current, payload)
+    }
+
+    this.aqua.emit('SponsorBlockSegmentSkipped', player, player.current, payload)
+  }
+
+  _handleChaptersLoaded(player, payload) {
+    if (!payload.chapters || !Array.isArray(payload.chapters)) {
+      this._emitDebug('Invalid chapters data received')
+      return
+    }
+
+    const validChapters = payload.chapters.filter(_functions.validateSponsorBlockChapter)
+    if (validChapters.length !== payload.chapters.length) {
+      this._emitDebug(`Filtered ${payload.chapters.length - validChapters.length} invalid chapters`)
+    }
+
+    if (typeof player.chaptersLoaded === 'function') {
+      player.chaptersLoaded(player, player.current, { 
+        ...payload, 
+        chapters: validChapters 
+      })
+    }
+
+    this.aqua.emit('SponsorBlockChaptersLoaded', player, player.current, { 
+      ...payload, 
+      chapters: validChapters 
+    })
+  }
+
+  _handleChapterStarted(player, payload) {
+    if (!payload.chapter || !_functions.validateSponsorBlockChapter(payload.chapter)) {
+      this._emitDebug('Invalid chapter data in start event')
+      return
+    }
+
+    if (typeof player.chapterStarted === 'function') {
+      player.chapterStarted(player, player.current, payload)
+    }
+
+    this.aqua.emit('SponsorBlockChapterStarted', player, player.current, payload)
+  }
+
+  _handleSegmentEntered(player, payload) {
+    if (!payload.segment || !_functions.validateSponsorBlockSegment(payload.segment)) {
+      this._emitDebug('Invalid segment data in enter event')
+      return
+    }
+
+    if (player.currentSegment !== payload.segment) {
+      player.currentSegment = payload.segment
+    }
+
+    this.aqua.emit('SponsorBlockSegmentEntered', player, player.current, payload)
+  }
+
+  _handleSegmentExited(player, payload) {
+    if (!payload.segment || !_functions.validateSponsorBlockSegment(payload.segment)) {
+      this._emitDebug('Invalid segment data in exit event')
+      return
+    }
+
+    if (player.currentSegment === payload.segment) {
+      player.currentSegment = null
+    }
+
+    this.aqua.emit('SponsorBlockSegmentExited', player, player.current, payload)
   }
 
   _handleClose(code, reason) {
@@ -335,10 +540,46 @@ class Node {
     }
 
     this.connected = false
+    this.supportedSponsorBlockFeatures?.clear()
     this.aqua.destroyNode?.(this.name)
     this.aqua.emit(AqualinkEvents.NodeDestroy, this)
     this.rest?.destroy?.();
     this.info = null
+  }
+
+  hasSponsorBlockSupport(feature = 'segments') {
+    return this.supportedSponsorBlockFeatures.has(feature)
+  }
+
+  async getSponsorBlockSegments(guildId, trackInfo) {
+    if (!this.hasSponsorBlockSupport('segments')) {
+      throw new Error('Node does not support SponsorBlock segments')
+    }
+
+    try {
+      return await this.rest.makeRequest('GET', `/v4/sessions/${this.sessionId}/players/${guildId}/sponsorblock/segments`, {
+        identifier: trackInfo.identifier,
+        categories: trackInfo.categories || ['sponsor', 'selfpromo']
+      })
+    } catch (error) {
+      this._emitError(`Failed to get SponsorBlock segments: ${error?.message || error}`)
+      throw error
+    }
+  }
+
+  async setSponsorBlockCategories(guildId, categories) {
+    if (!this.hasSponsorBlockSupport('categories')) {
+      throw new Error('Node does not support SponsorBlock category configuration')
+    }
+
+    try {
+      return await this.rest.makeRequest('PATCH', `/v4/sessions/${this.sessionId}/players/${guildId}/sponsorblock`, {
+        categories: Array.isArray(categories) ? categories : [categories]
+      })
+    } catch (error) {
+      this._emitError(`Failed to set SponsorBlock categories: ${error?.message || error}`)
+      throw error
+    }
   }
 
   async getStats() {
