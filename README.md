@@ -20,7 +20,7 @@
 ## 📈 Repository Analytics
 
 <div align="center">
-  <img src="https://repobeats.axiom.co/api/embed/2b5e9551de5dd5bddaef1f03b4d3a262a357e1ff.svg" alt="Repobeats analytics image" />
+  <img src="https://repobeats.axiom.co/api/embed/8572c93beb722f298fed207bec75602e93417f9c.svg" alt="Repobeats analytics image" />
   <br />
 </div>
 
