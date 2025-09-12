@@ -17,6 +17,13 @@
 
 </div>
 
+## 📈 Repository Analytics
+
+<div align="center">
+  <img src="https://repobeats.axiom.co/api/embed/2b5e9551de5dd5bddaef1f03b4d3a262a357e1ff.svg" alt="Repobeats analytics image" />
+  <br />
+</div>
+
 <div align="center">
   <h3>🌊 REIMAGINING AUDIO STREAMING FOR DISCORD 🌊</h3>
   <h4>Experience crystal-clear audio with unmatched stability</h4>
@@ -71,7 +78,7 @@ npm install ToddyTheNoobDud/aqualink
 # 🎯 Stable release (recommended for production)
 yarn add aqualink
 
-# 🚧 Latest development build 
+# 🚧 Latest development build
 yarn add ToddyTheNoobDud/aqualink
 ```
 
@@ -84,7 +91,7 @@ yarn add ToddyTheNoobDud/aqualink
 # 🎯 Stable release (recommended for production)
 bun add aqualink
 
-# 🚧 Latest development build 
+# 🚧 Latest development build
 bun add ToddyTheNoobDud/aqualink
 ```
 
@@ -162,7 +169,7 @@ const client = new Client({
 const nodes = [
     {
         host: "127.0.0.1",
-        password: "your_password",
+        auth: "your_password",
         port: 2333,
         ssl: false,
         name: "main-node"
@@ -303,7 +310,6 @@ client.on(Events.MessageCreate, async (message) => {
 
 [View All Projects →](https://github.com/ToddyTheNoobDud/AquaLink#used-by)
 </div>
-
 
 **300+** weekly downloads • **3+** GitHub stars • **3+** Discord bots
 
