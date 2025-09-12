@@ -388,12 +388,12 @@ For detailed usage, API references, and examples, check out our official documen
       <tr>
         <td align="center" valign="top" width="33%">
           <a href="https://github.com/southctrl">
-            <img src="https://avatars.githubusercontent.com/u/134554554?v=4?s=120" width="120px;" alt="southctrl" style="border-radius: 50%;"/>
+            <img src="https://avatars.githubusercontent.com/u/134554554?v=4&s=120" width="120" height="120" alt="southctrl" style="border-radius: 50%; border: 3px solid #0099FF;"/>
             <br />
             <sub><b>🎯 southctrl</b></sub>
           </a>
           <br />
-          <small><i>Core Developer</i></small>
+          <small><i>Contributor</i></small>
           <br />
           <a href="#" title="Code">💻</a>
           <a href="#" title="Documentation">📖</a>
@@ -402,7 +402,7 @@ For detailed usage, API references, and examples, check out our official documen
         </td>
         <td align="center" valign="top" width="33%">
           <a href="https://github.com/ToddyTheNoobDud">
-            <img src="https://avatars.githubusercontent.com/u/86982643?v=4?s=120" width="120px;" alt="ToddyTheNoobDud" style="border-radius: 50%;"/>
+            <img src="https://avatars.githubusercontent.com/u/86982643?v=4&s=120" width="120" height="120" alt="ToddyTheNoobDud" style="border-radius: 50%; border: 3px solid #0099FF;"/>
             <br />
             <sub><b>⚡ ToddyTheNoobDud</b></sub>
           </a>
@@ -416,12 +416,12 @@ For detailed usage, API references, and examples, check out our official documen
         </td>
         <td align="center" valign="top" width="33%">
           <a href="https://github.com/SoulDevs">
-            <img src="https://avatars.githubusercontent.com/u/114820381?v=4?s=120" width="120px;" alt="SoulDevs" style="border-radius: 50%;"/>
+            <img src="https://avatars.githubusercontent.com/u/114820381?v=4&s=120" width="120" height="120" alt="SoulDevs" style="border-radius: 50%; border: 3px solid #0099FF;"/>
             <br />
             <sub><b>🌟 SoulDevs</b></sub>
           </a>
           <br />
-          <small><i>Developer</i></small>
+          <small><i>Contributor</i></small>
           <br />
           <a href="#" title="Code">💻</a>
           <a href="#" title="Bug Reports">🐛</a>
