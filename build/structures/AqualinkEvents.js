@@ -1,37 +1,41 @@
-'use strict';
+'use strict'
 
-const AqualinkEvents = {
+const AqualinkEvents = Object.freeze({
+  NodeConnect: 'nodeConnect',
+  NodeReconnect: 'nodeReconnect', 
+  NodeDisconnect: 'nodeDisconnect',
+  NodeCreate: 'nodeCreate',
+  NodeDestroy: 'nodeDestroy',
+  NodeReady: 'nodeReady',
+  NodeError: 'nodeError',
+  NodeFailover: 'nodeFailover',
+  NodeFailoverComplete: 'nodeFailoverComplete',
+  NodeCustomOp: 'nodeCustomOp',
+  PlayerCreate: 'playerCreate',
+  PlayerDestroy: 'playerDestroy',
+  PlayerUpdate: 'playerUpdate',
+  PlayerMove: 'playerMove',
+  PlayerMigrated: 'playerMigrated',
+  PlayerReconnected: 'playerReconnected',
+  PlayersRebuilt: 'playersRebuilt',
   TrackStart: 'trackStart',
   TrackEnd: 'trackEnd',
   TrackError: 'trackError',
   TrackStuck: 'trackStuck',
   TrackChange: 'trackChange',
+  QueueEnd: 'queueEnd',
   SocketClosed: 'socketClosed',
+  ReconnectionFailed: 'reconnectionFailed',
+  AutoplayFailed: 'autoplayFailed',
   LyricsLine: 'lyricsLine',
   LyricsFound: 'lyricsFound',
   LyricsNotFound: 'lyricsNotFound',
-  QueueEnd: 'queueEnd',
-  PlayerUpdate: 'playerUpdate',
-  PlayerMove: 'playerMove',
-  PlayerReconnected: 'playerReconnected',
-  AutoplayFailed: 'autoplayFailed',
-  ReconnectionFailed: 'reconnectionFailed',
-  NodeConnect: 'nodeConnect',
-  NodeCreate: 'nodeCreate',
-  NodeError: 'nodeError',
-  NodeDisconnect: 'nodeDisconnect',
-  NodeReconnect: 'nodeReconnect',
-  NodeDestroy: 'nodeDestroy',
-  NodeReady: 'nodeReady',
-  NodeCustomOp: 'nodeCustomOp',
-  NodeFailover: 'nodeFailover',
-  NodeFailoverComplete: 'nodeFailoverComplete',
-  Debug: 'debug',
+  SponsorBlockSegmentsLoaded: 'sponsorBlockSegmentsLoaded',
+  SponsorBlockSegmentSkipped: 'sponsorBlockSegmentSkipped',
+  SponsorBlockChapterStarted: 'sponsorBlockChapterStarted',
+  SponsorBlockChaptersLoaded: 'sponsorBlockChaptersLoaded',
   Error: 'error',
-  PlayerCreate: 'playerCreate',
-  PlayerDestroy: 'playerDestroy',
-  PlayersRebuilt: 'playersRebuilt',
-  PlayerMigrated: 'playerMigrated'
-};
+  Debug: 'debug'
+})
 
-module.exports = { AqualinkEvents };
+module.exports = { AqualinkEvents }
