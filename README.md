@@ -20,7 +20,7 @@
 ## 📈 Repository Analytics
 
 <div align="center">
-  <img src="https://repobeats.axiom.co/api/embed/8572c93beb722f298fed207bec75602e93417f9c.svg" alt="Repobeats analytics image" />
+  <img src="https://repobeats.axiom.co/api/embed/2b5e9551de5dd5bddaef1f03b4d3a262a357e1ff.svg" alt="Repobeats analytics image" />
   <br />
 </div>
 
@@ -169,7 +169,7 @@ const client = new Client({
 const nodes = [
     {
         host: "127.0.0.1",
-        auth: "your_password",
+        password: "your_password",
         port: 2333,
         ssl: false,
         name: "main-node"
@@ -375,49 +375,75 @@ For detailed usage, API references, and examples, check out our official documen
   </table>
 </div>
 
-## 👥 Contributors
+## 👥 Meet Our Amazing Contributors
 
 <div align="center">
+  <h4>🚀 The brilliant minds behind Aqualink's development</h4>
+  <br />
+</div>
 
-<table>
-  <tbody>
-    <tr>
-      <td align="center" valign="top" width="50%">
-        <a href="https://github.com/southctrl">
-          <img src="https://avatars.githubusercontent.com/u/134554554?v=4?s=100" width="100px;" alt="southctrl"/>
+<div align="center">
+  <table>
+    <tbody>
+      <tr>
+        <td align="center" valign="top" width="33%">
+          <a href="https://github.com/southctrl">
+            <img src="https://avatars.githubusercontent.com/u/134554554?v=4?s=120" width="120px;" alt="southctrl" style="border-radius: 50%;"/>
+            <br />
+            <sub><b>🎯 southctrl</b></sub>
+          </a>
           <br />
-          <sub><b>southctrl</b></sub>
-        </a>
-        <br />
-        <a href="#code-pomicee" title="Code">💻</a>
-        <a href="#doc-pomicee" title="Documentation">📖</a>
-      </td>
-      <td align="center" valign="top" width="50%">
-        <a href="https://github.com/ToddyTheNoobDud">
-          <img src="https://avatars.githubusercontent.com/u/86982643?v=4?s=100" width="100px;" alt="ToddyTheNoobDud"/>
+          <small><i>Core Developer</i></small>
           <br />
-          <sub><b>ToddyTheNoobDud</b></sub>
-        </a>
-        <br />
-        <a href="#code-ToddyTheNoobDud" title="Code">💻</a>
-        <a href="#doc-ToddyTheNoobDud" title="Documentation">📖</a>
-      </td>
-      <td align="center" valign="top" width="80%">
-        <a href="https://github.com/SoulDevs">
-          <img src="https://avatars.githubusercontent.com/u/114820381?v=4" width="100px;" alt="SoulDevs"/>
+          <a href="#" title="Code">💻</a>
+          <a href="#" title="Documentation">📖</a>
+          <a href="#" title="Bug Reports">🐛</a>
+          <a href="#" title="Design">🎨</a>
+        </td>
+        <td align="center" valign="top" width="33%">
+          <a href="https://github.com/ToddyTheNoobDud">
+            <img src="https://avatars.githubusercontent.com/u/86982643?v=4?s=120" width="120px;" alt="ToddyTheNoobDud" style="border-radius: 50%;"/>
+            <br />
+            <sub><b>⚡ ToddyTheNoobDud</b></sub>
+          </a>
           <br />
-          <sub><b>SoulDevs</b></sub>
-        </a>
-        <br />
-        <a href="#code-SoulDevs" title="Code">💻</a>
-      </td>
-    </tr>
-  </tbody>
-</table>
+          <small><i>Lead Maintainer</i></small>
+          <br />
+          <a href="#" title="Code">💻</a>
+          <a href="#" title="Documentation">📖</a>
+          <a href="#" title="Maintenance">🔧</a>
+          <a href="#" title="Ideas & Planning">🤔</a>
+        </td>
+        <td align="center" valign="top" width="33%">
+          <a href="https://github.com/SoulDevs">
+            <img src="https://avatars.githubusercontent.com/u/114820381?v=4?s=120" width="120px;" alt="SoulDevs" style="border-radius: 50%;"/>
+            <br />
+            <sub><b>🌟 SoulDevs</b></sub>
+          </a>
+          <br />
+          <small><i>Developer</i></small>
+          <br />
+          <a href="#" title="Code">💻</a>
+          <a href="#" title="Bug Reports">🐛</a>
+          <a href="#" title="Tests">⚡</a>
+        </td>
+      </tr>
+    </tbody>
+  </table>
 
-<br />
-
-[Become a contributor →](CONTRIBUTING.md)
+  <br />
+  
+  <div align="center">
+    <h4>🤝 Want to join our team?</h4>
+    <p>We're always looking for passionate developers to help make Aqualink even better!</p>
+    <br />
+    <a href="CONTRIBUTING.md">
+      <img src="https://img.shields.io/badge/Become_a_Contributor-00bfff?style=for-the-badge&logo=github&logoColor=white" />
+    </a>
+    <a href="https://discord.gg/K4CVv84VBC">
+      <img src="https://img.shields.io/badge/Join_Our_Discord-7289da?style=for-the-badge&logo=discord&logoColor=white" />
+    </a>
+  </div>
 
 </div>
 
