@@ -11,6 +11,18 @@ const OPEN_BRACE = 123
 const LYRICS_PREFIX = 'Lyrics'
 const LYRICS_PREFIX_LEN = LYRICS_PREFIX.length
 
+const DEFAULT_REGIONS = {
+  'asia': ['hongkong', 'singapore', 'japan', 'india', 'seoul', 'mumbai', 'bangkok', 'jakarta', 'manila', 'dubai', 'taiwan', 'malaysia', 'vietnam', 'mongolia', 'kazakhstan', 'uzbekistan', 'kyrgyzstan', 'tajikistan', 'turkmenistan', 'afghanistan', 'pakistan', 'bangladesh', 'sri-lanka', 'nepal', 'bhutan', 'maldives', 'myanmar', 'laos', 'cambodia', 'brunei', 'east-timor', 'china', 'north-korea'],
+  'oceania': ['sydney', 'melbourne', 'brisbane', 'perth', 'adelaide', 'darwin', 'auckland', 'wellington', 'christchurch', 'fiji', 'papua-new-guinea', 'new-caledonia', 'vanuatu', 'solomon-islands', 'samoa', 'tonga', 'cook-islands', 'palau', 'marshall-islands', 'micronesia', 'nauru', 'kiribati', 'tuvalu', 'guam', 'american-samoa'],
+  'eu': ['rotterdam', 'frankfurt', 'london', 'stockholm', 'milan', 'madrid', 'paris', 'vienna', 'warsaw', 'helsinki', 'dublin', 'amsterdam', 'berlin', 'munich', 'zurich', 'brussels', 'lisbon', 'rome', 'athens', 'budapest', 'prague', 'copenhagen', 'oslo', 'reykjavik', 'tallinn', 'riga', 'vilnius', 'minsk', 'kiev', 'chisinau', 'bucharest', 'sofia', 'belgrade', 'sarajevo', 'zagreb', 'ljubljana', 'skopje', 'tirana', 'podgorica', 'pristina'],
+  'russia': ['moscow', 'st-petersburg', 'novosibirsk', 'yekaterinburg', 'nizhny-novgorod', 'kazan', 'chelyabinsk', 'omsk', 'samara', 'rostov-on-don', 'ufa', 'krasnoyarsk', 'voronezh', 'perm', 'volgograd', 'krasnodar', 'saratov', 'tyumen', 'tolyatti', 'izhevsk'],
+  'us': ['us-central', 'us-east', 'us-south', 'us-west', 'us-east1', 'us-east2', 'us-west1', 'us-west2', 'us-northeast', 'us-southeast', 'us-northwest', 'us-southwest', 'us-midwest', 'us-texas', 'us-california', 'us-florida', 'us-new-york', 'us-illinois', 'us-pennsylvania', 'us-ohio', 'us-georgia', 'us-north-carolina', 'us-michigan', 'us-new-jersey', 'us-virginia', 'us-washington', 'us-arizona', 'us-massachusetts', 'us-tennessee', 'us-indiana', 'us-missouri', 'us-maryland', 'us-wisconsin', 'us-colorado', 'us-minnesota', 'us-south-carolina', 'us-alabama', 'us-louisiana', 'us-kentucky', 'us-oregon', 'us-oklahoma', 'us-connecticut', 'us-utah', 'us-iowa', 'us-nevada', 'us-arkansas', 'us-mississippi', 'us-kansas', 'us-new-mexico', 'us-nebraska', 'us-west-virginia', 'us-idaho', 'us-hawaii', 'us-new-hampshire', 'us-maine', 'us-montana', 'us-rhode-island', 'us-delaware', 'us-south-dakota', 'us-north-dakota', 'us-alaska', 'us-vermont', 'us-wyoming'],
+  'canada': ['canada-central', 'canada-east', 'canada-west', 'toronto', 'montreal', 'vancouver', 'calgary', 'edmonton', 'ottawa-gatineau', 'winnipeg', 'quebec', 'hamilton', 'kitchener', 'london', 'halifax'],
+  'south-america': ['brazil', 'sao-paulo', 'rio-de-janeiro', 'brasilia', 'salvador', 'fortaleza', 'belo-horizonte', 'manaus', 'curitiba', 'recife', 'porto-alegre', 'argentina', 'buenos-aires', 'cordoba', 'rosario', 'mendoza', 'chile', 'santiago', 'valparaiso', 'colombia', 'bogota', 'medellin', 'cali', 'peru', 'lima', 'arequipa', 'venezuela', 'caracas', 'maracaibo', 'ecuador', 'quito', 'guayaquil', 'bolivia', 'la-paz', 'santa-cruz', 'uruguay', 'montevideo', 'paraguay', 'asuncion', 'guyana', 'georgetown', 'suriname', 'paramaribo', 'french-guiana', 'cayenne'],
+  'africa': ['southafrica', 'cape-town', 'johannesburg', 'durban', 'pretoria', 'egypt', 'cairo', 'alexandria', 'nigeria', 'lagos', 'abuja', 'kano', 'kenya', 'nairobi', 'mombasa', 'morocco', 'casablanca', 'rabat', 'algeria', 'algiers', 'oran', 'tunisia', 'tunis', 'libya', 'tripoli', 'benghazi', 'sudan', 'khartoum', 'ethiopia', 'addis-ababa', 'ghana', 'accra', 'kumasi', 'cameroon', 'yaounde', 'douala', 'ivory-coast', 'abidjan', 'yamoussoukro', 'angola', 'luanda', 'mozambique', 'maputo', 'madagascar', 'antananarivo', 'uganda', 'kampala', 'tanzania', 'dar-es-salaam', 'dodoma', 'zambia', 'lusaka', 'zimbabwe', 'harare', 'botswana', 'gaborone', 'namibia', 'windhoek', 'senegal', 'dakar', 'mali', 'bamako', 'burkina-faso', 'ouagadougou', 'niger', 'niamey', 'chad', 'ndjamena', 'central-african-republic', 'bangui', 'democratic-republic-congo', 'kinshasa', 'republic-congo', 'brazzaville', 'gabon', 'libreville', 'equatorial-guinea', 'malabo', 'sao-tome-principe', 'sao-tome', 'cape-verde', 'praia', 'guinea-bissau', 'bissau', 'guinea', 'conakry', 'sierra-leone', 'freetown', 'liberia', 'monrovia', 'togo', 'lome', 'benin', 'porto-novo', 'rwanda', 'kigali', 'burundi', 'gitega', 'djibouti', 'djibouti-city', 'eritrea', 'asmara', 'somalia', 'mogadishu', 'south-sudan', 'juba', 'comoros', 'moroni', 'mauritius', 'port-louis', 'seychelles', 'victoria', 'lesotho', 'maseru', 'eswatini', 'mbabane', 'gambia', 'banjul', 'mauritania', 'nouakchott'],
+  'middle-east': ['dubai', 'abu-dhabi', 'doha', 'kuwait', 'manama', 'muscat', 'riyadh', 'jeddah', 'mecca', 'medina', 'dammam', 'tehran', 'isfahan', 'mashhad', 'tabriz', 'shiraz', 'tel-aviv', 'jerusalem', 'haifa', 'beirut', 'amman', 'damascus', 'aleppo', 'baghdad', 'basra', 'erbil', 'ankara', 'istanbul', 'izmir', 'bursa', 'antalya', 'adana', 'gaziantep', 'konya', 'mersin', 'kayseri', 'eskisehir', 'diyarbakir', 'samsun', 'denizli', 'sanliurfa', 'adapazari', 'malatya', 'kahramanmaras', 'erzurum', 'van', 'batman', 'elazig', 'trabzon', 'kocaeli', 'hatay', 'yerevan', 'gyumri', 'vanadzor', 'tbilisi', 'kutaisi', 'batumi', 'baku', 'ganja', 'sumgait']
+}
+
 const _functions = Object.freeze({
   buildWsUrl(host, port, ssl) {
     const needsBrackets = host.includes(':') && !host.startsWith('[') && !host.endsWith(']')
@@ -42,6 +54,34 @@ const _functions = Object.freeze({
   },
   assignIfPresent(target, src, keys) {
     for (const k of keys) if (src[k] !== undefined) target[k] = src[k]
+  },
+  getRegionFromVC(vcRegion) {
+    if (!vcRegion) return null
+    const lowerRegion = vcRegion.toLowerCase()
+    for (const [regionGroup, regions] of Object.entries(DEFAULT_REGIONS)) {
+      if (regions.includes(lowerRegion)) {
+        return { group: regionGroup, specific: lowerRegion }
+      }
+    }
+    return null
+  },
+  findBestNodeForRegion(nodes, vcRegion) {
+    if (!vcRegion || !Array.isArray(nodes)) return null
+    const regionInfo = this.getRegionFromVC(vcRegion)
+    if (!regionInfo) return null
+    
+    for (const node of nodes) {
+      if (!node.connected || node.isDestroyed) continue
+      if (node.regions && Array.isArray(node.regions)) {
+        if (node.regions.includes(regionInfo.specific)) return node
+        const hasRegionGroupMatch = node.regions.some(nodeRegion => {
+          const nodeRegionInfo = this.getRegionFromVC(nodeRegion)
+          return nodeRegionInfo && nodeRegionInfo.group === regionInfo.group
+        })
+        if (hasRegionGroupMatch) return node
+      }
+    }
+    return null
   }
 })
 
@@ -64,7 +104,7 @@ class Node {
     this.port = connOptions.port || 2333
     this.auth = connOptions.auth || 'youshallnotpass'
     this.sessionId = connOptions.sessionId || null
-    this.regions = connOptions.regions || []
+    this.regions = connOptions.regions || ['us-east']
     this.ssl = !!connOptions.ssl
 
     this.wsUrl = _functions.buildWsUrl(this.host, this.port, this.ssl)
