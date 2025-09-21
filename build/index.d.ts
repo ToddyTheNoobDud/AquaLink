@@ -298,8 +298,27 @@ declare module "aqualink" {
         // Internal Properties
         _infoCache: TrackInfo | null;
 
+        // Expose info with the same properties as the Track itself (plus TrackInfo fields)
+        info: {
+            identifier: string;
+            isSeekable: boolean;
+            author: string;
+            length: number;
+            duration: number;
+            isStream: boolean;
+            title: string;
+            uri: string;
+            sourceName: string;
+            artworkUrl: string;
+            position?: number;
+            track?: string | null;
+            playlist?: PlaylistInfo | null;
+            requester?: any;
+            nodes?: Node;
+            node?: Node | null;
+        };
+
         // Getters
-        get info(): TrackInfo;
         get length(): number;
         get thumbnail(): string;
 
@@ -579,29 +598,6 @@ declare module "aqualink" {
         playlistInfo: PlaylistInfo | null;
         pluginInfo: Record<string, any>;
         tracks: Track[];
-    }
-
-    export interface NodeStats {
-        players: number;
-        playingPlayers: number;
-        uptime: number;
-        memory: {
-            free: number;
-            used: number;
-            allocated: number;
-            reservable: number;
-        };
-        cpu: {
-            cores: number;
-            systemLoad: number;
-            lavalinkLoad: number;
-        };
-        frameStats: {
-            sent: number;
-            nulled: number;
-            deficit: number;
-        };
-        ping?: number;
     }
 
     export interface NodeInfo {
