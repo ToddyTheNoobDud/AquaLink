@@ -3,6 +3,9 @@
 const WebSocket = require('ws')
 const Rest = require('./Rest')
 const { AqualinkEvents } = require('./AqualinkEvents')
+
+const privateData = new WeakMap()
+
 const WS_STATES = Object.freeze({ CONNECTING: 0, OPEN: 1, CLOSING: 2, CLOSED: 3 })
 const FATAL_CLOSE_CODES = new Set([4003, 4004, 4010, 4011, 4012, 4015])
 
@@ -11,12 +14,20 @@ const OPEN_BRACE = 123
 const LYRICS_PREFIX = 'Lyrics'
 const LYRICS_PREFIX_LEN = LYRICS_PREFIX.length
 
+const OPS = Object.freeze({
+  STATS: 'stats',
+  READY: 'ready',
+  PLAYER_UPDATE: 'playerUpdate',
+  EVENT: 'event'
+})
+
 const _functions = Object.freeze({
   buildWsUrl(host, port, ssl) {
     const needsBrackets = host.includes(':') && !host.startsWith('[') && !host.endsWith(']')
     const h = needsBrackets ? `[${host}]` : host
     return `ws${ssl ? 's' : ''}://${h}:${port}${WS_PATH}`
   },
+
   dataToStringIfJson(data, isBinary) {
     if (isBinary) return null
     if (typeof data === 'string') return data.length > 0 && data.charCodeAt(0) === OPEN_BRACE ? data : null
@@ -26,12 +37,19 @@ const _functions = Object.freeze({
     }
     return null
   },
+
   tryParseJson(str) {
-    try { return { ok: true, value: JSON.parse(str) } } catch (err) { return { ok: false, err } }
+    try {
+      return { ok: true, value: JSON.parse(str) }
+    } catch (err) {
+      return { ok: false, err }
+    }
   },
+
   isLyricsOp(op) {
     return typeof op === 'string' && op.length >= LYRICS_PREFIX_LEN && op.startsWith(LYRICS_PREFIX)
   },
+
   reasonToString(reason) {
     if (!reason) return 'No reason provided'
     if (typeof reason === 'string') return reason
@@ -40,6 +58,7 @@ const _functions = Object.freeze({
     }
     return String(reason)
   },
+
   assignIfPresent(target, src, keys) {
     for (const k of keys) if (src[k] !== undefined) target[k] = src[k]
   }
@@ -101,12 +120,18 @@ class Node {
     this._clientName = `Aqua/${this.aqua.version} https://github.com/ToddyTheNoobDud/AquaLink`
     this._headers = this._buildHeaders()
 
-    this._boundHandlers = Object.freeze({
+    const handlers = {
       open: this._handleOpen.bind(this),
       error: this._handleError.bind(this),
       message: this._handleMessage.bind(this),
       close: this._handleClose.bind(this),
       connect: this.connect.bind(this)
+    }
+
+    privateData.set(this, {
+      boundHandlers: Object.freeze(handlers),
+      messageQueue: [],
+      cleanupTasks: new Set()
     })
   }
 
@@ -119,6 +144,10 @@ class Node {
     return headers
   }
 
+  get _boundHandlers() {
+    return privateData.get(this)?.boundHandlers
+  }
+
   async _handleOpen() {
     this.connected = true
     this._isConnecting = false
@@ -126,12 +155,22 @@ class Node {
     this._emitDebug('WebSocket connection established')
 
     if (!this.aqua?.bypassChecks?.nodeFetchInfo && !this.info) {
-      this.rest.makeRequest('GET', '/v4/info')
-        .then(info => { this.info = info })
-        .catch(err => {
-          this.info = null
-          this._emitError(`Failed to fetch node info: ${err?.message || err}`)
-        })
+
+      const fetchPromise = this.rest.makeRequest('GET', '/v4/info')
+      const timeoutPromise = new Promise((_, reject) => {
+        const timeout = setTimeout(() => {
+          reject(new Error('Node info fetch timeout'))
+        }, 10000)
+        timeout.unref?.()
+      })
+
+      try {
+        const info = await Promise.race([fetchPromise, timeoutPromise])
+        this.info = info
+      } catch (err) {
+        this.info = null
+        this._emitError(`Failed to fetch node info: ${err?.message || err}`)
+      }
     }
 
     this.aqua.emit(AqualinkEvents.NodeConnect, this)
@@ -151,25 +190,25 @@ class Node {
 
     const parsed = _functions.tryParseJson(str)
     if (!parsed.ok) {
-      this._emitDebug(() => `JSON parse failed: ${parsed.err && parsed.err.message ? parsed.err.message : 'Unknown error'}`)
+      this._emitDebug(() => `JSON parse failed: ${parsed.err?.message || 'Unknown error'}`)
       return
     }
 
     const payload = parsed.value
-    const op = payload && payload.op
+    const op = payload?.op
     if (!op) return
 
     switch (op) {
-      case 'stats':
+      case OPS.STATS:
         this._updateStats(payload)
         break
-      case 'ready':
+      case OPS.READY:
         this._handleReady(payload)
         break
-      case 'playerUpdate':
+      case OPS.PLAYER_UPDATE:
         this._emitToPlayer(AqualinkEvents.PlayerUpdate, payload)
         break
-      case 'event':
+      case OPS.EVENT:
         this._emitToPlayer('event', payload)
         break
       default:
@@ -178,10 +217,19 @@ class Node {
   }
 
   _emitToPlayer(eventName, payload) {
-    const guildId = payload && payload.guildId
+    const guildId = payload?.guildId
     if (!guildId) return
     const player = this.aqua?.players?.get?.(guildId)
-    if (player && typeof player.emit === 'function') player.emit(eventName, payload)
+    if (player?.emit) {
+
+      setImmediate(() => {
+        try {
+          player.emit(eventName, payload)
+        } catch (err) {
+          this._emitError(`Player emit error: ${err?.message || err}`)
+        }
+      })
+    }
   }
 
   _handleCustomStringOp(op, payload) {
@@ -298,6 +346,22 @@ class Node {
       ws.once('close', h.close)
 
       this.ws = ws
+
+      const privateInfo = privateData.get(this)
+      if (privateInfo) {
+        const cleanupTask = () => {
+          if (ws === this.ws) {
+            this._cleanup()
+          }
+        }
+        privateInfo.cleanupTasks.add(cleanupTask)
+
+        const cleanupTimeout = setTimeout(() => {
+          privateInfo.cleanupTasks.delete(cleanupTask)
+        }, this.timeout + 5000)
+        cleanupTimeout.unref?.()
+      }
+
     } catch (err) {
       this._isConnecting = false
       this._emitError(`Failed to create WebSocket: ${err?.message || err}`)
@@ -306,20 +370,23 @@ class Node {
   }
 
   _cleanup() {
-    const ws = this.ws;
-    if (!ws) return;
-    ws.removeAllListeners();
+    const ws = this.ws
+    if (!ws) return
+
+    ws.removeAllListeners()
+
     try {
-      const state = ws.readyState;
+      const state = ws.readyState
       if (state === WS_STATES.OPEN) {
-        ws.close(Node.WS_CLOSE_NORMAL);
-      } else {
-        ws.terminate();
+        ws.close(Node.WS_CLOSE_NORMAL)
+      } else if (state !== WS_STATES.CLOSED) {
+        ws.terminate()
       }
     } catch (err) {
-      this._emitError(`Failed to cleanup WebSocket: ${err.message}`);
+      this._emitError(`Failed to cleanup WebSocket: ${err?.message || err}`)
     }
-    this.ws = null;
+
+    this.ws = null
   }
 
   destroy(clean = false) {
@@ -330,6 +397,16 @@ class Node {
     this._clearReconnectTimeout()
     this._cleanup()
 
+    const privateInfo = privateData.get(this)
+    if (privateInfo?.cleanupTasks) {
+      for (const task of privateInfo.cleanupTasks) {
+        try { task() } catch (err) {
+          this._emitError(`Cleanup task failed: ${err?.message || err}`)
+        }
+      }
+      privateInfo.cleanupTasks.clear()
+    }
+
     if (!clean) {
       this.aqua.handleNodeFailover?.(this)
     }
@@ -337,8 +414,18 @@ class Node {
     this.connected = false
     this.aqua.destroyNode?.(this.name)
     this.aqua.emit(AqualinkEvents.NodeDestroy, this)
-    this.rest?.destroy?.();
+
+    if (this.rest?.destroy) {
+      this.rest.destroy()
+    }
+
     this.info = null
+    this.rest = null
+    this.aqua = null
+    this._headers = null
+    this.stats = null
+
+    privateData.delete(this)
   }
 
   async getStats() {
@@ -354,6 +441,7 @@ class Node {
 
   _updateStats(payload) {
     if (!payload) return
+
     const s = this.stats
 
     _functions.assignIfPresent(s, payload, ['players', 'playingPlayers', 'uptime', 'ping'])
@@ -375,7 +463,7 @@ class Node {
   }
 
   async _handleReady(payload) {
-    const sessionId = payload && payload.sessionId
+    const sessionId = payload?.sessionId
     if (!sessionId) {
       this._emitError('Ready payload missing sessionId')
       return
@@ -389,8 +477,13 @@ class Node {
     this.aqua.emit(AqualinkEvents.NodeConnect, this)
 
     if (this.autoResume) {
-      this._resumePlayers().catch(err => {
-        this._emitError(`_resumePlayers failed: ${err?.message || err}`)
+
+      setImmediate(async () => {
+        try {
+          await this._resumePlayers()
+        } catch (err) {
+          this._emitError(`_resumePlayers failed: ${err?.message || err}`)
+        }
       })
     }
   }
@@ -416,6 +509,7 @@ class Node {
   }
 
   _emitDebug(message) {
+
     if ((this.aqua?.listenerCount?.(AqualinkEvents.Debug) || 0) === 0) return
     const out = typeof message === 'function' ? message() : message
     this.aqua.emit(AqualinkEvents.Debug, this.name, out)
