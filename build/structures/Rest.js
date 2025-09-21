@@ -6,6 +6,8 @@ const { Agent: HttpAgent, request: httpRequest } = require('node:http')
 const http2 = require('node:http2')
 const { createBrotliDecompress, createUnzip } = require('node:zlib')
 
+const privateData = new WeakMap()
+
 const BASE64_REGEX = /^[A-Za-z0-9+/=_-]+$/
 const JSON_TYPE_REGEX = /application\/json/
 const COMPRESSION_REGEX = /^(br|gzip|deflate)$/
@@ -67,11 +69,14 @@ class Rest {
       'Accept-Encoding': 'gzip, deflate, br',
       'User-Agent': `Aqualink/${aqua?.version || '1.0'} (Node.js ${process.version})`
     })
-
-    this._headers = {}
+    this._headerPool = []
     this._setupAgent(node)
     this.useHttp2 = !!(aqua?.options?.useHttp2)
     this._h2 = null
+
+    privateData.set(this, {
+      cleanupCallbacks: new Set()
+    })
   }
 
   _setupAgent(node) {
@@ -114,14 +119,29 @@ class Rest {
   _buildHeaders(hasPayload, payloadLength) {
     if (!hasPayload) return this.defaultHeaders
 
-    const headers = this._headers
+    let headers = this._headerPool.pop()
+    if (!headers) {
+      headers = {}
+    }
+
+    for (const key in headers) {
+      delete headers[key]
+    }
+
     headers.Authorization = this.defaultHeaders.Authorization
     headers.Accept = this.defaultHeaders.Accept
     headers['Accept-Encoding'] = this.defaultHeaders['Accept-Encoding']
     headers['User-Agent'] = this.defaultHeaders['User-Agent']
     headers['Content-Type'] = JSON_CONTENT_TYPE
     headers['Content-Length'] = payloadLength
+
     return headers
+  }
+
+  _returnHeadersToPool(headers) {
+    if (headers !== this.defaultHeaders && this._headerPool.length < 10) {
+      this._headerPool.push(headers)
+    }
   }
 
   async makeRequest(method, endpoint, body) {
@@ -131,18 +151,30 @@ class Rest {
     const headers = this._buildHeaders(!!payload, payloadLength)
 
     const useHttp2 = this.useHttp2 && payloadLength >= HTTP2_THRESHOLD
-    return useHttp2 ? this._makeHttp2Request(method, endpoint, headers, payload) : this._makeHttp1Request(method, url, headers, payload)
+
+    try {
+      return useHttp2
+        ? await this._makeHttp2Request(method, endpoint, headers, payload)
+        : await this._makeHttp1Request(method, url, headers, payload)
+    } finally {
+
+      this._returnHeadersToPool(headers)
+    }
   }
 
   _makeHttp1Request(method, url, headers, payload) {
     return new Promise((resolve, reject) => {
       let req, timeoutId, resolved = false
+      const chunks = []
+      let totalSize = 0
 
       const cleanup = () => {
         if (timeoutId) {
           clearTimeout(timeoutId)
           timeoutId = null
         }
+
+        chunks.length = 0
       }
 
       const complete = (isSuccess, value) => {
@@ -175,9 +207,6 @@ class Rest {
 
         res.once('aborted', () => complete(false, ERRORS.RESPONSE_ABORTED))
         res.once('error', err => complete(false, err))
-
-        const chunks = []
-        let totalSize = 0
 
         stream.on('data', chunk => {
           totalSize += chunk.length
@@ -228,21 +257,33 @@ class Rest {
   }
 
   async _makeHttp2Request(method, path, headers, payload) {
+
     if (!this._h2 || this._h2.closed || this._h2.destroyed) {
       this._h2 = http2.connect(this.baseUrl)
       this._h2.setTimeout(this.timeout, () => this._h2.close())
-      this._h2.once('error', () => {})
-      this._h2.once('close', () => { this._h2 = null })
+      this._h2.once('error', () => {
+        this._h2 = null
+      })
+      this._h2.once('close', () => {
+        this._h2 = null
+      })
       if (this._h2.socket?.unref) this._h2.socket.unref()
     }
 
     return new Promise((resolve, reject) => {
       let req, timeoutId, resolved = false
+      const chunks = []
+      let totalSize = 0
 
       const complete = (isSuccess, value) => {
         if (resolved) return
         resolved = true
-        if (timeoutId) clearTimeout(timeoutId)
+        if (timeoutId) {
+          clearTimeout(timeoutId)
+          timeoutId = null
+        }
+
+        chunks.length = 0
         if (req && !isSuccess) req.close(http2.constants.NGHTTP2_CANCEL)
         isSuccess ? resolve(value) : reject(value)
       }
@@ -251,7 +292,10 @@ class Rest {
       req = this._h2.request(h)
 
       req.once('response', respHeaders => {
-        if (timeoutId) clearTimeout(timeoutId)
+        if (timeoutId) {
+          clearTimeout(timeoutId)
+          timeoutId = null
+        }
 
         const status = respHeaders[':status'] || 0
         const cl = respHeaders['content-length']
@@ -264,9 +308,6 @@ class Rest {
 
         if (decompressor) decompressor.once('error', err => complete(false, err))
         req.once('error', err => complete(false, err))
-
-        const chunks = []
-        let totalSize = 0
 
         stream.on('data', chunk => {
           totalSize += chunk.length
@@ -429,15 +470,37 @@ class Rest {
   }
 
   destroy() {
+    const privateInfo = privateData.get(this)
+
+    if (privateInfo?.cleanupCallbacks) {
+      for (const callback of privateInfo.cleanupCallbacks) {
+        try { callback() } catch {}
+      }
+      privateInfo.cleanupCallbacks.clear()
+    }
+
     if (this.agent) {
       this.agent.destroy()
       this.agent = null
     }
+
     if (this._h2) {
       try { this._h2.close() } catch {}
       this._h2 = null
     }
-    this._headers = null
+
+    if (this._headerPool) {
+      this._headerPool.length = 0
+      this._headerPool = null
+    }
+
+    this.aqua = null
+    this.node = null
+    this.request = null
+    this.defaultHeaders = null
+    this._endpoints = null
+
+    privateData.delete(this)
   }
 }
 
