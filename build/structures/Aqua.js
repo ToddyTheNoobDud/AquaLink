@@ -396,7 +396,7 @@ class Aqua extends EventEmitter {
       position: player.position || 0,
       current: player.current || null,
       queue: player.queue?.toArray?.() || EMPTY_ARRAY,
-      repeat: player.loop,
+      loop: player.loop,
       shuffle: player.shuffle,
       deaf: player.deaf ?? false,
       connected: !!player.connected
@@ -428,7 +428,7 @@ class Aqua extends EventEmitter {
         if (state.paused) ops.push(newPlayer.pause(true))
       }
     }
-    Object.assign(newPlayer, { repeat: state.repeat, shuffle: state.shuffle })
+    Object.assign(newPlayer, { loop: state.loop, shuffle: state.shuffle })
     await Promise.allSettled(ops)
   }
 
@@ -623,7 +623,7 @@ class Aqua extends EventEmitter {
           u: player.current?.uri || null,
           p: player.position || 0,
           ts: player.timestamp || 0,
-          q: (player.queue?.tracks?.slice(0, 10) || []).map(tr => tr.uri),
+          q: player.queue.slice(0, 10).map(tr => tr.uri),
           r: requester ? JSON.stringify({ id: requester.id, username: requester.username }) : null,
           vol: player.volume,
           pa: player.paused,
@@ -659,7 +659,7 @@ class Aqua extends EventEmitter {
       const resolved = await Promise.all(tracksToResolve.map(uri => this.resolve({ query: uri, requester }).catch(() => null)))
       const validTracks = resolved.flatMap(r => r?.tracks || [])
       if (validTracks.length && player.queue?.add) {
-        if (player.queue.tracks?.length <= 2) player.queue.tracks = []
+        if (player.queue.length <= 2) player.queue.length = 0;
         player.queue.add(...validTracks)
       }
       if (p.u && validTracks[0]) {
