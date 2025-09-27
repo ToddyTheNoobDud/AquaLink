@@ -124,7 +124,7 @@ class Node {
       frameStats: { sent: 0, nulled: 0, deficit: 0 }
     }
 
-    this._clientName = `Aqua/${this.aqua.version} https://github.com/ToddyTheNoobDud/AquaLink`
+    this._clientName = `Aqualink/2.13.0`
     this._headers = this._buildHeaders()
 
     const handlers = {
