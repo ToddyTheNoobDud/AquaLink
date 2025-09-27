@@ -27,8 +27,11 @@ const SEEK_DELAY = 120
 const RECONNECT_DELAY = 400
 const CACHE_VALID_TIME = 12000
 const NODE_TIMEOUT = 30000
-
+const MAX_CACHE_SIZE = 20
+const MAX_BROKEN_PLAYERS = 50
+const MAX_FAILOVER_QUEUE = 50
 const URL_PATTERN = /^https?:\/\//i
+
 const DEFAULT_OPTIONS = Object.freeze({
   shouldDeleteMessage: false,
   defaultSearchPlatform: 'ytsearch',
@@ -50,7 +53,12 @@ const DEFAULT_OPTIONS = Object.freeze({
   })
 })
 
-const _delay = (ms) => new Promise(r => setTimeout(r, ms))
+const _delay = ms => new Promise(r => setTimeout(r, ms))
+const _noop = () => {}
+const _isUrl = query => typeof query === 'string' && query.length > 8 && URL_PATTERN.test(query)
+const _formatQuery = (query, source) => _isUrl(query) ? query : `${source}${SEARCH_PREFIX}${query}`
+const _makeTrack = (t, requester, node) => new Track(t, requester, node)
+const _safeCall = fn => { try { fn() } catch {} }
 
 class Aqua extends EventEmitter {
   constructor(client, nodes, options = {}) {
@@ -66,23 +74,23 @@ class Aqua extends EventEmitter {
     this.initiated = false
     this.version = pkgVersion
 
-    this.options = { ...DEFAULT_OPTIONS, ...options }
+    const merged = { ...DEFAULT_OPTIONS, ...options }
+    this.options = merged
     this.failoverOptions = { ...DEFAULT_OPTIONS.failoverOptions, ...options.failoverOptions }
 
-    const opts = this.options
-    this.shouldDeleteMessage = opts.shouldDeleteMessage
-    this.defaultSearchPlatform = opts.defaultSearchPlatform
-    this.leaveOnEnd = opts.leaveOnEnd
-    this.restVersion = opts.restVersion || 'v4'
-    this.plugins = opts.plugins
-    this.autoResume = opts.autoResume
-    this.infiniteReconnects = opts.infiniteReconnects
-    this.urlFilteringEnabled = opts.urlFilteringEnabled
-    this.restrictedDomains = opts.restrictedDomains || []
-    this.allowedDomains = opts.allowedDomains || []
-    this.loadBalancer = opts.loadBalancer
-    this.useHttp2 = opts.useHttp2
-    this.send = opts.send || this._createDefaultSend()
+    this.shouldDeleteMessage = merged.shouldDeleteMessage
+    this.defaultSearchPlatform = merged.defaultSearchPlatform
+    this.leaveOnEnd = merged.leaveOnEnd
+    this.restVersion = merged.restVersion || 'v4'
+    this.plugins = merged.plugins
+    this.autoResume = merged.autoResume
+    this.infiniteReconnects = merged.infiniteReconnects
+    this.urlFilteringEnabled = merged.urlFilteringEnabled
+    this.restrictedDomains = merged.restrictedDomains || []
+    this.allowedDomains = merged.allowedDomains || []
+    this.loadBalancer = merged.loadBalancer
+    this.useHttp2 = merged.useHttp2
+    this.send = merged.send || this._createDefaultSend()
 
     this._nodeStates = new Map()
     this._failoverQueue = new Map()
@@ -92,8 +100,7 @@ class Aqua extends EventEmitter {
     this._leastUsedNodesCache = null
     this._leastUsedNodesCacheTime = 0
     this._nodeLoadCache = new Map()
-    this._nodeLoadCacheTime = new Map()
-    this._nodeLoadCacheMaxSize = 20
+    this._cleanupTimer = null
 
     this._bindEventHandlers()
   }
@@ -112,34 +119,27 @@ class Aqua extends EventEmitter {
 
   _bindEventHandlers() {
     if (!this.autoResume) return
-    this._onNodeConnect = async node => {
+    const onNodeConnect = async node => {
       this._invalidateCache()
       await this._rebuildBrokenPlayers(node)
-      this._performCleanup()
+      this._scheduleCleanup()
     }
-    this._onNodeDisconnect = node => {
+    const onNodeDisconnect = node => {
       this._invalidateCache()
       queueMicrotask(() => this._storeBrokenPlayers(node))
     }
-    this._onNodeReady = (node, { resumed }) => {
+    const onNodeReady = (node, { resumed }) => {
       if (!resumed) return
-      const playersToUpdate = []
+      const batch = []
       for (const player of this.players.values()) {
-        if (player.nodes === node && player.connection) playersToUpdate.push(player)
+        if (player.nodes === node && player.connection) batch.push(player)
       }
-      if (playersToUpdate.length) {
-        queueMicrotask(() => {
-          for (const player of playersToUpdate) {
-            player.connection.resendVoiceUpdate({ resume: true })
-          }
-        })
-      }
+      if (batch.length) queueMicrotask(() => batch.forEach(p => p.connection.resendVoiceUpdate({ resume: true })))
     }
-    this.on(AqualinkEvents.NodeConnect, this._onNodeConnect)
-    this.on(AqualinkEvents.NodeDisconnect, this._onNodeDisconnect)
-    this.on(AqualinkEvents.NodeReady, this._onNodeReady)
-
-    this._performCleanup()
+    this.on(AqualinkEvents.NodeConnect, onNodeConnect)
+    this.on(AqualinkEvents.NodeDisconnect, onNodeDisconnect)
+    this.on(AqualinkEvents.NodeReady, onNodeReady)
+    this._scheduleCleanup()
   }
 
   get leastUsedNodes() {
@@ -154,8 +154,8 @@ class Aqua extends EventEmitter {
     const sorted = this.loadBalancer === 'leastRest'
       ? connected.sort((a, b) => (a.rest?.calls || 0) - (b.rest?.calls || 0))
       : this.loadBalancer === 'random'
-        ? connected.slice()
-        : connected.sort((a, b) => this._getCachedNodeLoad(a) - this._getCachedNodeLoad(b))
+        ? connected.sort(() => Math.random() - 0.5)
+        : connected.sort((a, b) => this._getNodeLoad(a) - this._getNodeLoad(b))
     this._leastUsedNodesCache = Object.freeze(sorted)
     this._leastUsedNodesCacheTime = now
     return this._leastUsedNodesCache
@@ -166,144 +166,125 @@ class Aqua extends EventEmitter {
     this._leastUsedNodesCacheTime = 0
   }
 
-  _getCachedNodeLoad(node) {
-    const nodeId = node.name || node.host
+  _getNodeLoad(node) {
+    const id = node.name || node.host
+    const cached = this._nodeLoadCache.get(id)
     const now = Date.now()
-    const cacheTime = this._nodeLoadCacheTime.get(nodeId)
-    if (cacheTime && (now - cacheTime) < 5000) return this._nodeLoadCache.get(nodeId) || 0
-    const load = this._calculateNodeLoad(node)
-    this._nodeLoadCache.set(nodeId, load)
-    this._nodeLoadCacheTime.set(nodeId, now)
-    // Limit cache size
-    if (this._nodeLoadCache.size > this._nodeLoadCacheMaxSize) {
-      const oldest = this._nodeLoadCacheTime.keys().next().value
-      this._nodeLoadCache.delete(oldest)
-      this._nodeLoadCacheTime.delete(oldest)
-    }
-    return load
-  }
-
-  _calculateNodeLoad(node) {
+    if (cached && (now - cached.time) < 5000) return cached.load
     const stats = node?.stats
     if (!stats) return 0
-    const cpu = stats.cpu
-    const cpuLoad = cpu ? (cpu.systemLoad / Math.max(1, cpu.cores || 1)) : 0
-    const playing = stats.playingPlayers || 0
-    const memory = stats.memory
-    const memUsage = memory ? (memory.used / Math.max(1, memory.reservable)) : 0
-    const restCalls = node.rest?.calls || 0
-    return (cpuLoad * 100) + (playing * 0.75) + (memUsage * 40) + (restCalls * 0.001)
+    const load = (stats.cpu ? stats.cpu.systemLoad / Math.max(1, stats.cpu.cores || 1) : 0) * 100 +
+      (stats.playingPlayers || 0) * 0.75 +
+      (stats.memory ? stats.memory.used / Math.max(1, stats.memory.reservable) : 0) * 40 +
+      (node.rest?.calls || 0) * 0.001
+    this._nodeLoadCache.set(id, { load, time: now })
+    if (this._nodeLoadCache.size > MAX_CACHE_SIZE) {
+      const first = this._nodeLoadCache.keys().next().value
+      this._nodeLoadCache.delete(first)
+    }
+    return load
   }
 
   async init(clientId) {
     if (this.initiated) return this
     this.clientId = clientId
     if (!this.clientId) return
-    const nodePromises = this.nodes.map(n => Promise.race([
-      this._createNode(n),
-      _delay(NODE_TIMEOUT).then(() => { throw new Error('Node timeout') })
-    ]))
-    const results = await Promise.allSettled(nodePromises)
-    const successCount = results.filter(r => r.status === 'fulfilled').length
-    if (!successCount) throw new Error('No nodes connected')
-    await this._loadPlugins()
+    const results = await Promise.allSettled(
+      this.nodes.map(n => Promise.race([this._createNode(n), _delay(NODE_TIMEOUT).then(() => { throw new Error('Timeout') })]))
+    )
+    if (!results.some(r => r.status === 'fulfilled')) throw new Error('No nodes connected')
+    if (this.plugins?.length) {
+      await Promise.allSettled(this.plugins.map(p => {
+        try { return p.load(this) }
+        catch (err) { this.emit(AqualinkEvents.Error, null, err) }
+      }))
+    }
     this.initiated = true
     return this
   }
 
-  async _loadPlugins() {
-    if (!this.plugins?.length) return
-    await Promise.allSettled(this.plugins.map(plugin => {
-      try {
-        return plugin.load(this)
-      } catch (err) {
-        this.emit(AqualinkEvents.Error, null, new Error(`Plugin error: ${err?.message || String(err)}`))
-      }
-    }))
-  }
-
   async _createNode(options) {
-    const nodeId = options.name || options.host
-    this._destroyNode(nodeId)
+    const id = options.name || options.host
+    this._destroyNode(id)
     const node = new Node(this, options, this.options)
-    node.players = node.players || new Set()
-    this.nodeMap.set(nodeId, node)
-    this._nodeStates.set(nodeId, { connected: false, failoverInProgress: false })
+    node.players = new Set()
+    this.nodeMap.set(id, node)
+    this._nodeStates.set(id, { connected: false, failoverInProgress: false })
     try {
       await node.connect()
-      this._nodeStates.set(nodeId, { connected: true, failoverInProgress: false })
+      this._nodeStates.set(id, { connected: true, failoverInProgress: false })
       this._invalidateCache()
       this.emit(AqualinkEvents.NodeCreate, node)
       return node
     } catch (error) {
-      this._cleanupNode(nodeId)
+      this._cleanupNode(id)
       throw error
     }
   }
 
-  _destroyNode(identifier) {
-    const node = this.nodeMap.get(identifier)
-    if (node) {
-      try { node.destroy?.() } catch { }
-      this._cleanupNode(identifier)
-      this.emit(AqualinkEvents.NodeDestroy, node)
-    }
+  _destroyNode(id) {
+    const node = this.nodeMap.get(id)
+    if (!node) return
+    _safeCall(() => node.destroy())
+    this._cleanupNode(id)
+    this.emit(AqualinkEvents.NodeDestroy, node)
   }
 
-  _cleanupNode(nodeId) {
-    const node = this.nodeMap.get(nodeId)
+  _cleanupNode(id) {
+    const node = this.nodeMap.get(id)
     if (node) {
-      node.removeAllListeners?.()
-      node.players?.clear?.()
-      this.nodeMap.delete(nodeId)
+      _safeCall(() => node.removeAllListeners())
+      _safeCall(() => node.players.clear())
+      this.nodeMap.delete(id)
     }
-    this._nodeStates.delete(nodeId)
-    this._failoverQueue.delete(nodeId)
-    this._lastFailoverAttempt.delete(nodeId)
-    this._nodeLoadCache.delete(nodeId)
-    this._nodeLoadCacheTime.delete(nodeId)
+    this._nodeStates.delete(id)
+    this._failoverQueue.delete(id)
+    this._lastFailoverAttempt.delete(id)
+    this._nodeLoadCache.delete(id)
     this._invalidateCache()
   }
 
   _storeBrokenPlayers(node) {
-    const nodeId = node.name || node.host
+    const id = node.name || node.host
     const now = Date.now()
     for (const player of this.players.values()) {
       if (player.nodes !== node) continue
       const state = this._capturePlayerState(player)
       if (state) {
-        state.originalNodeId = nodeId
+        state.originalNodeId = id
         state.brokenAt = now
         this._brokenPlayers.set(player.guildId, state)
       }
     }
+    this._trimBrokenPlayers()
   }
 
   async _rebuildBrokenPlayers(node) {
-    const nodeId = node.name || node.host
+    const id = node.name || node.host
     const rebuilds = []
     const now = Date.now()
-    for (const [guildId, brokenState] of this._brokenPlayers) {
-      if (brokenState.originalNodeId !== nodeId || now - brokenState.brokenAt > BROKEN_PLAYER_TTL) continue
-      rebuilds.push({ guildId, brokenState })
+    for (const [guildId, state] of this._brokenPlayers) {
+      if (state.originalNodeId === id && (now - state.brokenAt) < BROKEN_PLAYER_TTL) {
+        rebuilds.push({ guildId, state })
+      }
     }
     if (!rebuilds.length) return
-
     const successes = []
     for (let i = 0; i < rebuilds.length; i += MAX_CONCURRENT_OPS) {
       const batch = rebuilds.slice(i, i + MAX_CONCURRENT_OPS)
-      const results = await Promise.allSettled(batch.map(({ guildId, brokenState }) =>
-        this._rebuildPlayer(brokenState, node).then(() => guildId)
-      ))
-      results.forEach(r => r.status === 'fulfilled' && successes.push(r.value))
+      const results = await Promise.allSettled(
+        batch.map(({ guildId, state }) => this._rebuildPlayer(state, node).then(() => guildId))
+      )
+      for (const res of results) {
+        if (res.status === 'fulfilled') successes.push(res.value)
+      }
     }
-    successes.forEach(guildId => this._brokenPlayers.delete(guildId))
+    for (const guildId of successes) this._brokenPlayers.delete(guildId)
     if (successes.length) this.emit(AqualinkEvents.PlayersRebuilt, node, successes.length)
-    this._performCleanup()
   }
 
-  async _rebuildPlayer(brokenState, targetNode) {
-    const { guildId, textChannel, voiceChannel, current, volume = 65, deaf = true } = brokenState
+  async _rebuildPlayer(state, targetNode) {
+    const { guildId, textChannel, voiceChannel, current, volume = 65, deaf = true } = state
     const lockKey = `rebuild_${guildId}`
     if (this._rebuildLocks.has(lockKey)) return
     this._rebuildLocks.add(lockKey)
@@ -317,8 +298,8 @@ class Aqua extends EventEmitter {
       if (current && player?.queue?.add) {
         player.queue.add(current)
         await player.play()
-        if (brokenState.position > 0) setTimeout(() => player.seek?.(brokenState.position), SEEK_DELAY)
-        if (brokenState.paused) await player.pause(true)
+        if (state.position > 0) setTimeout(() => player.seek?.(state.position), SEEK_DELAY)
+        if (state.paused) await player.pause(true)
       }
       return player
     } finally {
@@ -328,60 +309,51 @@ class Aqua extends EventEmitter {
 
   async handleNodeFailover(failedNode) {
     if (!this.failoverOptions.enabled) return
-    const nodeId = failedNode.name || failedNode.host
+    const id = failedNode.name || failedNode.host
     const now = Date.now()
-    const nodeState = this._nodeStates.get(nodeId)
-    if (nodeState?.failoverInProgress) return
-    const lastAttempt = this._lastFailoverAttempt.get(nodeId)
+    const state = this._nodeStates.get(id)
+    if (state?.failoverInProgress) return
+    const lastAttempt = this._lastFailoverAttempt.get(id)
     if (lastAttempt && (now - lastAttempt) < this.failoverOptions.cooldownTime) return
-    const attempts = this._failoverQueue.get(nodeId) || 0
+    const attempts = this._failoverQueue.get(id) || 0
     if (attempts >= this.failoverOptions.maxFailoverAttempts) return
 
-    this._nodeStates.set(nodeId, { connected: false, failoverInProgress: true })
-    this._lastFailoverAttempt.set(nodeId, now)
-    this._failoverQueue.set(nodeId, attempts + 1)
+    this._nodeStates.set(id, { connected: false, failoverInProgress: true })
+    this._lastFailoverAttempt.set(id, now)
+    this._failoverQueue.set(id, attempts + 1)
 
     try {
       this.emit(AqualinkEvents.NodeFailover, failedNode)
-      const affectedPlayers = Array.from(failedNode.players || [])
-      if (!affectedPlayers.length) {
-        this._nodeStates.set(nodeId, { connected: false, failoverInProgress: false })
-        return
-      }
-      const availableNodes = this._getAvailableNodes(failedNode)
-      if (!availableNodes.length) throw new Error('No failover nodes available')
-      const results = await this._migratePlayersOptimized(affectedPlayers, availableNodes)
+      const players = Array.from(failedNode.players || [])
+      if (!players.length) return
+      const available = this._getAvailableNodes(failedNode)
+      if (!available.length) throw new Error('No failover nodes')
+      const results = await this._migratePlayersOptimized(players, available)
       const successful = results.filter(r => r.success).length
       if (successful) this.emit(AqualinkEvents.NodeFailoverComplete, failedNode, successful, results.length - successful)
     } catch (error) {
-      this.emit(AqualinkEvents.Error, null, new Error(`Failover failed: ${error?.message || String(error)}`))
+      this.emit(AqualinkEvents.Error, null, error)
     } finally {
-      this._nodeStates.set(nodeId, { connected: false, failoverInProgress: false })
+      this._nodeStates.set(id, { connected: false, failoverInProgress: false })
     }
   }
 
-  async _migratePlayersOptimized(players, availableNodes) {
-    const baseLoads = new Map()
-    const assignedCounts = new Map()
-    availableNodes.forEach(n => {
-      baseLoads.set(n, this._getCachedNodeLoad(n))
-      assignedCounts.set(n, 0)
-    })
-
-    const pickNode = () => {
-      let bestNode = availableNodes[0]
-      let bestScore = Infinity
-      for (const n of availableNodes) {
-        const score = baseLoads.get(n) + assignedCounts.get(n)
-        if (score < bestScore) {
-          bestNode = n
-          bestScore = score
-        }
-      }
-      assignedCounts.set(bestNode, assignedCounts.get(bestNode) + 1)
-      return bestNode
+  async _migratePlayersOptimized(players, nodes) {
+    const loads = new Map()
+    const counts = new Map()
+    for (const node of nodes) {
+      loads.set(node, this._getNodeLoad(n))
+      counts.set(node, 0)
     }
-
+    const pickNode = () => {
+      const n = nodes.reduce((best, node) => {
+        const score = loads.get(node) + counts.get(node)
+        const bestScore = loads.get(best) + counts.get(best)
+        return score < bestScore ? node : best
+      })
+      counts.set(n, counts.get(n) + 1)
+      return n
+    }
     const results = []
     for (let i = 0; i < players.length; i += MAX_CONCURRENT_OPS) {
       const batch = players.slice(i, i + MAX_CONCURRENT_OPS)
@@ -392,14 +364,13 @@ class Aqua extends EventEmitter {
   }
 
   async _migratePlayer(player, pickNode) {
-    const playerState = this._capturePlayerState(player)
-    if (!playerState) throw new Error('Failed to capture state')
-
+    const state = this._capturePlayerState(player)
+    if (!state) throw new Error('Failed to capture state')
     for (let retry = 0; retry < this.failoverOptions.maxRetries; retry++) {
       try {
         const targetNode = pickNode()
-        const newPlayer = await this._createPlayerOnNode(targetNode, playerState)
-        await this._restorePlayerState(newPlayer, playerState)
+        const newPlayer = await this._createPlayerOnNode(targetNode, state)
+        await this._restorePlayerState(newPlayer, state)
         this.emit(AqualinkEvents.PlayerMigrated, player, newPlayer, targetNode)
         return newPlayer
       } catch (error) {
@@ -410,8 +381,7 @@ class Aqua extends EventEmitter {
   }
 
   _capturePlayerState(player) {
-    if (!player) return null
-    return {
+    return player ? {
       guildId: player.guildId,
       textChannel: player.textChannel,
       voiceChannel: player.voiceChannel,
@@ -419,48 +389,47 @@ class Aqua extends EventEmitter {
       paused: !!player.paused,
       position: player.position || 0,
       current: player.current || null,
-      queue: player.queue?.toArray() || EMPTY_ARRAY,
+      queue: player.queue?.toArray?.() || EMPTY_ARRAY,
       repeat: player.loop,
       shuffle: player.shuffle,
       deaf: player.deaf ?? false,
       connected: !!player.connected
-    }
+    } : null
   }
 
-  async _createPlayerOnNode(targetNode, playerState) {
+  _createPlayerOnNode(targetNode, state) {
     return this.createPlayer(targetNode, {
-      guildId: playerState.guildId,
-      textChannel: playerState.textChannel,
-      voiceChannel: playerState.voiceChannel,
-      defaultVolume: playerState.volume || 100,
-      deaf: playerState.deaf || false
+      guildId: state.guildId,
+      textChannel: state.textChannel,
+      voiceChannel: state.voiceChannel,
+      defaultVolume: state.volume || 100,
+      deaf: state.deaf || false
     })
   }
 
-  async _restorePlayerState(newPlayer, playerState) {
-    const operations = []
-    if (typeof playerState.volume === 'number') {
-      if (typeof newPlayer.setVolume === 'function') operations.push(newPlayer.setVolume(playerState.volume))
-      else newPlayer.volume = playerState.volume
+  async _restorePlayerState(newPlayer, state) {
+    const ops = []
+    if (typeof state.volume === 'number') {
+      if (typeof newPlayer.setVolume === 'function') ops.push(newPlayer.setVolume(state.volume))
+      else newPlayer.volume = state.volume
     }
-    if (playerState.queue?.length && newPlayer.queue?.add) newPlayer.queue.add(...playerState.queue)
-    if (playerState.current && this.failoverOptions.preservePosition) {
-      if (newPlayer.queue?.add) newPlayer.queue.add(playerState.current, { toFront: true })
+    if (state.queue?.length && newPlayer.queue?.add) newPlayer.queue.add(...state.queue)
+    if (state.current && this.failoverOptions.preservePosition) {
+      newPlayer.queue?.add?.(state.current, { toFront: true })
       if (this.failoverOptions.resumePlayback) {
-        operations.push(newPlayer.play())
-        if (playerState.position > 0) setTimeout(() => newPlayer.seek?.(playerState.position), SEEK_DELAY)
-        if (playerState.paused) operations.push(newPlayer.pause(true))
+        ops.push(newPlayer.play())
+        if (state.position > 0) setTimeout(() => newPlayer.seek?.(state.position), SEEK_DELAY)
+        if (state.paused) ops.push(newPlayer.pause(true))
       }
     }
-    Object.assign(newPlayer, { repeat: playerState.repeat, shuffle: playerState.shuffle })
-    await Promise.allSettled(operations)
+    Object.assign(newPlayer, { repeat: state.repeat, shuffle: state.shuffle })
+    await Promise.allSettled(ops)
   }
 
   updateVoiceState({ d, t }) {
     if (!d?.guild_id || (t !== 'VOICE_STATE_UPDATE' && t !== 'VOICE_SERVER_UPDATE')) return
     const player = this.players.get(d.guild_id)
     if (!player) return
-
     if (t === 'VOICE_STATE_UPDATE') {
       if (d.user_id !== this.clientId) return
       if (!d.channel_id) {
@@ -478,12 +447,12 @@ class Aqua extends EventEmitter {
 
   fetchRegion(region) {
     if (!region) return this.leastUsedNodes
-    const lowerRegion = region.toLowerCase()
+    const lower = region.toLowerCase()
     const filtered = []
     for (const node of this.nodeMap.values()) {
-      if (node.connected && node.regions?.includes(lowerRegion)) filtered.push(node)
+      if (node.connected && node.regions?.includes(lower)) filtered.push(node)
     }
-    return Object.freeze(filtered.sort((a, b) => this._getCachedNodeLoad(a) - this._getCachedNodeLoad(b)))
+    return Object.freeze(filtered.sort((a, b) => this._getNodeLoad(a) - this._getNodeLoad(b)))
   }
 
   createConnection(options) {
@@ -491,20 +460,18 @@ class Aqua extends EventEmitter {
     const existing = this.players.get(options.guildId)
     if (existing) {
       if (options.voiceChannel && existing.voiceChannel !== options.voiceChannel) {
-        try { existing.connect(options) } catch { }
+        _safeCall(() => existing.connect(options))
       }
       return existing
     }
-    const candidateNodes = options.region ? this.fetchRegion(options.region) : this.leastUsedNodes
-    if (!candidateNodes.length) throw new Error('No nodes available')
-    const node = this._chooseLeastBusyNode(candidateNodes)
-    if (!node) throw new Error('No suitable node found')
-    return this.createPlayer(node, options)
+    const candidates = options.region ? this.fetchRegion(options.region) : this.leastUsedNodes
+    if (!candidates.length) throw new Error('No nodes available')
+    return this.createPlayer(this._chooseLeastBusyNode(candidates), options)
   }
 
   createPlayer(node, options) {
     const existing = this.players.get(options.guildId)
-    if (existing) try { existing.destroy?.() } catch { }
+    if (existing) _safeCall(() => existing.destroy())
     const player = new Player(this, node, options)
     this.players.set(options.guildId, player)
     node?.players?.add?.(player)
@@ -515,8 +482,7 @@ class Aqua extends EventEmitter {
   }
 
   _handlePlayerDestroy(player) {
-    const node = player.nodes
-    node?.players?.delete?.(player)
+    player.nodes?.players?.delete?.(player)
     if (this.players.get(player.guildId) === player) this.players.delete(player.guildId)
     this.emit(AqualinkEvents.PlayerDestroy, player)
   }
@@ -524,92 +490,78 @@ class Aqua extends EventEmitter {
   async destroyPlayer(guildId) {
     const player = this.players.get(guildId)
     if (!player) return
-    try {
-      this.players.delete(guildId)
-      player.removeAllListeners?.()
-      await player.destroy?.()
-    } catch { }
+    this.players.delete(guildId)
+    _safeCall(() => player.removeAllListeners())
+    await _safeCall(async () => await player.destroy())
   }
 
   async resolve({ query, source = this.defaultSearchPlatform, requester, nodes }) {
     if (!this.initiated) throw new Error('Aqua not initialized')
-    const requestNode = this._getRequestNode(nodes)
-    if (!requestNode) throw new Error('No nodes available')
-    const formattedQuery = (typeof query === 'string' && query.length > 8 && URL_PATTERN.test(query))
-      ? query
-      : `${source}${SEARCH_PREFIX}${query}`
-    const endpoint = `/${this.restVersion}/loadtracks?identifier=${encodeURIComponent(formattedQuery)}`
+    const node = this._getRequestNode(nodes)
+    if (!node) throw new Error('No nodes available')
+    const formatted = _formatQuery(query, source)
+    const endpoint = `/${this.restVersion}/loadtracks?identifier=${encodeURIComponent(formatted)}`
     try {
-      const response = await requestNode.rest.makeRequest('GET', endpoint)
+      const response = await node.rest.makeRequest('GET', endpoint)
       if (!response || response.loadType === 'empty' || response.loadType === 'NO_MATCHES') return EMPTY_TRACKS_RESPONSE
-      return this._constructResponse(response, requester, requestNode)
+      return this._constructResponse(response, requester, node)
     } catch (error) {
       throw new Error(error?.name === 'AbortError' ? 'Request timeout' : `Resolve failed: ${error?.message || String(error)}`)
     }
   }
 
   _getRequestNode(nodes) {
-    if (!nodes) return this._chooseLeastBusyNode(this.leastUsedNodes) || (() => { throw new Error('No nodes available') })()
+    if (!nodes) return this._chooseLeastBusyNode(this.leastUsedNodes)
     if (nodes instanceof Node) return nodes
     if (Array.isArray(nodes)) {
       const candidates = nodes.filter(n => n?.connected)
-      return this._chooseLeastBusyNode(candidates.length ? candidates : this.leastUsedNodes) || (() => { throw new Error('No nodes available') })()
+      return this._chooseLeastBusyNode(candidates.length ? candidates : this.leastUsedNodes)
     }
     if (typeof nodes === 'string') {
       const node = this.nodeMap.get(nodes)
-      if (node?.connected) return node
-      return this._chooseLeastBusyNode(this.leastUsedNodes) || (() => { throw new Error('No nodes available') })()
+      return node?.connected ? node : this._chooseLeastBusyNode(this.leastUsedNodes)
     }
-    throw new TypeError(`Invalid nodes parameter: ${typeof nodes}`)
+    throw new TypeError(`Invalid nodes: ${typeof nodes}`)
   }
 
   _chooseLeastBusyNode(nodes) {
     if (!nodes?.length) return null
     if (nodes.length === 1) return nodes[0]
-    let bestNode = nodes[0]
-    let bestScore = this._getCachedNodeLoad(bestNode)
-    for (let i = 1; i < nodes.length; i++) {
-      const score = this._getCachedNodeLoad(nodes[i])
-      if (score < bestScore) {
-        bestNode = nodes[i]
-        bestScore = score
-      }
-    }
-    return bestNode
+    return nodes.reduce((best, node) => {
+      const score = this._getNodeLoad(node)
+      const bestScore = this._getNodeLoad(best)
+      return score < bestScore ? node : best
+    })
   }
 
-  _constructResponse(response, requester, requestNode) {
-    const { loadType, data, pluginInfo: rootPluginInfo } = response || {}
-    const baseResponse = { loadType, exception: null, playlistInfo: null, pluginInfo: rootPluginInfo || {}, tracks: [] }
-
+  _constructResponse(response, requester, node) {
+    const { loadType, data, pluginInfo: rootPlugin } = response || {}
+    const base = { loadType, exception: null, playlistInfo: null, pluginInfo: rootPlugin || {}, tracks: [] }
     if (loadType === 'error' || loadType === 'LOAD_FAILED') {
-      baseResponse.exception = data || response.exception || null
-      return baseResponse
+      base.exception = data || response.exception || null
+      return base
     }
-
-    const makeTrack = t => new Track(t, requester, requestNode)
-
     switch (loadType) {
       case 'track':
         if (data) {
-          baseResponse.pluginInfo = data.info?.pluginInfo || data.pluginInfo || baseResponse.pluginInfo
-          baseResponse.tracks.push(makeTrack(data))
+          base.pluginInfo = data.info?.pluginInfo || data.pluginInfo || base.pluginInfo
+          base.tracks.push(_makeTrack(data, requester, node))
         }
         break
       case 'playlist':
         if (data) {
           const info = data.info || null
           const thumbnail = data.pluginInfo?.artworkUrl || data.tracks?.[0]?.info?.artworkUrl || null
-          if (info) baseResponse.playlistInfo = { name: info.name || info.title, thumbnail, ...info }
-          baseResponse.pluginInfo = data.pluginInfo || baseResponse.pluginInfo
-          baseResponse.tracks = Array.isArray(data.tracks) ? data.tracks.map(makeTrack) : []
+          if (info) base.playlistInfo = { name: info.name || info.title, thumbnail, ...info }
+          base.pluginInfo = data.pluginInfo || base.pluginInfo
+          base.tracks = Array.isArray(data.tracks) ? data.tracks.map(t => _makeTrack(t, requester, node)) : []
         }
         break
       case 'search':
-        baseResponse.tracks = Array.isArray(data) ? data.map(makeTrack) : []
+        base.tracks = Array.isArray(data) ? data.map(t => _makeTrack(t, requester, node)) : []
         break
     }
-    return baseResponse
+    return base
   }
 
   get(guildId) {
@@ -618,26 +570,19 @@ class Aqua extends EventEmitter {
     return player
   }
 
-  _resolveSearchPlatform(source) {
-    return source || this.defaultSearchPlatform
-  }
-
   async search(query, requester, source = this.defaultSearchPlatform) {
     if (!query || !requester) return null
     try {
-      const resolvedSource = this._resolveSearchPlatform(source)
-      const { tracks } = await this.resolve({ query, source: resolvedSource, requester })
+      const { tracks } = await this.resolve({ query, source: source || this.defaultSearchPlatform, requester })
       return tracks || null
-    } catch {
-      return null
-    }
+    } catch { return null }
   }
 
   async loadPlayers(filePath = './AquaPlayers.jsonl') {
     const lockFile = `${filePath}.lock`
     try {
-      await fs.promises.access(filePath).catch(() => null)
-      await fs.promises.writeFile(lockFile, String(process.pid), { flag: 'wx' }).catch(() => null)
+      await fs.promises.access(filePath).catch(_noop)
+      await fs.promises.writeFile(lockFile, String(process.pid), { flag: 'wx' }).catch(_noop)
       await this._waitForFirstNode()
       const stream = fs.createReadStream(filePath, { encoding: 'utf8' })
       const rl = readline.createInterface({ input: stream, crlfDelay: Infinity })
@@ -652,15 +597,15 @@ class Aqua extends EventEmitter {
       }
       if (batch.length) await Promise.allSettled(batch.map(p => this._restorePlayer(p)))
       await fs.promises.writeFile(filePath, '')
-    } catch { } finally {
-      await fs.promises.unlink(lockFile).catch(() => null)
+    } catch {} finally {
+      await fs.promises.unlink(lockFile).catch(_noop)
     }
   }
 
   async savePlayer(filePath = './AquaPlayers.jsonl') {
     const lockFile = `${filePath}.lock`
     try {
-      await fs.promises.writeFile(lockFile, String(process.pid), { flag: 'wx' }).catch(() => null)
+      await fs.promises.writeFile(lockFile, String(process.pid), { flag: 'wx' }).catch(_noop)
       const ws = fs.createWriteStream(filePath, { encoding: 'utf8', flags: 'w' })
       const buffer = []
       for (const player of this.players.values()) {
@@ -672,7 +617,7 @@ class Aqua extends EventEmitter {
           u: player.current?.uri || null,
           p: player.position || 0,
           ts: player.timestamp || 0,
-          q: player.queue?.tracks?.slice(0, 10).map(tr => tr.uri) || [],
+          q: (player.queue?.tracks?.slice(0, 10) || []).map(tr => tr.uri),
           r: requester ? JSON.stringify({ id: requester.id, username: requester.username }) : null,
           vol: player.volume,
           pa: player.paused,
@@ -688,9 +633,9 @@ class Aqua extends EventEmitter {
       if (buffer.length) ws.write(buffer.join('\n') + '\n')
       await new Promise(resolve => ws.end(resolve))
     } catch (error) {
-      this.emit(AqualinkEvents.Error, null, new Error(`Save players failed: ${error?.message || String(error)}`))
+      this.emit(AqualinkEvents.Error, null, error)
     } finally {
-      await fs.promises.unlink(lockFile).catch(() => null)
+      await fs.promises.unlink(lockFile).catch(_noop)
     }
   }
 
@@ -706,10 +651,7 @@ class Aqua extends EventEmitter {
       const requester = this._parseRequester(p.r)
       const tracksToResolve = [p.u, ...(p.q || [])].filter(Boolean).slice(0, 20)
       const resolved = await Promise.all(tracksToResolve.map(uri => this.resolve({ query: uri, requester }).catch(() => null)))
-      const validTracks = []
-      for (const r of resolved) {
-        if (r?.tracks?.length) validTracks.push(...r.tracks)
-      }
+      const validTracks = resolved.flatMap(r => r?.tracks || [])
       if (validTracks.length && player.queue?.add) {
         if (player.queue.tracks?.length <= 2) player.queue.tracks = []
         player.queue.add(...validTracks)
@@ -726,20 +668,18 @@ class Aqua extends EventEmitter {
       if (p.nw && p.t) {
         const channel = this.client.channels?.cache?.get(p.t)
         if (channel?.messages) {
-          try { player.nowPlayingMessage = await channel.messages.fetch(p.nw).catch(() => null) } catch { }
+          player.nowPlayingMessage = await channel.messages.fetch(p.nw).catch(() => null)
         }
       }
-    } catch { }
+    } catch {}
   }
 
-  _parseRequester(requesterString) {
-    if (!requesterString || typeof requesterString !== 'string') return null
-    try {
-      return JSON.parse(requesterString)
-    } catch {
-      const i = requesterString.indexOf(':')
-      if (i <= 0) return null
-      return { id: requesterString.substring(0, i), username: requesterString.substring(i + 1) }
+  _parseRequester(str) {
+    if (!str || typeof str !== 'string') return null
+    try { return JSON.parse(str) }
+    catch {
+      const i = str.indexOf(':')
+      return i > 0 ? { id: str.substring(0, i), username: str.substring(i + 1) } : null
     }
   }
 
@@ -765,45 +705,39 @@ class Aqua extends EventEmitter {
     })
   }
 
+  _scheduleCleanup() {
+    if (this._cleanupTimer) {
+      clearTimeout(this._cleanupTimer)
+      this._cleanupTimer = null
+    }
+    this._cleanupTimer = setTimeout(() => this._performCleanup(), 60000)
+    if (this._cleanupTimer?.unref) this._cleanupTimer.unref()
+  }
+
   _performCleanup() {
     const now = Date.now()
-    const expiredPlayers = []
-    const expiredNodes = []
-
     for (const [guildId, state] of this._brokenPlayers) {
-      if (now - state.brokenAt > BROKEN_PLAYER_TTL) expiredPlayers.push(guildId)
+      if (now - state.brokenAt > BROKEN_PLAYER_TTL) this._brokenPlayers.delete(guildId)
     }
-    expiredPlayers.forEach(id => this._brokenPlayers.delete(id))
-
-    for (const [nodeId, ts] of this._lastFailoverAttempt) {
-      if (now - ts > FAILOVER_CLEANUP_TTL) expiredNodes.push(nodeId)
+    for (const [id, ts] of this._lastFailoverAttempt) {
+      if (now - ts > FAILOVER_CLEANUP_TTL) {
+        this._lastFailoverAttempt.delete(id)
+        this._failoverQueue.delete(id)
+      }
     }
-    expiredNodes.forEach(id => {
-      this._lastFailoverAttempt.delete(id)
-      this._failoverQueue.delete(id)
-    })
-
-    if (this._brokenPlayers.size > 100) {
-      const sorted = [...this._brokenPlayers.entries()].sort((a, b) => a[1].brokenAt - b[1].brokenAt)
-      sorted.slice(0, sorted.length - 50).forEach(([guildId]) => this._brokenPlayers.delete(guildId))
-    }
-
-    if (this._failoverQueue.size > 50) this._failoverQueue.clear()
-    if (this._lastFailoverAttempt.size > 50) this._lastFailoverAttempt.clear()
+    this._trimBrokenPlayers()
+    if (this._failoverQueue.size > MAX_FAILOVER_QUEUE) this._failoverQueue.clear()
     if (this._rebuildLocks.size > 100) this._rebuildLocks.clear()
-
-    for (const [nodeId] of this._nodeStates) {
-      if (!this.nodeMap.has(nodeId)) this._nodeStates.delete(nodeId)
+    for (const [id] of this._nodeStates) {
+      if (!this.nodeMap.has(id)) this._nodeStates.delete(id)
     }
+    this._scheduleCleanup()
+  }
 
-    this._invalidateCache()
-    if (this._nodeLoadCache.size > this._nodeLoadCacheMaxSize) {
-      const sorted = [...this._nodeLoadCacheTime.entries()].sort((a, b) => a[1] - b[1])
-      sorted.slice(0, sorted.length - this._nodeLoadCacheMaxSize).forEach(([nodeId]) => {
-        this._nodeLoadCache.delete(nodeId)
-        this._nodeLoadCacheTime.delete(nodeId)
-      })
-    }
+  _trimBrokenPlayers() {
+    if (this._brokenPlayers.size <= MAX_BROKEN_PLAYERS) return
+    const sorted = [...this._brokenPlayers.entries()].sort((a, b) => a[1].brokenAt - b[1].brokenAt)
+    sorted.slice(0, sorted.length - MAX_BROKEN_PLAYERS).forEach(([id]) => this._brokenPlayers.delete(id))
   }
 
   _getAvailableNodes(excludeNode) {
