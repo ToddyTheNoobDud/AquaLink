@@ -56,6 +56,13 @@ const _functions = Object.freeze({
     if (Buffer.isBuffer(reason)) {
       try { return reason.toString('utf8') } catch { return String(reason) }
     }
+    if (typeof reason === 'object') {
+      try {
+        return JSON.stringify(reason)
+      } catch {
+        return reason.message || reason.code || String(reason)
+      }
+    }
     return String(reason)
   },
 
@@ -267,7 +274,7 @@ class Node {
   }
 
   _shouldReconnect(code) {
-    return code !== Node.WS_CLOSE_NORMAL && !FATAL_CLOSE_CODES.has(code)
+    return (code !== Node.WS_CLOSE_NORMAL || this.infiniteReconnects) && !FATAL_CLOSE_CODES.has(code)
   }
 
   _scheduleReconnect() {
