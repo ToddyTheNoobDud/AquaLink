@@ -1,5 +1,6 @@
 'use strict'
 
+
 const FILTER_DEFAULTS = Object.freeze({
   karaoke: Object.freeze({ level: 1, monoLevel: 1, filterBand: 220, filterWidth: 100 }),
   timescale: Object.freeze({ speed: 1, pitch: 1, rate: 1 }),
@@ -11,28 +12,59 @@ const FILTER_DEFAULTS = Object.freeze({
   lowPass: Object.freeze({ smoothing: 20 })
 })
 
-const fnShallowEqualWithDefaults = (current, defaults, override) => {
-  if (!current) return false
-  const keys = Object.keys(defaults)
-  return keys.every(k => current[k] === (k in override ? override[k] : defaults[k]))
-}
+const FILTER_KEYS = Object.freeze(
+  Object.fromEntries(
+    Object.entries(FILTER_DEFAULTS).map(([k, v]) => [k, Object.freeze(Object.keys(v))])
+  )
+)
 
-const fnEqualizerEqual = (a, b) => {
-  const aa = a || []
-  const bb = b || []
-  if (aa === bb) return true
-  if (aa.length !== bb.length) return false
-  return aa.every((x, i) => x.band === bb[i].band && x.gain === bb[i].gain)
-}
+const EMPTY_ARRAY = Object.freeze([])
+
+const _utils = Object.freeze({
+  shallowEqual(current, defaults, override, keys) {
+    if (!current) return false
+    for (let i = 0; i < keys.length; i++) {
+      const k = keys[i]
+      const expected = k in override ? override[k] : defaults[k]
+      if (current[k] !== expected) return false
+    }
+    return true
+  },
+
+  equalizerEqual(a, b) {
+    if (a === b) return true
+    const lenA = a?.length || 0
+    const lenB = b?.length || 0
+    if (lenA !== lenB) return false
+    for (let i = 0; i < lenA; i++) {
+      const x = a[i], y = b[i]
+      if (x.band !== y.band || x.gain !== y.gain) return false
+    }
+    return true
+  },
+
+  eqIsEmpty(arr) {
+    return !arr || arr.length === 0
+  },
+
+  makeEqArray(len, gain) {
+    const out = new Array(len)
+    for (let i = 0; i < len; i++) out[i] = { band: i, gain }
+    return out
+  }
+})
+
 
 class Filters {
   constructor(player, options = {}) {
+    if (!player) throw new Error('Player instance is required')
     this.player = player
     this._pendingUpdate = false
 
+
     this.filters = {
       volume: options.volume ?? 1,
-      equalizer: options.equalizer ?? [],
+      equalizer: options.equalizer ?? EMPTY_ARRAY,
       karaoke: options.karaoke ?? null,
       timescale: options.timescale ?? null,
       tremolo: options.tremolo ?? null,
@@ -52,6 +84,11 @@ class Filters {
     }
   }
 
+  destroy() {
+    this._pendingUpdate = false
+    this.player = null
+  }
+
   _setFilter(filterName, enabled, options = {}) {
     const current = this.filters[filterName]
     if (!enabled) {
@@ -59,78 +96,58 @@ class Filters {
       this.filters[filterName] = null
       return this._scheduleUpdate()
     }
+
     const defaults = FILTER_DEFAULTS[filterName]
-    if (current && fnShallowEqualWithDefaults(current, defaults, options)) return this
-    this.filters[filterName] = { ...defaults, ...options }
+    const keys = FILTER_KEYS[filterName]
+    if (current && _utils.shallowEqual(current, defaults, options, keys)) return this
+
+    this.filters[filterName] = Object.assign({}, defaults, options)
     return this._scheduleUpdate()
   }
 
   _scheduleUpdate() {
-    if (this._pendingUpdate || !this.player) return this;
-    this._pendingUpdate = true;
+    if (this._pendingUpdate || !this.player) return this
+    this._pendingUpdate = true
     queueMicrotask(() => {
-      if (!this.player) {
-        this._pendingUpdate = false;
-        return;
+      this._pendingUpdate = false
+      if (this.player) {
+        this.updateFilters().catch(() => {
+        })
       }
-      this._pendingUpdate = false;
-      this.updateFilters().catch(() => { });
-    });
-    return this;
+    })
+    return this
   }
 
   setEqualizer(bands) {
-    const next = bands || []
-    if (fnEqualizerEqual(this.filters.equalizer, next)) return this
+    const next = bands ?? EMPTY_ARRAY
+    if (_utils.equalizerEqual(this.filters.equalizer, next)) return this
     this.filters.equalizer = next
     return this._scheduleUpdate()
   }
 
-  setKaraoke(enabled, options = {}) {
-    return this._setFilter('karaoke', enabled, options)
-  }
-
-  setTimescale(enabled, options = {}) {
-    return this._setFilter('timescale', enabled, options)
-  }
-
-  setTremolo(enabled, options = {}) {
-    return this._setFilter('tremolo', enabled, options)
-  }
-
-  setVibrato(enabled, options = {}) {
-    return this._setFilter('vibrato', enabled, options)
-  }
-
-  setRotation(enabled, options = {}) {
-    return this._setFilter('rotation', enabled, options)
-  }
-
-  setDistortion(enabled, options = {}) {
-    return this._setFilter('distortion', enabled, options)
-  }
-
-  setChannelMix(enabled, options = {}) {
-    return this._setFilter('channelMix', enabled, options)
-  }
-
-  setLowPass(enabled, options = {}) {
-    return this._setFilter('lowPass', enabled, options)
-  }
+  setKaraoke(enabled, options = {}) { return this._setFilter('karaoke', enabled, options) }
+  setTimescale(enabled, options = {}) { return this._setFilter('timescale', enabled, options) }
+  setTremolo(enabled, options = {}) { return this._setFilter('tremolo', enabled, options) }
+  setVibrato(enabled, options = {}) { return this._setFilter('vibrato', enabled, options) }
+  setRotation(enabled, options = {}) { return this._setFilter('rotation', enabled, options) }
+  setDistortion(enabled, options = {}) { return this._setFilter('distortion', enabled, options) }
+  setChannelMix(enabled, options = {}) { return this._setFilter('channelMix', enabled, options) }
+  setLowPass(enabled, options = {}) { return this._setFilter('lowPass', enabled, options) }
 
   setBassboost(enabled, options = {}) {
     if (!enabled) {
-      if (this.presets.bassboost === null) return this
+      if (this.presets.bassboost === null && _utils.eqIsEmpty(this.filters.equalizer)) return this
       this.presets.bassboost = null
-      return this.setEqualizer([])
+      return this.setEqualizer(EMPTY_ARRAY)
     }
+
     const value = options.value ?? 5
     if (value < 0 || value > 5) throw new Error('Bassboost value must be between 0 and 5')
     if (this.presets.bassboost === value) return this
+
     this.presets.bassboost = value
     const gain = (value - 1) * (1.25 / 9) - 0.25
-    const eq = Array.from({ length: 13 }, (_, band) => ({ band, gain }))
-    return this.setEqualizer(eq)
+    return this.setEqualizer(_utils.makeEqArray(13, gain))
   }
 
   setSlowmode(enabled, options = {}) {
@@ -162,23 +179,30 @@ class Filters {
   }
 
   async clearFilters() {
-    const filters = this.filters
-    const changed = Object.keys(filters).reduce((acc, key) => {
-      const newValue = key === 'volume' ? 1 : key === 'equalizer' ? [] : null
-      if (filters[key] !== newValue) {
-        filters[key] = newValue
-        return true
+    const f = this.filters
+    let changed = false
+
+    if (f.volume !== 1) { f.volume = 1; changed = true }
+    if (!_utils.eqIsEmpty(f.equalizer)) { f.equalizer = EMPTY_ARRAY; changed = true }
+
+    const filterNames = Object.keys(FILTER_DEFAULTS)
+    for (let i = 0; i < filterNames.length; i++) {
+      const key = filterNames[i]
+      if (f[key] !== null) {
+        f[key] = null
+        changed = true
       }
-      return acc
-    }, false)
+    }
+
     for (const key in this.presets) {
       if (this.presets[key] !== null) this.presets[key] = null
     }
-    if (!changed) return this
-    return this.updateFilters()
+
+    return changed ? this.updateFilters() : this
   }
 
   async updateFilters() {
+    if (!this.player) return this
     await this.player.nodes.rest.updatePlayer({
       guildId: this.player.guildId,
       data: { filters: this.filters }
