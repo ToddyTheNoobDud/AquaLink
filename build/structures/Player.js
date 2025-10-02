@@ -178,6 +178,9 @@ class Player extends EventEmitter {
       reconnectionRetries: 0, _voiceDownSince: 0, _voiceRecovering: false
     })
 
+      // internal flag used when restoring saved players so Connection can allow
+      // resume attempts even when voice data appears stale after a reboot
+      this._resuming = !!options.resuming
     this.volume = _functions.clamp(+options.defaultVolume || 100)
     this.loop = this._parseLoop(options.loop)
 
@@ -367,13 +370,14 @@ class Player extends EventEmitter {
 
     this.connected = this.playing = this.paused = this.isAutoplay = false
     this.autoplayRetries = this.reconnectionRetries = 0
+    this._lastVoiceChannel = this.voiceChannel
     this.voiceChannel = null
+
 
     if (this.shouldDeleteMessage && this.nowPlayingMessage) {
       this.nowPlayingMessage.delete()
       this.nowPlayingMessage = null
     }
-
     this.emit('destroy')
     this.removeAllListeners()
 
