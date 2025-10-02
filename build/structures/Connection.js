@@ -125,10 +125,18 @@ class Connection {
   }
 
   _canAttemptResume () {
-    return !this._destroyed &&
-           this._hasValidVoiceData() &&
-           this._reconnectAttempts < MAX_RECONNECT_ATTEMPTS &&
-           !(this._stateFlags & (STATE_FLAGS.ATTEMPTING_RESUME | STATE_FLAGS.DISCONNECTING | STATE_FLAGS.VOICE_DATA_STALE))
+    // Allow resume if connection isn't destroyed, attempts remain, and we're
+    // not already attempting or disconnecting. If voice data is stale, permit
+    // a resume attempt only when the player was restored from persisted state
+    // (player._resuming === true).
+    if (this._destroyed) return false
+    if (this._reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) return false
+    if (this._stateFlags & (STATE_FLAGS.ATTEMPTING_RESUME | STATE_FLAGS.DISCONNECTING)) return false
+
+    if (this._hasValidVoiceData()) return true
+
+    // If voice data is stale, allow a single resume flow for restored players
+    return !!this._player?._resuming
   }
 
   setServerUpdate (data) {
@@ -236,9 +244,38 @@ class Connection {
   async attemptResume () {
     if (!this._canAttemptResume()) {
       this._aqua.emit(AqualinkEvents.Debug, `Resume blocked: destroyed=${this._destroyed}, hasValidData=${this._hasValidVoiceData()}, attempts=${this._reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS}`)
-      if (this._reconnectAttempts >= MAX_RECONNECT_ATTEMPTS || (this._stateFlags & STATE_FLAGS.VOICE_DATA_STALE)) {
+
+      // If voice data is stale (likely after a restart) and this player is
+      // marked as resuming, request a fresh voice state update and schedule
+      // a retry instead of destroying the player immediately.
+      if ((this._stateFlags & STATE_FLAGS.VOICE_DATA_STALE) && this._player?._resuming) {
+        try {
+          this._aqua.emit(AqualinkEvents.Debug, `Requesting fresh voice state for guild ${this._guildId}`)
+          if (typeof this._player.send === 'function' && this._player.voiceChannel) {
+            this._player.send({ guild_id: this._guildId, channel_id: this._player.voiceChannel, self_deaf: this._player.deaf, self_mute: this._player.mute })
+            this._reconnectTimer = setTimeout(this._handleReconnect, 1500)
+            helpers.safeUnref(this._reconnectTimer)
+          }
+        } catch (e) {}
+      } else if (this._reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
         this._handleDisconnect()
       }
+
+      return false
+    }
+
+    // If the player was restored from disk but core voice data is still missing,
+    // request a voice state update and retry shortly rather than attempting a
+    // resume payload that will fail.
+    if ((!this.sessionId || !this.endpoint || !this.token) && this._player?._resuming) {
+      try {
+        this._aqua.emit(AqualinkEvents.Debug, `Resuming player but voice data missing, requesting voice state for guild ${this._guildId}`)
+        if (typeof this._player.send === 'function' && this._player.voiceChannel) {
+          this._player.send({ guild_id: this._guildId, channel_id: this._player.voiceChannel, self_deaf: this._player.deaf, self_mute: this._player.mute })
+          this._reconnectTimer = setTimeout(this._handleReconnect, 1500)
+          helpers.safeUnref(this._reconnectTimer)
+        }
+      } catch (e) {}
       return false
     }
 
@@ -263,6 +300,7 @@ class Connection {
 
       this._reconnectAttempts = 0
       this._consecutiveFailures = 0
+      if (this._player) this._player._resuming = false
       this._aqua.emit(AqualinkEvents.Debug, `Resume successful for guild ${this._guildId}`)
       return true
     } catch (error) {
@@ -275,6 +313,7 @@ class Connection {
         helpers.safeUnref(this._reconnectTimer)
       } else {
         this._aqua.emit(AqualinkEvents.Debug, `Max reconnect attempts or failures reached for guild ${this._guildId}`)
+        if (this._player) this._player._resuming = false
         this._handleDisconnect()
       }
 
