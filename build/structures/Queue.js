@@ -1,99 +1,80 @@
 class Queue extends Array {
-    /**
-     * @param {...*} elements - The elements to initialize the queue with.
-     */
-    constructor(...elements) {
-        super(...elements);
+  get size() {
+    return this.length
+  }
+
+  get first() {
+    return this[0] || null
+  }
+
+  get last() {
+    return this[this.length - 1] || null
+  }
+
+
+  add(track) {
+    this.push(track)
+    return this
+  }
+
+  remove(track) {
+    const index = this.indexOf(track)
+    if (index === -1) {
+      return false
     }
 
-    // Get the size of the queue
-    get size() {
-        return this.length;
+    const removed = this[index]
+    this.splice(index, 1)
+
+    if (removed?.dispose) {
+      removed.dispose()
     }
 
-    // Get the first element in the queue
-    get first() {
-        return this[0] ?? null;
-    }
+    return true
+  }
 
-    // Get the last element in the queue
-    get last() {
-        return this[this.length - 1] ?? null;
+  clear() {
+    for (let i = 0; i < this.length; i++) {
+      if (this[i]?.dispose) {
+        this[i].dispose()
+      }
     }
+    this.length = 0
+  }
 
-    /**
-     * Add a track to the end of the queue.
-     * @param {*} track - The track to add.
-     */
-    add(track) {
-        this.push(track);
-        return this;
+  shuffle() {
+    for (let i = this.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1))
+      const temp = this[i]
+      this[i] = this[j]
+      this[j] = temp
     }
+    return this
+  }
 
-    /**
-     * Remove a specific track from the queue.
-     * @param {*} track - The track to remove.
-     */
-    remove(track) {
-        const index = this.indexOf(track);
-        if (index === -1) return false;
-        const [removed] = this.splice(index, 1);
-        if (removed?.dispose) removed.dispose();
-        return true;
-    }
+  peek() {
+    return this.first
+  }
 
-    // Clear all tracks from the queue
-    clear() {
-        for (let i = 0; i < this.length; i++) {
-            if (this[i]?.dispose) this[i].dispose();
-            this[i] = null;
-        }
-        this.length = 0;
-    }
-    // Shuffle the tracks in the queue
-    shuffle() {
-        for (let i = this.length - 1; i > 0; i--) {
-            const j = Math.floor(Math.random() * (i + 1));
-            [this[i], this[j]] = [this[j], this[i]];
-        }
-        return this;
-    }
+  toArray() {
+    return this.slice()
+  }
 
-    // Peek at the element at the front of the queue without removing it
-    peek() {
-        return this.first;
-    }
+  at(index) {
+    return this[index] || null
+  }
 
-    // Get all tracks in the queue as an array
-    toArray() {
-        return this.slice();
-    }
+  dequeue() {
+    return this.shift()
+  }
 
-    /**
-     * Get a track at a specific index.
-     * @param {number} index - The index of the track to retrieve.
-     * @returns {*} The track at the specified index or null if out of bounds.
-     */
-    at(index) {
-        return this[index] ?? null;
-    }
+  isEmpty() {
+    return this.length === 0
+  }
 
-    // Remove the first track from the queue
-    dequeue() {
-        return this.shift();
-    }
-
-    /**
-     * Check if the queue is empty.
-     * @returns {boolean} Whether the queue is empty.
-     */
-    isEmpty() {
-        return this.length === 0;
-    }
-
-    enqueue(track) {
-        return this.add(track);
-    }
+  enqueue(track) {
+    return this.add(track)
+  }
 }
 
-module.exports = Queue;
+module.exports = Queue
