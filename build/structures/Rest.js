@@ -8,13 +8,23 @@ const { createBrotliDecompress, createUnzip } = require('node:zlib')
 
 const privateData = new WeakMap()
 
-const BASE64_REGEX = /^[A-Za-z0-9+/=_-]+$/
-const JSON_TYPE_REGEX = /application\/json/
-const COMPRESSION_REGEX = /^(br|gzip|deflate)$/
+const isValidBase64Char = code =>
+  (code >= 65 && code <= 90) || (code >= 97 && code <= 122) ||
+  (code >= 48 && code <= 57) || code === 43 || code === 47 ||
+  code === 61 || code === 95 || code === 45
+
+const isValidBase64 = str => {
+  if (typeof str !== 'string' || !str) return false
+  const len = str.length
+  if (len % 4 === 1) return false
+  for (let i = 0; i < len; i++) {
+    if (!isValidBase64Char(str.charCodeAt(i))) return false
+  }
+  return true
+}
 
 const MAX_RESPONSE_SIZE = 10485760
 const API_VERSION = 'v4'
-const EMPTY_STRING = ''
 const UTF8_ENCODING = 'utf8'
 const JSON_CONTENT_TYPE = 'application/json'
 const HTTP2_THRESHOLD = 1024
@@ -26,14 +36,6 @@ const ERRORS = Object.freeze({
   RESPONSE_TOO_LARGE: new Error('Response too large'),
   RESPONSE_ABORTED: new Error('Response aborted')
 })
-
-const _isValidBase64 = (str) => {
-  if (typeof str !== 'string' || !str) return false
-  const len = str.length
-  return (len % 4 === 0 || (len % 4 !== 1 && /[-_]/.test(str))) && BASE64_REGEX.test(str)
-}
-
-const _fastBool = (b) => !!b
 
 class Rest {
   constructor(aqua, node) {
@@ -64,15 +66,17 @@ class Rest {
     })
 
     this.defaultHeaders = Object.freeze({
-      Authorization: String(node.auth || node.password || EMPTY_STRING),
+      Authorization: String(node.auth || node.password || ''),
       Accept: 'application/json, */*;q=0.5',
       'Accept-Encoding': 'gzip, deflate, br',
       'User-Agent': `Aqualink/${aqua?.version || '1.0'} (Node.js ${process.version})`
     })
+
     this._headerPool = []
     this._setupAgent(node)
     this.useHttp2 = !!(aqua?.options?.useHttp2)
     this._h2 = null
+    this._h2CleanupTimer = null
 
     privateData.set(this, {
       cleanupCallbacks: new Set()
@@ -120,13 +124,7 @@ class Rest {
     if (!hasPayload) return this.defaultHeaders
 
     let headers = this._headerPool.pop()
-    if (!headers) {
-      headers = {}
-    }
-
-    for (const key in headers) {
-      delete headers[key]
-    }
+    if (!headers) headers = {}
 
     headers.Authorization = this.defaultHeaders.Authorization
     headers.Accept = this.defaultHeaders.Accept
@@ -140,6 +138,10 @@ class Rest {
 
   _returnHeadersToPool(headers) {
     if (headers !== this.defaultHeaders && this._headerPool.length < 10) {
+      const keys = Object.keys(headers)
+      for (let i = 0; i < keys.length; i++) {
+        delete headers[keys[i]]
+      }
       this._headerPool.push(headers)
     }
   }
@@ -157,14 +159,15 @@ class Rest {
         ? await this._makeHttp2Request(method, endpoint, headers, payload)
         : await this._makeHttp1Request(method, url, headers, payload)
     } finally {
-
       this._returnHeadersToPool(headers)
     }
   }
 
   _makeHttp1Request(method, url, headers, payload) {
     return new Promise((resolve, reject) => {
-      let req, timeoutId, resolved = false
+      let req
+      let timeoutId
+      let resolved = false
       const chunks = []
       let totalSize = 0
 
@@ -173,7 +176,6 @@ class Rest {
           clearTimeout(timeoutId)
           timeoutId = null
         }
-
         chunks.length = 0
       }
 
@@ -185,7 +187,7 @@ class Rest {
         isSuccess ? resolve(value) : reject(value)
       }
 
-      req = this.request(url, { method, headers, agent: this.agent, timeout: this.timeout }, (res) => {
+      req = this.request(url, { method, headers, agent: this.agent, timeout: this.timeout }, res => {
         cleanup()
 
         const status = res.statusCode
@@ -193,12 +195,14 @@ class Rest {
 
         const contentLength = res.headers['content-length']
         if (contentLength === '0') return res.resume(), complete(true, null)
-        if (contentLength && parseInt(contentLength, 10) > MAX_RESPONSE_SIZE) return complete(false, ERRORS.RESPONSE_TOO_LARGE)
+        if (contentLength && parseInt(contentLength, 10) > MAX_RESPONSE_SIZE) {
+          return complete(false, ERRORS.RESPONSE_TOO_LARGE)
+        }
 
-        const encoding = (res.headers['content-encoding'] || EMPTY_STRING).split(',')[0].trim()
+        const encoding = (res.headers['content-encoding'] || '').split(',')[0].trim()
         let stream = res
 
-        if (COMPRESSION_REGEX.test(encoding)) {
+        if (encoding === 'br' || encoding === 'gzip' || encoding === 'deflate') {
           const decompressor = encoding === 'br' ? createBrotliDecompress() : createUnzip()
           decompressor.once('error', err => complete(false, err))
           res.pipe(decompressor)
@@ -221,9 +225,8 @@ class Rest {
           const text = buffer.toString(UTF8_ENCODING)
 
           let result = text
-          const contentType = res.headers['content-type'] || EMPTY_STRING
-          if (JSON_TYPE_REGEX.test(contentType)) {
-            try {
+          const contentType = res.headers['content-type'] || ''
+          if (contentType.includes('application/json')) {try {
               result = JSON.parse(text)
             } catch (err) {
               return complete(false, new Error(`JSON parse error: ${err.message}`))
@@ -248,7 +251,7 @@ class Rest {
       req.once('socket', socket => {
         socket.setNoDelay(true)
         socket.setKeepAlive(true, 500)
-        if (socket.unref) socket.unref()
+        socket.unref?.()
       })
 
       timeoutId = setTimeout(() => complete(false, new Error(`Request timeout: ${this.timeout}ms`)), this.timeout)
@@ -257,27 +260,30 @@ class Rest {
   }
 
   async _makeHttp2Request(method, path, headers, payload) {
-
     if (!this._h2 || this._h2.closed || this._h2.destroyed) {
+      this._closeHttp2Session()
+
       this._h2 = http2.connect(this.baseUrl)
-      this._h2.setTimeout(this.timeout, () => this._h2.close())
-      this._h2.once('error', () => {
-        this._h2 = null
-      })
-      this._h2.once('close', () => {
-        this._h2 = null
-      })
-      if (this._h2.socket?.unref) this._h2.socket.unref()
+
+      if (this._h2CleanupTimer) clearTimeout(this._h2CleanupTimer)
+      this._h2CleanupTimer = setTimeout(() => this._closeHttp2Session(), 60000)
+
+      this._h2.once('error', () => this._closeHttp2Session())
+      this._h2.once('close', () => this._closeHttp2Session())
+      this._h2.socket?.unref?.()
     }
 
     return new Promise((resolve, reject) => {
-      let req, timeoutId, resolved = false
+      let req
+      let timeoutId
+      let resolved = false
       const chunks = []
       let totalSize = 0
 
       const complete = (isSuccess, value) => {
         if (resolved) return
         resolved = true
+
         if (timeoutId) {
           clearTimeout(timeoutId)
           timeoutId = null
@@ -288,7 +294,18 @@ class Rest {
         isSuccess ? resolve(value) : reject(value)
       }
 
-      const h = { ...headers, ':method': method, ':path': path }
+      const h = {
+        ':method': method,
+        ':path': path,
+        Authorization: headers.Authorization,
+        Accept: headers.Accept,
+        'Accept-Encoding': headers['Accept-Encoding'],
+        'User-Agent': headers['User-Agent']
+      }
+
+      if (headers['Content-Type']) h['Content-Type'] = headers['Content-Type']
+      if (headers['Content-Length']) h['Content-Length'] = headers['Content-Length']
+
       req = this._h2.request(h)
 
       req.once('response', respHeaders => {
@@ -300,10 +317,14 @@ class Rest {
         const status = respHeaders[':status'] || 0
         const cl = respHeaders['content-length']
         if (status === 204 || cl === '0') return req.resume(), complete(true, null)
-        if (cl && parseInt(cl, 10) > MAX_RESPONSE_SIZE) return req.resume(), complete(false, ERRORS.RESPONSE_TOO_LARGE)
+        if (cl && parseInt(cl, 10) > MAX_RESPONSE_SIZE) {
+          return req.resume(), complete(false, ERRORS.RESPONSE_TOO_LARGE)
+        }
 
-        const enc = (respHeaders['content-encoding'] || EMPTY_STRING).split(',')[0].trim()
-        const decompressor = COMPRESSION_REGEX.test(enc) ? (enc === 'br' ? createBrotliDecompress() : createUnzip()) : null
+        const enc = (respHeaders['content-encoding'] || '').split(',')[0].trim()
+        const decompressor = (enc === 'br' || enc === 'gzip' || enc === 'deflate')
+          ? (enc === 'br' ? createBrotliDecompress() : createUnzip())
+          : null
         const stream = decompressor ? req.pipe(decompressor) : req
 
         if (decompressor) decompressor.once('error', err => complete(false, err))
@@ -346,6 +367,20 @@ class Rest {
     })
   }
 
+  _closeHttp2Session() {
+    if (this._h2CleanupTimer) {
+      clearTimeout(this._h2CleanupTimer)
+      this._h2CleanupTimer = null
+    }
+
+    if (this._h2) {
+      try {
+        this._h2.close()
+      } catch {}
+      this._h2 = null
+    }
+  }
+
   async updatePlayer({ guildId, data, noReplace = false }) {
     const query = noReplace ? '?noReplace=true' : '?noReplace=false'
     return this.makeRequest('PATCH', `${this._getSessionPath()}/players/${guildId}${query}`, data)
@@ -368,14 +403,14 @@ class Rest {
   }
 
   async decodeTrack(encodedTrack) {
-    if (!_isValidBase64(encodedTrack)) throw ERRORS.INVALID_TRACK
+    if (!isValidBase64(encodedTrack)) throw ERRORS.INVALID_TRACK
     return this.makeRequest('GET', `${this._endpoints.decodetrack}${encodeURIComponent(encodedTrack)}`)
   }
 
   async decodeTracks(encodedTracks) {
     if (!Array.isArray(encodedTracks) || encodedTracks.length === 0) throw ERRORS.INVALID_TRACKS
-    for (const track of encodedTracks) {
-      if (!_isValidBase64(track)) throw ERRORS.INVALID_TRACKS
+    for (let i = 0; i < encodedTracks.length; i++) {
+      if (!isValidBase64(encodedTracks[i])) throw ERRORS.INVALID_TRACKS
     }
     return this.makeRequest('POST', this._endpoints.decodetracks, encodedTracks)
   }
@@ -407,7 +442,7 @@ class Rest {
   async getLyrics({ track, skipTrackSource = false }) {
     const guildId = track?.guild_id ?? track?.guildId
     const encoded = track?.encoded
-    const hasEncoded = typeof encoded === 'string' && encoded.length > 0 && _isValidBase64(encoded)
+    const hasEncoded = typeof encoded === 'string' && encoded.length > 0 && isValidBase64(encoded)
     const title = track?.info?.title
 
     if (!track || (!guildId && !hasEncoded && !title)) {
@@ -415,7 +450,7 @@ class Rest {
       return null
     }
 
-    const skipParam = _fastBool(skipTrackSource)
+    const skipParam = skipTrackSource ? 'true' : 'false'
 
     if (guildId) {
       try {
@@ -453,7 +488,7 @@ class Rest {
 
   async subscribeLiveLyrics(guildId, skipTrackSource = false) {
     try {
-      const result = await this.makeRequest('POST', `${this._getSessionPath()}/players/${guildId}/lyrics/subscribe?skipTrackSource=${_fastBool(skipTrackSource)}`)
+      const result = await this.makeRequest('POST', `${this._getSessionPath()}/players/${guildId}/lyrics/subscribe?skipTrackSource=${skipTrackSource ? 'true' : 'false'}`)
       return result === null
     } catch {
       return false
@@ -484,10 +519,7 @@ class Rest {
       this.agent = null
     }
 
-    if (this._h2) {
-      try { this._h2.close() } catch {}
-      this._h2 = null
-    }
+    this._closeHttp2Session()
 
     if (this._headerPool) {
       this._headerPool.length = 0
