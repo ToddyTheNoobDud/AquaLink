@@ -298,7 +298,7 @@ class Node {
     try {
       const ws = new WebSocket(this.wsUrl, {
         headers: this._headers,
-        perMessageDeflate: false,
+        perMessageDeflate: true,
         handshakeTimeout: this.timeout,
         maxPayload: this.maxPayload,
         skipUTF8Validation: this.skipUTF8Validation
