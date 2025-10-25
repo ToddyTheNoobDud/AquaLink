@@ -18,6 +18,9 @@ const EVENT_HANDLERS = Object.freeze({
   WebSocketClosedEvent: 'socketClosed',
   LyricsLineEvent: 'lyricsLine',
   LyricsFoundEvent: 'lyricsFound',
+  VolumeChangedEvent: 'volumeChanged',
+  FiltersChangedEvent: 'filtersChanged',
+  SeekEvent: 'seekEvent',
   LyricsNotFoundEvent: 'lyricsNotFound'
 })
 
@@ -301,7 +304,7 @@ class Player extends EventEmitter {
       this.playing = true
       this.paused = false
       this.position = 0
-      await this.batchUpdatePlayer({guildId: this.guildId, encodedTrack: this.current.track}, true)
+      await this.batchUpdatePlayer({guildId: this.guildId, track: { encoded: this.current.track} }, true)
       return this
     } catch (error) {
       this.aqua.emit(AqualinkEvents.Error, error)
@@ -467,7 +470,7 @@ class Player extends EventEmitter {
     if (this.destroyed || !this.playing) return this
     this.playing = this.paused = false
     this.position = 0
-    this.batchUpdatePlayer({guildId: this.guildId, encodedTrack: null}, true)
+    this.batchUpdatePlayer({guildId: this.guildId, track: {encoded: null}}, true)
     return this
   }
 
@@ -819,6 +822,21 @@ class Player extends EventEmitter {
   async lyricsLine(player, track, payload) {
     if (this.destroyed) return
     this.aqua.emit(AqualinkEvents.LyricsLine, this, track, payload)
+  }
+
+  async volumeChanged(player, track, payload) {
+    if (this.destroyed) return
+    this.aqua.emit(AqualinkEvents.VolumeChanged, this, track, payload)
+  }
+
+  async filtersChanged(player, track, payload) {
+    if (this.destroyed) return
+    this.aqua.emit(AqualinkEvents.FiltersChanged, this, track, payload)
+  }
+
+  async seekEvent(player, track, payload) {
+    if (this.destroyed) return
+    this.aqua.emit(AqualinkEvents.Seek, this, track, payload)
   }
 
   async lyricsFound(player, track, payload) {
