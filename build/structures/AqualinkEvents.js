@@ -31,6 +31,9 @@ const AqualinkEvents = {
   PlayerCreate: 'playerCreate',
   PlayerDestroy: 'playerDestroy',
   PlayersRebuilt: 'playersRebuilt',
+  VolumeChanged: 'volumeChanged',
+  FiltersChanged: 'filtersChanged',
+  Seek: 'seek',
   PlayerMigrated: 'playerMigrated'
 };
 
