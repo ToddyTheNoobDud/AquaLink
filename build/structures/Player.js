@@ -433,8 +433,8 @@ class Player extends EventEmitter {
       this._dataStore.clear()
       this._dataStore = null
     }
-
-    if (this.current?.dispose) this.current.dispose()
+    // if autoResume is enabled, ig it will need to be keeped in case the connection dies somehow, so don't dispose it
+    if (this.current?.dispose && !this.aqua.options.autoResume) this.current.dispose()
     this.connection = this.filters = this.current = this.autoplaySeed = null
 
     if (!skipRemote) {
@@ -452,7 +452,7 @@ class Player extends EventEmitter {
   pause(paused) {
     if (this.destroyed || this.paused === !!paused) return this
     this.paused = !!paused
-    this.batchUpdatePlayer({guildId: this.guildId, paused: this.paused}, true)
+    this.batchUpdatePlayer({guildId: this.guildId, paused: this.paused}, true).catch(() => {})
     return this
   }
 
@@ -462,7 +462,7 @@ class Player extends EventEmitter {
     const pos = position === 0 ? 0 : this.position + position
     const clamped = len ? Math.min(Math.max(pos, 0), len) : Math.max(pos, 0)
     this.position = clamped
-    this.batchUpdatePlayer({guildId: this.guildId, position: clamped}, true)
+    this.batchUpdatePlayer({guildId: this.guildId, position: clamped}, true).catch(() => {})
     return this
   }
 
@@ -470,7 +470,7 @@ class Player extends EventEmitter {
     if (this.destroyed || !this.playing) return this
     this.playing = this.paused = false
     this.position = 0
-    this.batchUpdatePlayer({guildId: this.guildId, track: {encoded: null}}, true)
+    this.batchUpdatePlayer({guildId: this.guildId, track: {encoded: null}}, true).catch(() => {})
     return this
   }
 
@@ -478,7 +478,7 @@ class Player extends EventEmitter {
     const vol = _functions.clamp(volume)
     if (this.destroyed || this.volume === vol) return this
     this.volume = vol
-    this.batchUpdatePlayer({guildId: this.guildId, volume: vol})
+    this.batchUpdatePlayer({guildId: this.guildId, volume: vol}).catch(() => {})
     return this
   }
 
@@ -495,7 +495,7 @@ class Player extends EventEmitter {
     const id = _functions.toId(channel)
     if (!id) throw new TypeError('Invalid text channel')
     this.textChannel = id
-    this.batchUpdatePlayer({guildId: this.guildId, text_channel: id})
+    this.batchUpdatePlayer({guildId: this.guildId, text_channel: id}).catch(() => {})
     return this
   }
 
