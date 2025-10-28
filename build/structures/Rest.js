@@ -48,7 +48,7 @@ class Rest {
     const host = node.host.includes(':') && !node.host.startsWith('[') ? `[${node.host}]` : node.host
     this.baseUrl = `${protocol}//${host}:${node.port}`
     this._apiBase = `/${API_VERSION}`
-    this._sessionPath = this.sessionId ? `${this._apiBase}/sessions/${this.sessionId}` : null
+
 
     this._endpoints = Object.freeze({
       loadtracks: `${this._apiBase}/loadtracks?identifier=`,
@@ -68,7 +68,7 @@ class Rest {
     this.defaultHeaders = Object.freeze({
       Authorization: String(node.auth || node.password || ''),
       Accept: 'application/json, */*;q=0.5',
-      'Accept-Encoding': 'gzip, deflate, br',
+      'Accept-Encoding': 'br, gzip, deflate',
       'User-Agent': `Aqualink/${aqua?.version || '1.0'} (Node.js ${process.version})`
     })
 
@@ -109,15 +109,11 @@ class Rest {
 
   setSessionId(sessionId) {
     this.sessionId = sessionId
-    this._sessionPath = sessionId ? `${this._apiBase}/sessions/${sessionId}` : null
   }
 
   _getSessionPath() {
-    if (!this._sessionPath) {
-      if (!this.sessionId) throw ERRORS.NO_SESSION
-      this._sessionPath = `${this._apiBase}/sessions/${this.sessionId}`
-    }
-    return this._sessionPath
+    if (!this.sessionId) throw ERRORS.NO_SESSION
+    return `${this._apiBase}/sessions/${this.sessionId}`
   }
 
   _buildHeaders(hasPayload, payloadLength) {
@@ -226,7 +222,8 @@ class Rest {
 
           let result = text
           const contentType = res.headers['content-type'] || ''
-          if (contentType.includes('application/json')) {try {
+          if (contentType.includes('application/json')) {
+            try {
               result = JSON.parse(text)
             } catch (err) {
               return complete(false, new Error(`JSON parse error: ${err.message}`))
