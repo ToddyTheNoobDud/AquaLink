@@ -21,6 +21,9 @@ const EVENT_HANDLERS = Object.freeze({
   VolumeChangedEvent: 'volumeChanged',
   FiltersChangedEvent: 'filtersChanged',
   SeekEvent: 'seekEvent',
+  PlayerCreatedEvent: 'playerCreated',
+  PlayerConnectedEvent: 'playerConnected',
+  PlayerDestroyedEvent: 'playerDestroyed',
   LyricsNotFoundEvent: 'lyricsNotFound'
 })
 
@@ -459,8 +462,7 @@ class Player extends EventEmitter {
   seek(position) {
     if (this.destroyed || !this.playing || !_functions.isNum(position)) return this
     const len = this.current?.info?.length || 0
-    const pos = position === 0 ? 0 : this.position + position
-    const clamped = len ? Math.min(Math.max(pos, 0), len) : Math.max(pos, 0)
+    const clamped = len ? Math.min(Math.max(position, 0), len) : Math.max(position, 0)
     this.position = clamped
     this.batchUpdatePlayer({guildId: this.guildId, position: clamped}, true).catch(() => {})
     return this
@@ -553,6 +555,11 @@ class Player extends EventEmitter {
       })
     }
     return null
+  }
+
+  async getLoadLyrics(encodedTrack) {
+    if (this.destroyed || !this.nodes?.rest) return null
+    return this.nodes.rest.getLoadLyrics(encodedTrack)
   }
 
   subscribeLiveLyrics() {
@@ -847,6 +854,20 @@ class Player extends EventEmitter {
   async lyricsNotFound(player, track, payload) {
     if (this.destroyed) return
     this.aqua.emit(AqualinkEvents.LyricsNotFound, this, track, payload)
+  }
+
+  async playerCreated(player, track, payload) {
+    if (this.destroyed) return
+    this.aqua.emit(AqualinkEvents.PlayerCreated, this, payload)
+  }
+
+  async playerConnected(player, track, payload) {
+    if (this.destroyed) return
+    this.aqua.emit(AqualinkEvents.PlayerConnected, this, payload)
+  }
+  async playerDestroyed(player, track, payload) {
+    if (this.destroyed) return
+    this.aqua.emit(AqualinkEvents.PlayerDestroyed, this, payload)
   }
 
   _handleAquaPlayerMove(oldChannel, newChannel) {
