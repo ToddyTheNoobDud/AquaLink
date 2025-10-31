@@ -144,6 +144,7 @@ class Rest {
     headers.Accept = this.defaultHeaders.Accept
     headers['Accept-Encoding'] = this.defaultHeaders['Accept-Encoding']
     headers['User-Agent'] = this.defaultHeaders['User-Agent']
+    headers['Client-Name'] = this.defaultHeaders['User-Agent']
     headers['Content-Type'] = JSON_CONTENT_TYPE
     headers['Content-Length'] = payloadLength
 
