@@ -150,12 +150,9 @@ class CircularBuffer {
     if (!this.count) return []
     const result = new Array(this.count)
     const start = this.count === this.size ? this.index : 0
-    let idx = 0
     for (let i = 0; i < this.count; i++) {
-      const item = this.buffer[(start + i) % this.size]
-      if (item !== undefined) result[idx++] = item
+      result[i] = this.buffer[(start + i) % this.size]
     }
-    result.length = idx
     return result
   }
 }
@@ -307,7 +304,7 @@ class Player extends EventEmitter {
       this.playing = true
       this.paused = false
       this.position = 0
-      await this.batchUpdatePlayer({guildId: this.guildId, track: { encoded: this.current.track} }, true)
+      await this.batchUpdatePlayer({guildId: this.guildId, track: {encoded: this.current.track}}, true)
       return this
     } catch (error) {
       this.aqua.emit(AqualinkEvents.Error, error)
@@ -436,7 +433,7 @@ class Player extends EventEmitter {
       this._dataStore.clear()
       this._dataStore = null
     }
-    // if autoResume is enabled, ig it will need to be keeped in case the connection dies somehow, so don't dispose it
+    // Conditionally dispose current track based on autoResume
     if (this.current?.dispose && !this.aqua.options.autoResume) this.current.dispose()
     this.connection = this.filters = this.current = this.autoplaySeed = null
 
@@ -578,8 +575,8 @@ class Player extends EventEmitter {
     const {sourceName, identifier, uri, requester, author} = info
     this.isAutoplay = true
 
-    if (sourceName === 'spotify' && prev.identifier) {
-      this.previousIdentifiers.add(prev.identifier)
+    if (sourceName === 'spotify' && info.identifier) {
+      this.previousIdentifiers.add(info.identifier)
       if (this.previousIdentifiers.size > PREVIOUS_IDS_MAX) {
         this.previousIdentifiers.delete(this.previousIdentifiers.values().next().value)
       }
@@ -593,7 +590,7 @@ class Player extends EventEmitter {
 
     for (let i = 0; !this.destroyed && i < AUTOPLAY_MAX && !this.queue.size; i++) {
       try {
-        const track = await this._getAutoplayTrack(sourceName, identifier, uri, requester, prev)
+        const track = await this._getAutoplayTrack(sourceName, identifier, uri, requester)
         if (track?.info?.title) {
           this.autoplayRetries = 0
           track.requester = prev.requester || {id: 'Unknown'}
@@ -668,8 +665,7 @@ class Player extends EventEmitter {
     }
 
     if (track && reason === 'finished') {
-      const shouldRepeat = this.loop === LOOP_MODES.TRACK || this.loop === LOOP_MODES.QUEUE
-      if (shouldRepeat) this.queue.add(track)
+      if (this.loop === LOOP_MODES.TRACK || this.loop === LOOP_MODES.QUEUE) this.queue.add(track)
     }
 
     if (this.queue.size) {
@@ -865,6 +861,7 @@ class Player extends EventEmitter {
     if (this.destroyed) return
     this.aqua.emit(AqualinkEvents.PlayerConnected, this, payload)
   }
+
   async playerDestroyed(player, track, payload) {
     if (this.destroyed) return
     this.aqua.emit(AqualinkEvents.PlayerDestroyed, this, payload)
