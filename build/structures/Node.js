@@ -65,6 +65,7 @@ class Node {
     this.regions = connOptions.regions || []
     this.ssl = !!connOptions.ssl
     this.wsUrl = _functions.buildWsUrl(this.host, this.port, this.ssl)
+    this.clientName = connOptions.clientName || null 
 
     this.rest = new Rest(aqua, this)
 
@@ -95,7 +96,7 @@ class Node {
       frameStats: { sent: 0, nulled: 0, deficit: 0 }
     }
 
-    this._clientName = `Aqua/${this.aqua.version} https://github.com/ToddyTheNoobDud/AquaLink`
+    this._clientName = connOptions.clientName || `Aqua/${this.aqua.version} https://github.com/ToddyTheNoobDud/AquaLink`
     this._headers = this._buildHeaders()
 
     const handlers = {

@@ -54,6 +54,10 @@ const DEFAULT_OPTIONS = Object.freeze({
     resumePlayback: true,
     cooldownTime: 5000,
     maxFailoverAttempts: 5
+  }),
+  voice: Object.freeze({
+    enabled: false,
+    message: ''
   })
 })
 
@@ -101,6 +105,7 @@ class Aqua extends EventEmitter {
     this.loadBalancer = merged.loadBalancer
     this.useHttp2 = merged.useHttp2
     this.send = merged.send || this._createDefaultSend()
+    this.voice = {...DEFAULT_OPTIONS.voice, ...options.voice} 
 
     this._nodeStates = new Map()
     this._failoverQueue = new Map()
