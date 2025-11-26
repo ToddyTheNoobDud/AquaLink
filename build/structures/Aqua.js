@@ -454,7 +454,7 @@ class Aqua extends EventEmitter {
   updateVoiceState({d, t}) {
     if (!d?.guild_id || (t !== 'VOICE_STATE_UPDATE' && t !== 'VOICE_SERVER_UPDATE')) return
     const player = this.players.get(d.guild_id)
-    if (!player) return
+    if (!player || !player.nodes?.connected) return
     if (t === 'VOICE_STATE_UPDATE') {
       if (d.user_id !== this.clientId) return
       if (!d.channel_id) {
