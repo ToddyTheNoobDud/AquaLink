@@ -115,7 +115,6 @@ class Node {
       'User-Id': this.aqua.clientId,
       'Client-Name': this._clientName
     }
-    console.log(this.sessionId)
     if (this.sessionId) headers['Session-Id'] = this.sessionId
     return headers
   }
@@ -477,3 +476,4 @@ class Node {
 }
 
 module.exports = Node
+
