@@ -115,6 +115,7 @@ class Node {
       'User-Id': this.aqua.clientId,
       'Client-Name': this._clientName
     }
+    console.log(this.sessionId)
     if (this.sessionId) headers['Session-Id'] = this.sessionId
     return headers
   }
@@ -222,6 +223,11 @@ class Node {
     if (this.isDestroyed) return
 
     const isFatal = FATAL_CLOSE_CODES.includes(code)
+    if (code !== Node.WS_CLOSE_NORMAL && code !== 1001 && !isFatal && this.sessionId) {
+      this.sessionId = null
+      delete this._headers['Session-Id']
+      this.rest?.setSessionId?.(null)
+    }
     const shouldReconnect = (code !== Node.WS_CLOSE_NORMAL || this.infiniteReconnects) && !isFatal
 
     if (!shouldReconnect) {
