@@ -115,6 +115,7 @@ class Node {
       'User-Id': this.aqua.clientId,
       'Client-Name': this._clientName
     }
+    console.log(this.sessionId)
     if (this.sessionId) headers['Session-Id'] = this.sessionId
     return headers
   }
@@ -135,17 +136,20 @@ class Node {
       }, 10000)
       timeoutId.unref?.()
 
-      try {
-        this.info = await this.rest.makeRequest('GET', '/v4/info')
-        clearTimeout(timeoutId)
-      } catch (err) {
-        clearTimeout(timeoutId)
-        this.info = null
-        this._emitError(`Failed to fetch node info: ${err?.message || err}`)
+    try {
+      this.info = await this.rest.makeRequest('GET', '/v4/info')
+      clearTimeout(timeoutId)
+      if (this.info?.isNodelink) {
+        this.autoResume = false
       }
+    } catch (err) {
+      clearTimeout(timeoutId)
+      this.info = null
+      this._emitError(`Failed to fetch node info: ${err?.message || err}`)
     }
+  }
 
-    this.aqua.emit(AqualinkEvents.NodeConnect, this)
+  this.aqua.emit(AqualinkEvents.NodeConnect, this)
   }
 
   _handleError(error) {
@@ -476,4 +480,3 @@ class Node {
 }
 
 module.exports = Node
-
