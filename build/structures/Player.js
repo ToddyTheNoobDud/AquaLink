@@ -246,7 +246,7 @@ class Player extends EventEmitter {
       if (!this._voiceDownSince) {
         this._voiceDownSince = Date.now()
         const t = setTimeout(() => {
-          if (this.connected || this.destroyed) return
+          if (this.connected || this.destroyed || this.nodes?.info?.isNodelink) return
           this.connection.attemptResume()
         }, 1000)
         _functions.safeUnref(t)
@@ -331,6 +331,7 @@ class Player extends EventEmitter {
   }
 
   _shouldAttemptVoiceRecovery() {
+    if (this.nodes?.info?.isNodelink) return false
     if (this.destroyed) return false
     if (!this.voiceChannel) return false
     if (this.connected) return false
@@ -730,7 +731,7 @@ class Player extends EventEmitter {
       return
     }
 
-    if (code === 4015) {
+    if (code === 4015 && !this.nodes?.info?.isNodelink) {
       try {
         await this._attemptVoiceResume()
         return
