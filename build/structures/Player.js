@@ -22,6 +22,7 @@ const EVENT_HANDLERS = Object.freeze({
   FiltersChangedEvent: 'filtersChanged',
   SeekEvent: 'seekEvent',
   PlayerCreatedEvent: 'playerCreated',
+  pauseEvent : 'PauseEvent',
   PlayerConnectedEvent: 'playerConnected',
   PlayerDestroyedEvent: 'playerDestroyed',
   LyricsNotFoundEvent: 'lyricsNotFound'
@@ -866,6 +867,10 @@ class Player extends EventEmitter {
   async playerDestroyed(player, track, payload) {
     if (this.destroyed) return
     this.aqua.emit(AqualinkEvents.PlayerDestroyed, this, payload)
+  }
+  async pauseEvent(player, track, payload) {
+    if (this.destroyed) return
+    this.aqua.emit(AqualinkEvents.PauseEvent, this, payload)
   }
 
   _handleAquaPlayerMove(oldChannel, newChannel) {
