@@ -85,6 +85,7 @@ class Node {
     this.reconnectTimeoutId = null
     this.isDestroyed = false
     this._isConnecting = false
+    this.isNodelink = false
 
     this.stats = {
       players: 0,
@@ -116,7 +117,9 @@ class Node {
       'User-Id': this.aqua.clientId,
       'Client-Name': this._clientName
     }
-    if (this.sessionId) headers['Session-Id'] = this.sessionId
+    if (this.sessionId) {
+      headers['Session-Id'] = this.sessionId
+    }
     return headers
   }
 
@@ -148,6 +151,8 @@ class Node {
 
       try {
         this.info = await this.rest.makeRequest('GET', '/v4/info')
+        if (this.info.isNodelink) this.isNodelink = true; else this.isNodelink = false
+        console.log(this.isNodelink)
       } catch (err) {
         this.info = null
         this._emitError(`Failed to fetch node info: ${_functions.errMsg(err)}`)
@@ -423,17 +428,18 @@ class Node {
   }
 
   async _resumePlayers() {
-    if (!this.sessionId) return
+    if (!this.sessionId) {
+      return
+    }
 
     try {
       await this.rest.makeRequest('PATCH', `/v4/sessions/${this.sessionId}`, {
         resuming: true,
         timeout: this.resumeTimeout
       })
-      if (this.aqua.loadPlayers && !this.info?.isNodelink) {
+      if (this.aqua.loadPlayers && !this.isNodelink) {
         await this.aqua.loadPlayers()
       }
-      this._emitDebug('Session resumed successfully')
     } catch (err) {
       this._emitError(`Failed to resume session: ${_functions.errMsg(err)}`)
       throw err
