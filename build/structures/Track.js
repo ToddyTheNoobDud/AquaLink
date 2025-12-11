@@ -2,37 +2,36 @@
 
 const YT_ID_REGEX = /(?:[?&]v=|youtu\.be\/|\/embed\/|\/shorts\/)([A-Za-z0-9_-]{11})/
 
+const _h = {
+  str: (v, d = '') => typeof v === 'string' ? v : d,
+  num: (v, d = 0) => Number.isFinite(v) ? v : d
+}
+
 class Track {
   constructor(data = {}, requester = null, node = null) {
     const info = data.info || {}
 
     this.track = data.track || data.encoded || null
-
-    this.identifier = typeof info.identifier === 'string' ? info.identifier : ''
+    this.identifier = _h.str(info.identifier)
     this.isSeekable = Boolean(info.isSeekable)
-    this.author = typeof info.author === 'string' ? info.author : ''
-    this.position = Number.isFinite(info.position) ? info.position : 0
-    this.duration = Number.isFinite(info.length) ? info.length : 0
+    this.author = _h.str(info.author)
+    this.position = _h.num(info.position)
+    this.duration = _h.num(info.length)
     this.isStream = Boolean(info.isStream)
-    this.title = typeof info.title === 'string' ? info.title : ''
-    this.uri = typeof info.uri === 'string' ? info.uri : ''
-    this.sourceName = typeof info.sourceName === 'string' ? info.sourceName : ''
-    this.artworkUrl = typeof info.artworkUrl === 'string' ? info.artworkUrl : ''
+    this.title = _h.str(info.title)
+    this.uri = _h.str(info.uri)
+    this.sourceName = _h.str(info.sourceName)
+    this.artworkUrl = _h.str(info.artworkUrl)
 
     this.playlist = data.playlist || null
     this.node = node || data.node || null
     this.nodes = data.nodes || null
     this.requester = requester || null
-
     this._infoCache = null
   }
 
   get info() {
-    if (this._infoCache) return this._infoCache
-
-    const artwork = this.artworkUrl || this._computeArtworkFromKnownSources()
-
-    this._infoCache = Object.freeze({
+    return this._infoCache ||= Object.freeze({
       identifier: this.identifier,
       isSeekable: this.isSeekable,
       position: this.position,
@@ -42,10 +41,8 @@ class Track {
       title: this.title,
       uri: this.uri,
       sourceName: this.sourceName,
-      artworkUrl: artwork || null
+      artworkUrl: this.artworkUrl || this._computeArtwork()
     })
-
-    return this._infoCache
   }
 
   get length() {
@@ -53,16 +50,15 @@ class Track {
   }
 
   get thumbnail() {
-    return this.artworkUrl || this._computeArtworkFromKnownSources()
+    return this.artworkUrl || this._computeArtwork()
   }
 
   async resolve(aqua, opts = {}) {
-    if (this.track && typeof this.track === 'string') return this
-
-    if (!aqua || typeof aqua.resolve !== 'function') return null
+    if (typeof this.track === 'string' && this.track) return this
+    if (!aqua?.resolve) return null
 
     const platform = opts.platform || aqua?.options?.defaultSearchPlatform || 'ytsearch'
-    const node = opts.node || this.node || this.nodes || undefined
+    const node = opts.node || this.node || this.nodes
 
     let query = this.uri
     if (!query) {
@@ -87,21 +83,19 @@ class Track {
     const found = result?.tracks?.[0]
     if (!found) return null
 
+    const fi = found.info || {}
+
     this.track = typeof found.track === 'string' ? found.track : (found.encoded || this.track)
-
-    const foundInfo = found.info || {}
-
-    this.identifier = foundInfo.identifier ?? this.identifier
-    this.title = foundInfo.title ?? this.title
-    this.author = foundInfo.author ?? this.author
-    this.uri = foundInfo.uri ?? this.uri
-    this.sourceName = foundInfo.sourceName ?? this.sourceName
-    this.artworkUrl = foundInfo.artworkUrl ?? this.artworkUrl
-    this.isSeekable = Boolean(foundInfo.isSeekable)
-    this.isStream = Boolean(foundInfo.isStream)
-    this.position = Number.isFinite(foundInfo.position) ? foundInfo.position : this.position
-    this.duration = Number.isFinite(foundInfo.length) ? foundInfo.length : this.duration
-
+    this.identifier = fi.identifier ?? this.identifier
+    this.title = fi.title ?? this.title
+    this.author = fi.author ?? this.author
+    this.uri = fi.uri ?? this.uri
+    this.sourceName = fi.sourceName ?? this.sourceName
+    this.artworkUrl = fi.artworkUrl ?? this.artworkUrl
+    this.isSeekable = fi.isSeekable ?? this.isSeekable
+    this.isStream = fi.isStream ?? this.isStream
+    this.position = _h.num(fi.position, this.position)
+    this.duration = _h.num(fi.length, this.duration)
     this.playlist = found.playlist ?? this.playlist
     this._infoCache = null
 
@@ -109,32 +103,19 @@ class Track {
   }
 
   isValid() {
-    return (typeof this.track === 'string' && this.track.length > 0) ||
-           (typeof this.uri === 'string' && this.uri.length > 0)
+    return Boolean(
+      (typeof this.track === 'string' && this.track) ||
+      (typeof this.uri === 'string' && this.uri)
+    )
   }
 
   dispose() {
-    this._infoCache = null
-    this.requester = null
-    this.node = null
-    this.nodes = null
-    this.playlist = null
-
-    this.track = null
-    this.identifier = ''
-    this.author = ''
-    this.title = ''
-    this.uri = ''
-    this.sourceName = ''
-    this.artworkUrl = ''
+    this._infoCache = this.requester = this.node = this.nodes = this.playlist = this.track = null
+    this.identifier = this.author = this.title = this.uri = this.sourceName = this.artworkUrl = ''
   }
 
-  _computeArtworkFromKnownSources() {
-    let id = this.identifier
-    if (!id && this.uri) {
-      const match = YT_ID_REGEX.exec(this.uri)
-      if (match) id = match[1]
-    }
+  _computeArtwork() {
+    const id = this.identifier || (this.uri && YT_ID_REGEX.exec(this.uri)?.[1])
     return id ? `https://i.ytimg.com/vi/${id}/hqdefault.jpg` : null
   }
 }
