@@ -1,13 +1,13 @@
 'use strict'
 
-const {EventEmitter} = require('tseep')
-const {AqualinkEvents} = require('./AqualinkEvents')
+const { EventEmitter } = require('tseep')
+const { AqualinkEvents } = require('./AqualinkEvents')
 const Connection = require('./Connection')
 const Filters = require('./Filters')
-const {spAutoPlay, scAutoPlay} = require('../handlers/autoplay')
+const { spAutoPlay, scAutoPlay } = require('../handlers/autoplay')
 const Queue = require('./Queue')
 
-const LOOP_MODES = Object.freeze({NONE: 0, TRACK: 1, QUEUE: 2})
+const LOOP_MODES = Object.freeze({ NONE: 0, TRACK: 1, QUEUE: 2 })
 const LOOP_MODE_NAMES = Object.freeze(['none', 'track', 'queue'])
 const EVENT_HANDLERS = Object.freeze({
   TrackStartEvent: 'trackStart',
@@ -53,7 +53,7 @@ const _functions = {
   toId: v => v?.id || v || null,
   isNum: v => typeof v === 'number' && !Number.isNaN(v),
   isInvalidLoad: r => !r?.tracks?.length || INVALID_LOADS.has(r.loadType),
-  safeDel: msg => msg?.delete?.().catch(() => {}),
+  safeDel: msg => msg?.delete?.().catch(() => { }),
   createTimer(fn, delay, timerSet, unref = true) {
     const t = setTimeout(() => {
       timerSet?.delete(t)
@@ -92,7 +92,7 @@ class MicrotaskUpdateBatcher {
   }
 
   _flush() {
-    const {player: p, updates: u} = this
+    const { player: p, updates: u } = this
     this.updates = null
     this.scheduled = false
     if (!u || !p) return Promise.resolve()
@@ -286,7 +286,11 @@ class Player extends EventEmitter {
   }
 
   async play() {
-    if (this.destroyed || !this.connected || !this.queue.size) return this
+    if (this.destroyed || !this.queue.size) return this
+    // most lazy fix i ever did lol
+    if (this.nodes.isNodelink) { await this._delay(1000); if (!this.connected || this.destroyed) return this }
+    if (!this.connected) return this
+
     const item = this.queue.dequeue()
     if (!item) return this
     try {
@@ -295,7 +299,7 @@ class Player extends EventEmitter {
       this.playing = true
       this.paused = false
       this.position = 0
-      await this.batchUpdatePlayer({guildId: this.guildId, track: {encoded: this.current.track}}, true)
+      await this.batchUpdatePlayer({ guildId: this.guildId, track: { encoded: this.current.track } }, true)
       return this
     } catch (error) {
       this.aqua.emit(AqualinkEvents.Error, error)
@@ -312,7 +316,7 @@ class Player extends EventEmitter {
     this.connected = true
     this.destroyed = false
     this.voiceChannel = voiceChannel
-    this.send({guild_id: this.guildId, channel_id: voiceChannel, self_deaf: this.deaf, self_mute: this.mute})
+    this.send({ guild_id: this.guildId, channel_id: voiceChannel, self_deaf: this.deaf, self_mute: this.mute })
     return this
   }
 
@@ -338,10 +342,10 @@ class Player extends EventEmitter {
         return
       }
       const originalMute = this.mute
-      this.send({guild_id: this.guildId, channel_id: this.voiceChannel, self_deaf: this.deaf, self_mute: !originalMute})
+      this.send({ guild_id: this.guildId, channel_id: this.voiceChannel, self_deaf: this.deaf, self_mute: !originalMute })
       await this._delay(MUTE_TOGGLE_DELAY)
       if (!this.destroyed) {
-        this.send({guild_id: this.guildId, channel_id: this.voiceChannel, self_deaf: this.deaf, self_mute: originalMute})
+        this.send({ guild_id: this.guildId, channel_id: this.voiceChannel, self_deaf: this.deaf, self_mute: originalMute })
       }
       this.connection.resendVoiceUpdate()
       this.reconnectionRetries++
@@ -353,7 +357,7 @@ class Player extends EventEmitter {
   }
 
   destroy(options = {}) {
-    const {preserveClient = true, skipRemote = false} = options
+    const { preserveClient = true, skipRemote = false } = options
     if (this.destroyed && !this.queue) return this
 
     if (!this.destroyed) {
@@ -405,10 +409,10 @@ class Player extends EventEmitter {
 
     if (!skipRemote) {
       try {
-        this.send({guild_id: this.guildId, channel_id: null})
+        this.send({ guild_id: this.guildId, channel_id: null })
         this.aqua?.destroyPlayer?.(this.guildId)
-        if (this.nodes?.connected) this.nodes.rest?.destroyPlayer(this.guildId).catch(() => {})
-      } catch {}
+        if (this.nodes?.connected) this.nodes.rest?.destroyPlayer(this.guildId).catch(() => { })
+      } catch { }
     }
 
     if (!preserveClient) this.aqua = this.nodes = null
@@ -418,7 +422,7 @@ class Player extends EventEmitter {
   pause(paused) {
     if (this.destroyed || this.paused === !!paused) return this
     this.paused = !!paused
-    this.batchUpdatePlayer({guildId: this.guildId, paused: this.paused}, true).catch(() => {})
+    this.batchUpdatePlayer({ guildId: this.guildId, paused: this.paused }, true).catch(() => { })
     return this
   }
 
@@ -427,7 +431,7 @@ class Player extends EventEmitter {
     const len = this.current?.info?.length || 0
     const clamped = len ? Math.min(Math.max(position, 0), len) : Math.max(position, 0)
     this.position = clamped
-    this.batchUpdatePlayer({guildId: this.guildId, position: clamped}, true).catch(() => {})
+    this.batchUpdatePlayer({ guildId: this.guildId, position: clamped }, true).catch(() => { })
     return this
   }
 
@@ -435,7 +439,7 @@ class Player extends EventEmitter {
     if (this.destroyed || !this.playing) return this
     this.playing = this.paused = false
     this.position = 0
-    this.batchUpdatePlayer({guildId: this.guildId, track: {encoded: null}}, true).catch(() => {})
+    this.batchUpdatePlayer({ guildId: this.guildId, track: { encoded: null } }, true).catch(() => { })
     return this
   }
 
@@ -443,7 +447,7 @@ class Player extends EventEmitter {
     const vol = _functions.clamp(volume)
     if (this.destroyed || this.volume === vol) return this
     this.volume = vol
-    this.batchUpdatePlayer({guildId: this.guildId, volume: vol}).catch(() => {})
+    this.batchUpdatePlayer({ guildId: this.guildId, volume: vol }).catch(() => { })
     return this
   }
 
@@ -460,7 +464,7 @@ class Player extends EventEmitter {
     const id = _functions.toId(channel)
     if (!id) throw new TypeError('Invalid text channel')
     this.textChannel = id
-    this.batchUpdatePlayer({guildId: this.guildId, text_channel: id}).catch(() => {})
+    this.batchUpdatePlayer({ guildId: this.guildId, text_channel: id }).catch(() => { })
     return this
   }
 
@@ -470,7 +474,7 @@ class Player extends EventEmitter {
     if (!id) throw new TypeError('Voice channel required')
     if (this.connected && id === _functions.toId(this.voiceChannel)) return this
     this.voiceChannel = id
-    this.connect({deaf: this.deaf, guildId: this.guildId, voiceChannel: id, mute: this.mute})
+    this.connect({ deaf: this.deaf, guildId: this.guildId, voiceChannel: id, mute: this.mute })
     return this
   }
 
@@ -478,7 +482,7 @@ class Player extends EventEmitter {
     if (this.destroyed || !this.connected) return this
     this.connected = false
     this.voiceChannel = null
-    this.send({guild_id: this.guildId, channel_id: null})
+    this.send({ guild_id: this.guildId, channel_id: null })
     return this
   }
 
@@ -501,12 +505,12 @@ class Player extends EventEmitter {
 
   async getLyrics(options = {}) {
     if (this.destroyed || !this.nodes?.rest) return null
-    const {query, useCurrentTrack = true, skipTrackSource = false} = options
-    if (query) return this.nodes.rest.getLyrics({track: {info: {title: query}}, skipTrackSource})
+    const { query, useCurrentTrack = true, skipTrackSource = false } = options
+    if (query) return this.nodes.rest.getLyrics({ track: { info: { title: query } }, skipTrackSource })
     if (useCurrentTrack && this.playing && this.current) {
       const info = this.current.info
       return this.nodes.rest.getLyrics({
-        track: {info, encoded: this.current.track, identifier: info.identifier, guild_id: this.guildId},
+        track: { info, encoded: this.current.track, identifier: info.identifier, guild_id: this.guildId },
         skipTrackSource
       })
     }
@@ -530,7 +534,7 @@ class Player extends EventEmitter {
     const prev = this.previous
     const info = prev?.info
     if (!info?.sourceName || !info.identifier) return this
-    const {sourceName, identifier, uri, author} = info
+    const { sourceName, identifier, uri, author } = info
     this.isAutoplay = true
 
     if (sourceName === 'spotify' && info.identifier) {
@@ -539,7 +543,7 @@ class Player extends EventEmitter {
         this.previousIdentifiers.delete(this.previousIdentifiers.values().next().value)
       }
       if (!this.autoplaySeed) {
-        this.autoplaySeed = {trackId: identifier, artistIds: Array.isArray(author) ? author.join(',') : author}
+        this.autoplaySeed = { trackId: identifier, artistIds: Array.isArray(author) ? author.join(',') : author }
       }
     }
 
@@ -548,7 +552,7 @@ class Player extends EventEmitter {
         const track = await this._getAutoplayTrack(sourceName, identifier, uri, prev.requester)
         if (track?.info?.title) {
           this.autoplayRetries = 0
-          track.requester = prev.requester || {id: 'Unknown'}
+          track.requester = prev.requester || { id: 'Unknown' }
           this.queue.add(track)
           await this.play()
           return this
@@ -575,7 +579,7 @@ class Player extends EventEmitter {
     if (sourceName === 'soundcloud') {
       const scRes = await scAutoPlay(uri)
       if (!scRes?.length) return null
-      const res = await this.aqua.resolve({query: scRes[0], source: 'scsearch', requester})
+      const res = await this.aqua.resolve({ query: scRes[0], source: 'scsearch', requester })
       return _functions.isInvalidLoad(res) ? null : res.tracks[_functions.randIdx(res.tracks.length)]
     }
     if (sourceName === 'spotify') {
@@ -688,7 +692,7 @@ class Player extends EventEmitter {
     }
 
     if (code === 4015 && !this.nodes?.info?.isNodelink) {
-      try { await this._attemptVoiceResume(); return } catch {}
+      try { await this._attemptVoiceResume(); return } catch { }
     }
 
     if (![4015, 4009, 4006].includes(code)) {
@@ -701,7 +705,7 @@ class Player extends EventEmitter {
     const aqua = this.aqua
     const vcId = _functions.toId(this.voiceChannel)
     const tcId = _functions.toId(this.textChannel)
-    const {guildId, deaf, mute} = this
+    const { guildId, deaf, mute } = this
 
     if (!vcId) {
       aqua?.emit?.(AqualinkEvents.SocketClosed, this, payload)
@@ -721,7 +725,7 @@ class Player extends EventEmitter {
     }
 
     this._reconnecting = true
-    this.destroy({preserveClient: true, skipRemote: true})
+    this.destroy({ preserveClient: true, skipRemote: true })
 
     const reconnectTimers = new Set()
     const tryReconnect = async attempt => {
@@ -750,10 +754,10 @@ class Player extends EventEmitter {
 
         _functions.clearTimers(reconnectTimers)
         this._reconnecting = false
-        aqua.emit(AqualinkEvents.PlayerReconnected, np, {oldPlayer: this, restoredState: state})
+        aqua.emit(AqualinkEvents.PlayerReconnected, np, { oldPlayer: this, restoredState: state })
       } catch (error) {
         const retriesLeft = RECONNECT_MAX - attempt
-        aqua.emit(AqualinkEvents.ReconnectionFailed, this, {error, code, payload, retriesLeft})
+        aqua.emit(AqualinkEvents.ReconnectionFailed, this, { error, code, payload, retriesLeft })
 
         if (retriesLeft > 0) {
           _functions.createTimer(
@@ -776,12 +780,12 @@ class Player extends EventEmitter {
     if (_functions.toId(oldChannel) !== _functions.toId(this.voiceChannel)) return
     this.voiceChannel = _functions.toId(newChannel)
     this.connected = !!newChannel
-    this.send({guild_id: this.guildId, channel_id: this.voiceChannel, self_deaf: this.deaf, self_mute: this.mute})
+    this.send({ guild_id: this.guildId, channel_id: this.voiceChannel, self_deaf: this.deaf, self_mute: this.mute })
   }
 
   send(data) {
     try {
-      this.aqua.send({op: 4, d: data})
+      this.aqua.send({ op: 4, d: data })
     } catch (err) {
       this.aqua.emit(AqualinkEvents.Error, new Error(`Send fail: ${err.message}`))
     }
@@ -808,7 +812,7 @@ class Player extends EventEmitter {
   }
 
   updatePlayer(data) {
-    return this.nodes.rest.updatePlayer({guildId: this.guildId, data})
+    return this.nodes.rest.updatePlayer({ guildId: this.guildId, data })
   }
 
   cleanup() {
