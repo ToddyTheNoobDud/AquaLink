@@ -151,8 +151,7 @@ class Node {
 
       try {
         this.info = await this.rest.makeRequest('GET', '/v4/info')
-        if (this.info.isNodelink) this.isNodelink = true; else this.isNodelink = false
-        console.log(this.isNodelink)
+        this.isNodelink = !!this.info?.isNodelink;
       } catch (err) {
         this.info = null
         this._emitError(`Failed to fetch node info: ${_functions.errMsg(err)}`)
