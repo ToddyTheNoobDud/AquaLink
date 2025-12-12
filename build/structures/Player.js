@@ -288,7 +288,7 @@ class Player extends EventEmitter {
   async play() {
     if (this.destroyed || !this.queue.size) return this
     // most lazy fix i ever did lol
-    if (this.nodes.isNodelink) { await this._delay(1000); if (!this.connected || this.destroyed) return this }
+    if (this.nodes.isNodelink && !this.connected) { await this._delay(1000); if (!this.connected || this.destroyed) return this }
     if (!this.connected) return this
 
     const item = this.queue.dequeue()
@@ -821,3 +821,4 @@ class Player extends EventEmitter {
 }
 
 module.exports = Player
+
