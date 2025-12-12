@@ -285,11 +285,37 @@ class Player extends EventEmitter {
     return this
   }
 
+  async _waitForConnection(timeout = RESUME_TIMEOUT) {
+    if (this.destroyed) return
+    if (this.connected) return
+    return new Promise((resolve, reject) => {
+      let timer
+      const cleanup = () => {
+        if (timer) { this._pendingTimers?.delete(timer); clearTimeout(timer) }
+        this.off('playerUpdate', onUpdate)
+      }
+      const onUpdate = payload => {
+        if (this.destroyed) { cleanup(); return reject(new Error('Player destroyed')) }
+        if (payload?.state?.connected || _functions.isNum(payload?.state?.time)) {
+          cleanup()
+          return resolve()
+        }
+      }
+      this.on('playerUpdate', onUpdate)
+      timer = this._createTimer(() => { cleanup(); reject(new Error('No connection confirmation')) }, timeout)
+    })
+  }
+
   async play() {
     if (this.destroyed || !this.queue.size) return this
-    // most lazy fix i ever did lol
-    if (this.nodes.isNodelink && !this.connected) { await this._delay(1000); if (!this.connected || this.destroyed) return this }
-    if (!this.connected) return this
+    if (!this.connected) {
+      try {
+        await this._waitForConnection(RESUME_TIMEOUT)
+        if (!this.connected || this.destroyed) return this
+      } catch {
+        return this
+      }
+    }
 
     const item = this.queue.dequeue()
     if (!item) return this
@@ -313,7 +339,6 @@ class Player extends EventEmitter {
     if (!voiceChannel) throw new TypeError('Voice channel required')
     this.deaf = options.deaf !== undefined ? !!options.deaf : true
     this.mute = !!options.mute
-    this.connected = true
     this.destroyed = false
     this.voiceChannel = voiceChannel
     this.send({ guild_id: this.guildId, channel_id: voiceChannel, self_deaf: this.deaf, self_mute: this.mute })
@@ -821,4 +846,3 @@ class Player extends EventEmitter {
 }
 
 module.exports = Player
-
