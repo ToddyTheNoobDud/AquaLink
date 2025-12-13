@@ -180,15 +180,17 @@ const aqua = new Aqua(client, nodes, {
 
 client.aqua = aqua;
 
-client.once(Events.Ready, () => {
+client.once(Events.ClientReady, () => {
     client.aqua.init(client.user.id);
     console.log(`Logged in as ${client.user.tag}`);
 });
 
-client.on(Events.Raw, (d) => {
-    if (![Events.VoiceStateUpdate, Events.VoiceServerUpdate].includes(d.t)) return;
-    client.aqua.updateVoiceState(d);
+client.on(Events.Raw, (d, t) => {
+    if (d.t === "VOICE_SERVER_UPDATE" || d.t === "VOICE_STATE_UPDATE") {
+        return client.aqua.updateVoiceState(d, t);
+    }
 });
+
 
 client.on(Events.MessageCreate, async (message) => {
     if (message.author.bot || !message.content.startsWith("!play")) return;
