@@ -529,7 +529,7 @@ class Aqua extends EventEmitter {
   _handlePlayerDestroy(player) {
     player.nodes?.players?.delete?.(player)
     if (this.players.get(player.guildId) === player) this.players.delete(player.guildId)
-    this.emit(AqualinkEvents.PlayerDestroy, player)
+    this.emit(AqualinkEvents.PlayerDestroyed, player)
   }
 
   async destroyPlayer(guildId) {

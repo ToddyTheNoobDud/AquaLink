@@ -11,33 +11,23 @@ class Queue extends Array {
     return this[this.length - 1] || null
   }
 
-
   add(track) {
     this.push(track)
     return this
   }
 
   remove(track) {
-    const index = this.indexOf(track)
-    if (index === -1) {
-      return false
-    }
-
-    const removed = this[index]
-    this.splice(index, 1)
-
-    if (removed?.dispose) {
-      removed.dispose()
-    }
-
+    const idx = this.indexOf(track)
+    if (idx === -1) return false
+    const removed = this[idx]
+    this.splice(idx, 1)
+    if (removed?.dispose) removed.dispose()
     return true
   }
 
   clear() {
     for (let i = 0; i < this.length; i++) {
-      if (this[i]?.dispose) {
-        this[i].dispose()
-      }
+      if (this[i]?.dispose) this[i].dispose()
     }
     this.length = 0
   }

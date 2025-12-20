@@ -29,14 +29,13 @@ const AqualinkEvents = {
   Debug: 'debug',
   Error: 'error',
   PlayerCreate: 'playerCreate',
-  PlayerDestroy: 'playerDestroy',
   PlayersRebuilt: 'playersRebuilt',
   VolumeChanged: 'volumeChanged',
   FiltersChanged: 'filtersChanged',
   Seek: 'seek',
   PlayerCreated: 'playerCreated',
   PlayerConnected: 'playerConnected',
-  PlayerDestroyed: 'playerDestroyed',
+  PlayerDestroyed: 'playerDestroy',
   PlayerMigrated: 'playerMigrated',
   PauseEvent: 'pauseEvent'
 };
