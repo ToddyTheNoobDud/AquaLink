@@ -37,7 +37,9 @@ const AqualinkEvents = {
   PlayerConnected: 'playerConnected',
   PlayerDestroyed: 'playerDestroy',
   PlayerMigrated: 'playerMigrated',
-  PauseEvent: 'pauseEvent'
+  PauseEvent: 'pauseEvent',
+  MixStarted: 'mixStarted',
+  MixEnded: 'mixEnded'
 };
 
 module.exports = { AqualinkEvents };

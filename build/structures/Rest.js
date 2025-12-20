@@ -317,7 +317,7 @@ class Rest {
 
   _closeH2() {
     if (this._h2Timer) { clearTimeout(this._h2Timer); this._h2Timer = null }
-    if (this._h2) { try { this._h2.close() } catch {} this._h2 = null }
+    if (this._h2) { try { this._h2.close() } catch { } this._h2 = null }
   }
 
   _h2Request(method, path, headers, payload) {
@@ -480,14 +480,14 @@ class Rest {
       try {
         const lyrics = await this.makeRequest('GET', `${this._getSessionPath()}/players/${guildId}/track/lyrics?skipTrackSource=${skip}`)
         if (this._validLyrics(lyrics)) return lyrics
-      } catch {}
+      } catch { }
     }
 
     if (hasEncoded) {
       try {
         const lyrics = await this.makeRequest('GET', `${this._endpoints.lyrics}?track=${encodeURIComponent(encoded)}&skipTrackSource=${skip}`)
         if (this._validLyrics(lyrics)) return lyrics
-      } catch {}
+      } catch { }
     }
 
     if (title) {
@@ -495,7 +495,7 @@ class Rest {
       try {
         const lyrics = await this.makeRequest('GET', `${this._endpoints.lyrics}/search?query=${encodeURIComponent(query)}`)
         if (this._validLyrics(lyrics)) return lyrics
-      } catch {}
+      } catch { }
     }
 
     return null
@@ -523,6 +523,44 @@ class Rest {
       return false
     }
   }
+
+  async addMixer(guildId, options) {
+    if (!this.node.isNodelink) throw new Error('Mixer endpoints are only available on Nodelink nodes')
+    if (!options?.encoded && !options?.identifier) throw new Error('You must provide either encoded or identifier')
+
+    const track = {}
+    if (options.encoded) track.encoded = options.encoded
+    if (options.identifier) track.identifier = options.identifier
+    if (options.userData) track.userData = options.userData
+
+    const payload = {
+      track,
+      volume: options.volume !== undefined ? options.volume : 0.8
+    }
+
+    return await this.makeRequest("POST", `/v4/sessions/${this.sessionId}/players/${guildId}/mix`, payload)
+  }
+
+  async getActiveMixer(guildId) {
+    if (!this.node.isNodelink) throw new Error('Mixer endpoints are only available on Nodelink nodes')
+    const response = await this.makeRequest("GET", `/v4/sessions/${this.sessionId}/players/${guildId}/mix`)
+    return response?.mixes || []
+  }
+
+  async updateMixerVolume(guildId, mix, volume) {
+    if (!this.node.isNodelink) throw new Error('Mixer endpoints are only available on Nodelink nodes')
+    if (!guildId || !mix || typeof volume !== 'number') throw new Error('You forget to set the guild_id, mix or volume options')
+
+    return await this.makeRequest("PATCH", `/v4/sessions/${this.sessionId}/players/${guildId}/mix/${mix}`, { volume })
+  }
+
+  async removeMixer(guildId, mix) {
+    if (!this.node.isNodelink) throw new Error('Mixer endpoints are only available on Nodelink nodes')
+    if (!guildId || !mix) throw new Error('You forget to set the guild_id and/or mix options')
+
+    return await this.makeRequest("DELETE", `/v4/sessions/${this.sessionId}/players/${guildId}/mix/${mix}`)
+  }
+
 
   destroy() {
     if (this.agent) { this.agent.destroy(); this.agent = null }

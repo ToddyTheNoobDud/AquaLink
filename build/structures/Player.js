@@ -22,10 +22,12 @@ const EVENT_HANDLERS = Object.freeze({
   FiltersChangedEvent: 'filtersChanged',
   SeekEvent: 'seekEvent',
   PlayerCreatedEvent: 'playerCreated',
-  pauseEvent: 'PauseEvent',
+  PauseEvent: 'pauseEvent',
   PlayerConnectedEvent: 'playerConnected',
   PlayerDestroyedEvent: 'playerDestroyed',
-  LyricsNotFoundEvent: 'lyricsNotFound'
+  LyricsNotFoundEvent: 'lyricsNotFound',
+  MixStartedEvent: 'mixStarted',
+  MixEndedEvent: 'mixEnded'
 })
 
 const WATCHDOG_INTERVAL = 15000
@@ -460,11 +462,54 @@ class Player extends EventEmitter {
     return this
   }
 
+  async getActiveMixer(guildId) {
+    if (this.destroyed) return null
+    return await this.nodes.rest.getActiveMixer(guildId)
+  }
+
+  async updateMixerVolume(guildId, mix, volume) {
+    if (this.destroyed) return null
+    return await this.nodes.rest.updateMixerVolume(guildId, mix, volume)
+  }
+
+  async removeMixer(guildId, mix) {
+    if (this.destroyed) return null
+    return await this.nodes.rest.removeMixer(guildId, mix)
+  }
+
+  async addMixer(guildId, options) {
+    if (this.destroyed) return null
+
+    if (options.identifier && !options.encoded) {
+      try {
+        const resolved = await this.aqua.resolve({
+          query: options.identifier,
+          requester: options.requester || this.current?.requester
+        })
+
+        if (resolved?.tracks?.[0]) {
+          const track = resolved.tracks[0]
+          options = {
+            ...options,
+            encoded: track.track || track.encoded,
+            userData: options.userData
+          }
+        } else {
+          throw new Error('Failed to resolve track identifier')
+        }
+      } catch (error) {
+        throw new Error(`Failed to resolve track: ${error.message}`)
+      }
+    }
+
+    return await this.nodes.rest.addMixer(guildId, options)
+  }
+
   stop() {
     if (this.destroyed || !this.playing) return this
     this.playing = this.paused = false
     this.position = 0
-    this.batchUpdatePlayer({ guildId: this.guildId, track: { encoded: null } }, true).catch(() => { })
+    this.batchUpdatePlayer({ guildId: this.guildId, track: { encoded: null, paused: this.paused } }, true).catch(() => { })
     return this
   }
 
@@ -684,7 +729,9 @@ class Player extends EventEmitter {
   playerCreated(p, t, payload) { _functions.emitIfActive(this, AqualinkEvents.PlayerCreated, payload) }
   playerConnected(p, t, payload) { _functions.emitIfActive(this, AqualinkEvents.PlayerConnected, payload) }
   playerDestroyed(p, t, payload) { _functions.emitIfActive(this, AqualinkEvents.PlayerDestroyed, payload) }
-  PauseEvent(p, t, payload) { _functions.emitIfActive(this, AqualinkEvents.PauseEvent, payload) }
+  pauseEvent(p, t, payload) { _functions.emitIfActive(this, AqualinkEvents.PauseEvent, payload) }
+  mixStarted(p, t, payload) { _functions.emitIfActive(this, AqualinkEvents.MixStarted, t, payload) }
+  mixEnded(p, t, payload) { _functions.emitIfActive(this, AqualinkEvents.MixEnded, t, payload) }
 
   async _attemptVoiceResume() {
     if (!this.connection?.sessionId) throw new Error('No session')
