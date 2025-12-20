@@ -38,8 +38,7 @@ declare module "aqualink" {
         _rebuildLocks: Set<string>;
         _leastUsedNodesCache: Node[] | null;
         _leastUsedNodesCacheTime: number;
-        _nodeLoadCache: Map<string, number>;
-        _nodeLoadCacheTime: Map<string, number>;
+        _nodeLoadCache: Map<string, {load: number; time: number}>;
         _cleanupTimer: NodeJS.Timer | null;
         _onNodeConnect?: (node: Node) => void;
         _onNodeDisconnect?: (node: Node) => void;
@@ -126,6 +125,7 @@ declare module "aqualink" {
         infiniteReconnects: boolean;
         connected: boolean;
         info: NodeInfo | null;
+        isNodelink: boolean;
         ws: any | null; // WebSocket
         reconnectAttempted: number;
         reconnectTimeoutId: NodeJS.Timeout | null;
@@ -198,6 +198,8 @@ declare module "aqualink" {
         mute: boolean;
         autoplayRetries: number;
         reconnectionRetries: number;
+        _resuming: boolean;
+        _reconnecting: boolean;
         previousIdentifiers: Set<string>;
         self_deaf: boolean;
         self_mute: boolean;
@@ -242,6 +244,11 @@ declare module "aqualink" {
         setAutoplay(enabled: boolean): Player;
         updatePlayer(data: any): Promise<any>;
         cleanup(): Promise<void>;
+        getActiveMixer(guildId: string): Promise<any[]>;
+        updateMixerVolume(guildId: string, mix: string, volume: number): Promise<any>;
+        removeMixer(guildId: string, mix: string): Promise<any>;
+        addMixer(guildId: string, options: MixerOptions): Promise<any>;
+        getLoadLyrics(encodedTrack: string): Promise<LyricsResponse | null>;
 
         // Data Methods
         set(key: string, value: any): void;
@@ -276,7 +283,7 @@ declare module "aqualink" {
     }
 
     export class Track {
-        constructor(data?: TrackData, requester?: any, nodes?: Node);
+        constructor(data?: TrackData, requester?: any, node?: Node);
 
         // Properties
         identifier: string;
@@ -298,27 +305,8 @@ declare module "aqualink" {
         // Internal Properties
         _infoCache: TrackInfo | null;
 
-        // Expose info with the same properties as the Track itself (plus TrackInfo fields)
-        info: {
-            identifier: string;
-            isSeekable: boolean;
-            author: string;
-            length: number;
-            duration: number;
-            isStream: boolean;
-            title: string;
-            uri: string;
-            sourceName: string;
-            artworkUrl: string;
-            position?: number;
-            track?: string | null;
-            playlist?: PlaylistInfo | null;
-            requester?: any;
-            nodes?: Node;
-            node?: Node | null;
-        };
-
         // Getters
+        get info(): TrackInfo;
         get length(): number;
         get thumbnail(): string;
 
@@ -345,6 +333,7 @@ declare module "aqualink" {
         baseUrl: string;
         defaultHeaders: Record<string, string>;
         agent: any; // HTTP/HTTPS Agent
+        useHttp2: boolean;
 
         // Core Methods
         setSessionId(sessionId: string): void;
@@ -366,6 +355,11 @@ declare module "aqualink" {
         getRoutePlannerStatus(): Promise<any>;
         freeRoutePlannerAddress(address: string): Promise<any>;
         freeAllRoutePlannerAddresses(): Promise<any>;
+        addMixer(guildId: string, options: MixerOptions): Promise<any>;
+        getActiveMixer(guildId: string): Promise<any[]>;
+        updateMixerVolume(guildId: string, mix: string, volume: number): Promise<any>;
+        removeMixer(guildId: string, mix: string): Promise<any>;
+        getLoadLyrics(encodedTrack: string): Promise<LyricsResponse>;
         destroy(): void;
     }
 
@@ -471,7 +465,7 @@ declare module "aqualink" {
         updateSequence(seq: number): void;
         destroy(): void;
         attemptResume(): Promise<boolean>;
-        resendVoiceUpdate(options?: { resume?: boolean }): void;
+        resendVoiceUpdate(): boolean;
 
         // Internal Methods
         _extractRegion(endpoint: string): string | null;
@@ -598,6 +592,29 @@ declare module "aqualink" {
         playlistInfo: PlaylistInfo | null;
         pluginInfo: Record<string, any>;
         tracks: Track[];
+    }
+
+    export interface NodeStats {
+        players: number;
+        playingPlayers: number;
+        uptime: number;
+        memory: {
+            free: number;
+            used: number;
+            allocated: number;
+            reservable: number;
+        };
+        cpu: {
+            cores: number;
+            systemLoad: number;
+            lavalinkLoad: number;
+        };
+        frameStats: {
+            sent: number;
+            nulled: number;
+            deficit: number;
+        };
+        ping?: number;
     }
 
     export interface NodeInfo {
@@ -730,6 +747,13 @@ declare module "aqualink" {
 
     export interface LowPassSettings {
         smoothing?: number;
+    }
+
+    export interface MixerOptions {
+        identifier?: string;
+        encoded?: string;
+        userData?: any;
+        volume?: number;
     }
 
     // Voice Update Interfaces
