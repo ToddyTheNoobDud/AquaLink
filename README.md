@@ -331,6 +331,7 @@ For detailed usage, API references, and examples, check out our official documen
 |-----|-------------|----------|
 | Kenium | [Add to Discord](https://discord.com/oauth2/authorize?client_id=1202232935311495209) | Audio streaming, Discord integration |
 | Soya Music | [Add to Discord](https://discord.com/oauth2/authorize?client_id=997906613082013868&permissions=281357446481&integration_type=0&scope=bot+applications.commands) | Audio streaming, Discord integration |
+| Rive | [Add to Discord](https://discord.com/oauth2/authorize?client_id=1384158871207280651) | Audio streaming, Discord integration |
 
 ## 🛠️ Advanced Features
 
