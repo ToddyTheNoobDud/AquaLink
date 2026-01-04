@@ -53,6 +53,7 @@ const _functions = {
     v.token = conn.token
     v.endpoint = conn.endpoint
     v.sessionId = conn.sessionId
+    v.channelId = player.voiceChannel
     v.resume = resume ? true : undefined
     v.sequence = resume ? conn.sequence : undefined
     payload.data.volume = player?.volume ?? 100
@@ -110,6 +111,7 @@ class Connection {
 
     this.voiceChannel = player.voiceChannel
     this.sessionId = null
+    this.channelId = null
     this.endpoint = null
     this.token = null
     this.region = null
@@ -164,6 +166,7 @@ class Connection {
     this.endpoint = endpoint
     this.region = _functions.extractRegion(endpoint)
     this.token = data.token
+    this.channelId = data.channel_id || this.channelId || this.voiceChannel
     this._lastVoiceDataUpdate = Date.now()
     this._stateFlags &= ~STATE.VOICE_DATA_STALE
 
