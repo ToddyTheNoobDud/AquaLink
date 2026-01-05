@@ -56,7 +56,6 @@ const DEFAULT_OPTIONS = Object.freeze({
   })
 })
 
-// Shared helper functions
 const _functions = {
   delay: ms => new Promise(r => setTimeout(r, ms)),
   noop: () => {},
@@ -599,7 +598,7 @@ class Aqua extends EventEmitter {
           ...info
         }
       }
-      base.pluginInfo = data.pluginInfo || base.pluginInfo
+      base.pluginInfo = data.pluginInfo || rootPlugin || base.pluginInfo
       base.tracks = Array.isArray(data.tracks) ? data.tracks.map(t => _functions.makeTrack(t, requester, node)) : []
     } else if (loadType === 'search') {
       base.tracks = Array.isArray(data) ? data.map(t => _functions.makeTrack(t, requester, node)) : []
