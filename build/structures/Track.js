@@ -22,6 +22,7 @@ class Track {
     this.uri = _h.str(info.uri)
     this.sourceName = _h.str(info.sourceName)
     this.artworkUrl = _h.str(info.artworkUrl)
+    this.pluginInfo = info.pluginInfo || data.pluginInfo || {}
 
     this.playlist = data.playlist || null
     this.node = node || data.node || null
@@ -92,6 +93,7 @@ class Track {
     this.uri = fi.uri ?? this.uri
     this.sourceName = fi.sourceName ?? this.sourceName
     this.artworkUrl = fi.artworkUrl ?? this.artworkUrl
+    this.pluginInfo = fi.pluginInfo ?? found.pluginInfo ?? this.pluginInfo
     this.isSeekable = fi.isSeekable ?? this.isSeekable
     this.isStream = fi.isStream ?? this.isStream
     this.position = _h.num(fi.position, this.position)
