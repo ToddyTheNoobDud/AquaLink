@@ -211,7 +211,10 @@ client.on(Events.MessageCreate, async (message) => {
     });
 
     try {
-        const resolve = await client.aqua.resolve({ query, requester: message.member });
+        const resolve = await client.aqua.resolve({ 
+          query: query, 
+          requester: message.member 
+        });
         const { loadType, tracks, playlistInfo } = resolve;
 
         if (loadType === 'playlist') {
