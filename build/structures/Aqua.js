@@ -2,12 +2,12 @@
 
 const fs = require('node:fs')
 const readline = require('node:readline')
-const {EventEmitter} = require('tseep')
-const {AqualinkEvents} = require('./AqualinkEvents')
+const { EventEmitter } = require('tseep')
+const { AqualinkEvents } = require('./AqualinkEvents')
 const Node = require('./Node')
 const Player = require('./Player')
 const Track = require('./Track')
-const {version: pkgVersion} = require('../../package.json')
+const { version: pkgVersion } = require('../../package.json')
 
 const SEARCH_PREFIX = ':'
 const EMPTY_ARRAY = Object.freeze([])
@@ -33,7 +33,6 @@ const MAX_REBUILD_LOCKS = 100
 const WRITE_BUFFER_SIZE = 100
 const MAX_QUEUE_SAVE = 10
 const MAX_TRACKS_RESTORE = 20
-const URL_PATTERN = /^https?:\/\//i
 
 const DEFAULT_OPTIONS = Object.freeze({
   shouldDeleteMessage: false,
@@ -57,9 +56,16 @@ const DEFAULT_OPTIONS = Object.freeze({
 })
 
 const _functions = {
-  delay: ms => new Promise(r => setTimeout(r, ms)),
-  noop: () => {},
-  isUrl: query => typeof query === 'string' && query.length > 8 && URL_PATTERN.test(query),
+  delay: ms => new Promise(r => {
+    const t = setTimeout(r, ms)
+    t.unref?.()
+  }),
+  noop: () => { },
+  isUrl: query => {
+    if (typeof query !== 'string' || query.length <= 8) return false
+    const q = query.trimStart()
+    return q.startsWith('http://') || q.startsWith('https://')
+  },
   formatQuery(query, source) {
     return this.isUrl(query) ? query : `${source}${SEARCH_PREFIX}${query}`
   },
@@ -68,12 +74,17 @@ const _functions = {
     try {
       const result = fn()
       return result?.then ? result.catch(this.noop) : result
-    } catch {}
+    } catch { }
   },
   parseRequester(str) {
     if (!str || typeof str !== 'string') return null
     const i = str.indexOf(':')
-    return i > 0 ? {id: str.substring(0, i), username: str.substring(i + 1)} : null
+    return i > 0 ? { id: str.substring(0, i), username: str.substring(i + 1) } : null
+  },
+  unrefTimeout: (fn, ms) => {
+    const t = setTimeout(fn, ms)
+    t.unref?.()
+    return t
   }
 }
 
@@ -91,9 +102,9 @@ class Aqua extends EventEmitter {
     this.initiated = false
     this.version = pkgVersion
 
-    const merged = {...DEFAULT_OPTIONS, ...options}
+    const merged = { ...DEFAULT_OPTIONS, ...options }
     this.options = merged
-    this.failoverOptions = {...DEFAULT_OPTIONS.failoverOptions, ...options.failoverOptions}
+    this.failoverOptions = { ...DEFAULT_OPTIONS.failoverOptions, ...options.failoverOptions }
 
     this.shouldDeleteMessage = merged.shouldDeleteMessage
     this.defaultSearchPlatform = merged.defaultSearchPlatform
@@ -148,13 +159,13 @@ class Aqua extends EventEmitter {
           this._performCleanup()
         })
       },
-      onNodeReady: (node, {resumed}) => {
+      onNodeReady: (node, { resumed }) => {
         if (!resumed) return
         const batch = []
         for (const player of this.players.values()) {
           if (player.nodes === node && player.connection) batch.push(player)
         }
-        if (batch.length) queueMicrotask(() => batch.forEach(p => p.connection.resendVoiceUpdate({resume: true})))
+        if (batch.length) queueMicrotask(() => batch.forEach(p => p.connection.resendVoiceUpdate()))
       }
     }
     this.on(AqualinkEvents.NodeConnect, this._eventHandlers.onNodeConnect)
@@ -170,8 +181,10 @@ class Aqua extends EventEmitter {
       this._eventHandlers = null
     }
     this.removeAllListeners()
-    this.nodeMap.forEach(node => this._destroyNode(node.name || node.host))
-    this.players.forEach(player => _functions.safeCall(() => player.destroy()))
+
+    for (const id of Array.from(this.nodeMap.keys())) this._destroyNode(id)
+    for (const player of Array.from(this.players.values())) _functions.safeCall(() => player.destroy())
+
     this.players.clear()
     this._nodeStates.clear()
     this._failoverQueue.clear()
@@ -219,7 +232,7 @@ class Aqua extends EventEmitter {
       (stats.playingPlayers || 0) * 0.75 +
       (stats.memory ? stats.memory.used / reservable : 0) * 40 +
       (node.rest?.calls || 0) * 0.001
-    this._nodeLoadCache.set(id, {load, time: now})
+    this._nodeLoadCache.set(id, { load, time: now })
     if (this._nodeLoadCache.size > MAX_CACHE_SIZE) {
       const first = this._nodeLoadCache.keys().next().value
       this._nodeLoadCache.delete(first)
@@ -232,7 +245,7 @@ class Aqua extends EventEmitter {
     this.clientId = clientId
     if (!this.clientId) return this
     const results = await Promise.allSettled(
-      this.nodes.map(n => Promise.race([this._createNode(n), _functions.delay(NODE_TIMEOUT).then(() => {throw new Error('Timeout')})]))
+      this.nodes.map(n => Promise.race([this._createNode(n), _functions.delay(NODE_TIMEOUT).then(() => { throw new Error('Timeout') })]))
     )
     if (!results.some(r => r.status === 'fulfilled')) throw new Error('No nodes connected')
     if (this.plugins?.length) {
@@ -248,10 +261,10 @@ class Aqua extends EventEmitter {
     const node = new Node(this, options, this.options)
     node.players = new Set()
     this.nodeMap.set(id, node)
-    this._nodeStates.set(id, {connected: false, failoverInProgress: false})
+    this._nodeStates.set(id, { connected: false, failoverInProgress: false })
     try {
       await node.connect()
-      this._nodeStates.set(id, {connected: true, failoverInProgress: false})
+      this._nodeStates.set(id, { connected: true, failoverInProgress: false })
       this._invalidateCache()
       this.emit(AqualinkEvents.NodeCreate, node)
       return node
@@ -303,7 +316,7 @@ class Aqua extends EventEmitter {
     const now = Date.now()
     for (const [guildId, state] of this._brokenPlayers) {
       if (state.originalNodeId === id && (now - state.brokenAt) < BROKEN_PLAYER_TTL) {
-        rebuilds.push({guildId, state})
+        rebuilds.push({ guildId, state })
       }
     }
     if (!rebuilds.length) return
@@ -311,7 +324,7 @@ class Aqua extends EventEmitter {
     for (let i = 0; i < rebuilds.length; i += MAX_CONCURRENT_OPS) {
       const batch = rebuilds.slice(i, i + MAX_CONCURRENT_OPS)
       const results = await Promise.allSettled(
-        batch.map(({guildId, state}) => this._rebuildPlayer(state, node).then(() => guildId))
+        batch.map(({ guildId, state }) => this._rebuildPlayer(state, node).then(() => guildId))
       )
       for (const r of results) {
         if (r.status === 'fulfilled') successes.push(r.value)
@@ -323,7 +336,7 @@ class Aqua extends EventEmitter {
   }
 
   async _rebuildPlayer(state, targetNode) {
-    const {guildId, textChannel, voiceChannel, current, volume = 65, deaf = true} = state
+    const { guildId, textChannel, voiceChannel, current, volume = 65, deaf = true } = state
     const lockKey = `rebuild_${guildId}`
     if (this._rebuildLocks.has(lockKey)) return
     this._rebuildLocks.add(lockKey)
@@ -332,11 +345,11 @@ class Aqua extends EventEmitter {
         await this.destroyPlayer(guildId)
         await _functions.delay(RECONNECT_DELAY)
       }
-      const player = this.createPlayer(targetNode, {guildId, textChannel, voiceChannel, defaultVolume: volume, deaf})
+      const player = this.createPlayer(targetNode, { guildId, textChannel, voiceChannel, defaultVolume: volume, deaf })
       if (current && player?.queue?.add) {
         player.queue.add(current)
         await player.play()
-        if (state.position > 0) setTimeout(() => player.seek?.(state.position), SEEK_DELAY)
+        if (state.position > 0) _functions.unrefTimeout(() => player.seek?.(state.position), SEEK_DELAY)
         if (state.paused) player.pause(true)
       }
       return player
@@ -356,7 +369,7 @@ class Aqua extends EventEmitter {
     const attempts = this._failoverQueue.get(id) || 0
     if (attempts >= this.failoverOptions.maxFailoverAttempts) return
 
-    this._nodeStates.set(id, {connected: false, failoverInProgress: true})
+    this._nodeStates.set(id, { connected: false, failoverInProgress: true })
     this._lastFailoverAttempt.set(id, now)
     this._failoverQueue.set(id, attempts + 1)
 
@@ -378,7 +391,7 @@ class Aqua extends EventEmitter {
     } catch (error) {
       this.emit(AqualinkEvents.Error, null, error)
     } finally {
-      this._nodeStates.set(id, {connected: false, failoverInProgress: false})
+      this._nodeStates.set(id, { connected: false, failoverInProgress: false })
     }
   }
 
@@ -402,7 +415,7 @@ class Aqua extends EventEmitter {
     for (let i = 0; i < players.length; i += MAX_CONCURRENT_OPS) {
       const batch = players.slice(i, i + MAX_CONCURRENT_OPS)
       const batchResults = await Promise.allSettled(batch.map(p => this._migratePlayer(p, pickNode)))
-      for (const r of batchResults) results.push({success: r.status === 'fulfilled', error: r.reason})
+      for (const r of batchResults) results.push({ success: r.status === 'fulfilled', error: r.reason })
     }
     return results
   }
@@ -410,7 +423,7 @@ class Aqua extends EventEmitter {
   async _migratePlayer(player, pickNode) {
     const state = this._capturePlayerState(player)
     if (!state) throw new Error('Failed to capture state')
-    const {maxRetries, retryDelay} = this.failoverOptions
+    const { maxRetries, retryDelay } = this.failoverOptions
     for (let retry = 0; retry < maxRetries; retry++) {
       try {
         const targetNode = pickNode()
@@ -461,10 +474,10 @@ class Aqua extends EventEmitter {
     }
     if (state.queue?.length && newPlayer.queue?.add) newPlayer.queue.add(...state.queue)
     if (state.current && this.failoverOptions.preservePosition) {
-      newPlayer.queue?.add?.(state.current, {toFront: true})
+      newPlayer.queue?.add?.(state.current, { toFront: true })
       if (this.failoverOptions.resumePlayback) {
         ops.push(newPlayer.play())
-        if (state.position > 0) setTimeout(() => newPlayer.seek?.(state.position), SEEK_DELAY)
+        if (state.position > 0) _functions.unrefTimeout(() => newPlayer.seek?.(state.position), SEEK_DELAY)
         if (state.paused) ops.push(newPlayer.pause(true))
       }
     }
@@ -473,7 +486,7 @@ class Aqua extends EventEmitter {
     await Promise.allSettled(ops)
   }
 
-  updateVoiceState({d, t}) {
+  updateVoiceState({ d, t }) {
     if (!d?.guild_id || (t !== 'VOICE_STATE_UPDATE' && t !== 'VOICE_SERVER_UPDATE')) return
     const player = this.players.get(d.guild_id)
     if (!player || !player.nodes?.connected) return
@@ -539,7 +552,7 @@ class Aqua extends EventEmitter {
     await _functions.safeCall(() => player.destroy())
   }
 
-  async resolve({query, source, requester, nodes}) {
+  async resolve({ query, source, requester, nodes }) {
     if (!this.initiated) throw new Error('Aqua not initialized')
     const node = this._getRequestNode(nodes)
     if (!node) throw new Error('No nodes available')
@@ -580,8 +593,8 @@ class Aqua extends EventEmitter {
   }
 
   _constructResponse(response, requester, node) {
-    const {loadType, data, pluginInfo: rootPlugin} = response || {}
-    const base = {loadType, exception: null, playlistInfo: null, pluginInfo: rootPlugin || {}, tracks: []}
+    const { loadType, data, pluginInfo: rootPlugin } = response || {}
+    const base = { loadType, exception: null, playlistInfo: null, pluginInfo: rootPlugin || {}, tracks: [] }
     if (loadType === 'error' || loadType === 'LOAD_FAILED') {
       base.exception = data || response.exception || null
       return base
@@ -615,7 +628,7 @@ class Aqua extends EventEmitter {
   async search(query, requester, source) {
     if (!query || !requester) return null
     try {
-      const {tracks} = await this.resolve({query, source: source || this.defaultSearchPlatform, requester})
+      const { tracks } = await this.resolve({ query, source: source || this.defaultSearchPlatform, requester })
       return tracks || null
     } catch {
       return null
@@ -627,8 +640,8 @@ class Aqua extends EventEmitter {
     const tempFile = `${filePath}.tmp`
     let ws = null
     try {
-      await fs.promises.writeFile(lockFile, String(process.pid), {flag: 'wx'})
-      ws = fs.createWriteStream(tempFile, {encoding: 'utf8', flags: 'w'})
+      await fs.promises.writeFile(lockFile, String(process.pid), { flag: 'wx' })
+      ws = fs.createWriteStream(tempFile, { encoding: 'utf8', flags: 'w' })
       const buffer = []
       let drainPromise = Promise.resolve()
 
@@ -679,11 +692,11 @@ class Aqua extends EventEmitter {
     let stream = null, rl = null
     try {
       await fs.promises.access(filePath)
-      await fs.promises.writeFile(lockFile, String(process.pid), {flag: 'wx'})
+      await fs.promises.writeFile(lockFile, String(process.pid), { flag: 'wx' })
       await this._waitForFirstNode()
 
-      stream = fs.createReadStream(filePath, {encoding: 'utf8'})
-      rl = readline.createInterface({input: stream, crlfDelay: Infinity})
+      stream = fs.createReadStream(filePath, { encoding: 'utf8' })
+      rl = readline.createInterface({ input: stream, crlfDelay: Infinity })
 
       const batch = []
       for await (const line of rl) {
@@ -718,7 +731,7 @@ class Aqua extends EventEmitter {
       player._resuming = !!p.resuming
       const requester = _functions.parseRequester(p.r)
       const tracksToResolve = [p.u, ...(p.q || [])].filter(Boolean).slice(0, MAX_TRACKS_RESTORE)
-      const resolved = await Promise.all(tracksToResolve.map(uri => this.resolve({query: uri, requester}).catch(() => null)))
+      const resolved = await Promise.all(tracksToResolve.map(uri => this.resolve({ query: uri, requester }).catch(() => null)))
       const validTracks = resolved.flatMap(r => r?.tracks || [])
       if (validTracks.length && player.queue?.add) {
         if (player.queue.length <= 2) player.queue.length = 0
@@ -730,14 +743,14 @@ class Aqua extends EventEmitter {
           else player.volume = p.vol
         }
         await player.play()
-        if (p.p > 0) setTimeout(() => player.seek?.(p.p), SEEK_DELAY)
+        if (p.p > 0) _functions.unrefTimeout(() => player.seek?.(p.p), SEEK_DELAY)
         if (p.pa) await player.pause(true)
       }
       if (p.nw && p.t) {
         const channel = this.client.channels?.cache?.get(p.t)
         if (channel?.messages) player.nowPlayingMessage = await channel.messages.fetch(p.nw).catch(() => null)
       }
-    } catch {}
+    } catch { }
   }
 
   async _waitForFirstNode(timeout = NODE_TIMEOUT) {
@@ -755,6 +768,7 @@ class Aqua extends EventEmitter {
         if (this.leastUsedNodes.length) { cleanup(); resolve() }
       }
       const timer = setTimeout(() => { cleanup(); reject(new Error('Timeout waiting for first node')) }, timeout)
+      timer.unref?.()
       this.on(AqualinkEvents.NodeConnect, onReady)
       this.on(AqualinkEvents.NodeCreate, onReady)
       onReady()

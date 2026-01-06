@@ -193,6 +193,9 @@ class Player extends EventEmitter {
     this.previousTracks = new CircularBuffer(PREVIOUS_TRACKS_SIZE)
     this._updateBatcher = batcherPool.acquire(this)
 
+    this._voiceRequestAt = 0
+    this._voiceRequestChannel = null
+    this._suppressResumeUntil = 0
     this._bindEvents()
     this._startWatchdog()
   }
@@ -241,6 +244,7 @@ class Player extends EventEmitter {
         this._voiceDownSince = Date.now()
         this._createTimer(() => {
           if (this.connected || this.destroyed || this.nodes?.info?.isNodelink) return
+          if (Date.now() < (this._suppressResumeUntil || 0)) return
           this.connection.attemptResume()
         }, 1000)
       }
@@ -337,13 +341,24 @@ class Player extends EventEmitter {
 
   connect(options = {}) {
     if (this.destroyed) throw new Error('Cannot connect destroyed player')
+
     const voiceChannel = _functions.toId(options.voiceChannel || this.voiceChannel)
     if (!voiceChannel) throw new TypeError('Voice channel required')
+
     this.deaf = options.deaf !== undefined ? !!options.deaf : true
     this.mute = !!options.mute
     this.destroyed = false
+
+    this._voiceRequestAt = Date.now()
+    this._voiceRequestChannel = voiceChannel
+
     this.voiceChannel = voiceChannel
-    this.send({ guild_id: this.guildId, channel_id: voiceChannel, self_deaf: this.deaf, self_mute: this.mute })
+    this.send({
+      guild_id: this.guildId,
+      channel_id: voiceChannel,
+      self_deaf: this.deaf,
+      self_mute: this.mute
+    })
     return this
   }
 
@@ -432,6 +447,9 @@ class Player extends EventEmitter {
     this._dataStore = null
 
     if (this.current?.dispose && !this.aqua?.options?.autoResume) this.current.dispose()
+    if (this.connection) {
+      try { this.connection.destroy() } catch { }
+    }
     this.connection = this.filters = this.current = this.autoplaySeed = null
 
     if (!skipRemote) {
@@ -757,14 +775,20 @@ class Player extends EventEmitter {
     if (this.destroyed) return
     const code = payload?.code
 
-    if (code === 4022) {
+    if (code === 4014 || code === 4022) {
       this.aqua.emit(AqualinkEvents.SocketClosed, this, payload)
-      this.destroy()
+
+      this.connected = false
+      if (!this._voiceDownSince) this._voiceDownSince = Date.now()
+
+      if (code !== 4014) {
+        this._suppressResumeUntil = Date.now() + 3000
+      }
       return
     }
 
     if (code === 4015 && !this.nodes?.info?.isNodelink) {
-      try { await this._attemptVoiceResume(); return } catch { }
+      try { await this._attemptVoiceResume(); return } catch { /* ignore */ }
     }
 
     if (![4015, 4009, 4006].includes(code)) {
@@ -845,21 +869,12 @@ class Player extends EventEmitter {
       }
     }
 
-    // If the code is 4014 (Disconnected/Moved), do NOT manually reconnect.
-    // Let the Voice Server Update handler manage the move, or stop if kicked.
-    if (payload && payload.code === 4014) {
-      aqua.emit(AqualinkEvents.Debug, this, `[Player] Received 4014 (Disconnected/Moved). Stopping auto-reconnect to allow Voice Server Update or cleanup.`)
-      return;
-    } 
-
     tryReconnect(1)
   }
 
   _handleAquaPlayerMove(oldChannel, newChannel) {
     if (_functions.toId(oldChannel) !== _functions.toId(this.voiceChannel)) return
     this.voiceChannel = _functions.toId(newChannel)
-    this.connected = !!newChannel
-    this.send({ guild_id: this.guildId, channel_id: this.voiceChannel, self_deaf: this.deaf, self_mute: this.mute })
   }
 
   send(data) {
