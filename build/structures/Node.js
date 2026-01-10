@@ -1,6 +1,10 @@
 'use strict'
 
-const WebSocket = require('ws')
+const IS_BUN = !!(process?.isBun || process?.versions?.bun || globalThis.Bun)
+if (process && typeof process.isBun !== 'boolean') process.isBun = IS_BUN
+
+const WebSocketImpl = process.isBun ? globalThis.WebSocket : require('ws')
+
 const Rest = require('./Rest')
 const { AqualinkEvents } = require('./AqualinkEvents')
 
@@ -15,11 +19,12 @@ const OPS_READY = 'ready'
 const OPS_PLAYER_UPDATE = 'playerUpdate'
 const OPS_EVENT = 'event'
 
+const unrefTimer = (t) => { try { t?.unref?.() } catch {} }
+
 const _functions = {
   buildWsUrl(host, port, ssl) {
     const needsBrackets = host.includes(':') && !host.startsWith('[')
-    const h = needsBrackets ? `[${host}]` : host
-    return `ws${ssl ? 's' : ''}://${h}:${port}${WS_PATH}`
+    return `ws${ssl ? 's' : ''}://${needsBrackets ? `[${host}]` : host}:${port}${WS_PATH}`
   },
 
   isLyricsOp(op) {
@@ -30,8 +35,13 @@ const _functions = {
     if (!reason) return 'No reason provided'
     if (typeof reason === 'string') return reason
     if (Buffer.isBuffer(reason)) {
-      try { return reason.toString('utf8') }
-      catch { return String(reason) }
+      try { return reason.toString('utf8') } catch { return String(reason) }
+    }
+    if (reason instanceof ArrayBuffer) {
+      try { return Buffer.from(reason).toString('utf8') } catch { return String(reason) }
+    }
+    if (ArrayBuffer.isView(reason)) {
+      try { return Buffer.from(reason.buffer, reason.byteOffset, reason.byteLength).toString('utf8') } catch { return String(reason) }
     }
     if (typeof reason === 'object') return reason.message || reason.code || JSON.stringify(reason)
     return String(reason)
@@ -87,6 +97,9 @@ class Node {
     this._isConnecting = false
     this.isNodelink = false
 
+    this._wsIsBun = !!process.isBun
+    this._bunCleanup = null
+
     this.stats = {
       players: 0,
       playingPlayers: 0,
@@ -113,13 +126,11 @@ class Node {
 
   _buildHeaders() {
     const headers = {
-      'Authorization': this.auth,
+      Authorization: this.auth,
       'User-Id': this.aqua.clientId,
       'Client-Name': this._clientName
     }
-    if (this.sessionId) {
-      headers['Session-Id'] = this.sessionId
-    }
+    if (this.sessionId) headers['Session-Id'] = this.sessionId
     return headers
   }
 
@@ -147,11 +158,11 @@ class Node {
       const timeoutId = setTimeout(() => {
         if (!this.isDestroyed) this._emitError('Node info fetch timeout')
       }, Node.INFO_FETCH_TIMEOUT)
-      timeoutId.unref?.()
+      unrefTimer(timeoutId)
 
       try {
         this.info = await this.rest.makeRequest('GET', '/v4/info')
-        this.isNodelink = !!this.info?.isNodelink;
+        this.isNodelink = !!this.info?.isNodelink
       } catch (err) {
         this.info = null
         this._emitError(`Failed to fetch node info: ${_functions.errMsg(err)}`)
@@ -195,7 +206,6 @@ class Node {
   _emitToPlayer(eventName, payload) {
     const player = this._getPlayer(payload?.guildId)
     if (!player?.emit) return
-
     try {
       player.emit(eventName, payload)
     } catch (err) {
@@ -216,7 +226,10 @@ class Node {
     this.connected = false
     this._isConnecting = false
 
-    this.aqua.emit(AqualinkEvents.NodeDisconnect, this, { code, reason: _functions.reasonToString(reason) })
+    this.aqua.emit(AqualinkEvents.NodeDisconnect, this, {
+      code,
+      reason: _functions.reasonToString(reason)
+    })
 
     if (this.isDestroyed) return
 
@@ -244,9 +257,13 @@ class Node {
     const attempt = ++this.reconnectAttempted
 
     if (this.infiniteReconnects) {
-      this.aqua.emit(AqualinkEvents.NodeReconnect, this, { infinite: true, attempt, backoffTime: Node.INFINITE_BACKOFF })
+      this.aqua.emit(AqualinkEvents.NodeReconnect, this, {
+        infinite: true,
+        attempt,
+        backoffTime: Node.INFINITE_BACKOFF
+      })
       this.reconnectTimeoutId = setTimeout(this._boundHandlers.connect, Node.INFINITE_BACKOFF)
-      this.reconnectTimeoutId.unref?.()
+      unrefTimer(this.reconnectTimeoutId)
       return
     }
 
@@ -259,7 +276,7 @@ class Node {
     const backoffTime = this._calcBackoff(attempt)
     this.aqua.emit(AqualinkEvents.NodeReconnect, this, { infinite: false, attempt, backoffTime })
     this.reconnectTimeoutId = setTimeout(this._boundHandlers.connect, backoffTime)
-    this.reconnectTimeoutId.unref?.()
+    unrefTimer(this.reconnectTimeoutId)
   }
 
   _calcBackoff(attempt) {
@@ -269,21 +286,20 @@ class Node {
   }
 
   _clearReconnectTimeout() {
-    if (this.reconnectTimeoutId) {
-      clearTimeout(this.reconnectTimeoutId)
-      this.reconnectTimeoutId = null
-    }
+    if (!this.reconnectTimeoutId) return
+    clearTimeout(this.reconnectTimeoutId)
+    this.reconnectTimeoutId = null
   }
 
   connect() {
     if (this.isDestroyed || this._isConnecting) return
 
-    const currentState = this.ws?.readyState
-    if (currentState === WS_STATES.OPEN) {
+    const state = this.ws?.readyState
+    if (state === WS_STATES.OPEN) {
       this._emitDebug('WebSocket already connected')
       return
     }
-    if (currentState === WS_STATES.CONNECTING || currentState === WS_STATES.CLOSING) {
+    if (state === WS_STATES.CONNECTING || state === WS_STATES.CLOSING) {
       this._emitDebug('WebSocket is connecting/closing; skipping new connect')
       return
     }
@@ -292,7 +308,47 @@ class Node {
     this._cleanup()
 
     try {
-      const ws = new WebSocket(this.wsUrl, {
+      const h = this._boundHandlers
+
+      if (this._wsIsBun) {
+        const ws = new WebSocketImpl(this.wsUrl, { headers: this._headers })
+        ws.binaryType = 'arraybuffer'
+
+        const offs = []
+        const add = (type, fn, once = false) => {
+          const wrapped = once
+            ? (ev) => { try { ws.removeEventListener(type, wrapped) } catch {} ; fn(ev) }
+            : fn
+          ws.addEventListener(type, wrapped)
+          offs.push(() => { try { ws.removeEventListener(type, wrapped) } catch {} })
+        }
+
+        add('open', () => h.open(), true)
+
+        add('error', (event) => {
+          const err = event?.error
+          h.error(err instanceof Error ? err : new Error('WebSocket error'))
+        }, true)
+
+        add('message', (event) => {
+          const data = event?.data
+          if (typeof data === 'string') h.message(data, false)
+          else h.message(data, true)
+        })
+
+        add('close', (event) => {
+          h.close(
+            typeof event?.code === 'number' ? event.code : Node.WS_CLOSE_NORMAL,
+            typeof event?.reason === 'string' ? event.reason : ''
+          )
+        }, true)
+
+        this._bunCleanup = () => { for (let i = 0; i < offs.length; i++) offs[i]() }
+        this.ws = ws
+        return
+      }
+
+      const ws = new WebSocketImpl(this.wsUrl, {
         headers: this._headers,
         perMessageDeflate: true,
         handshakeTimeout: this.timeout,
@@ -302,7 +358,6 @@ class Node {
 
       ws.binaryType = 'nodebuffer'
 
-      const h = this._boundHandlers
       ws.once('open', h.open)
       ws.once('error', h.error)
       ws.on('message', h.message)
@@ -320,12 +375,20 @@ class Node {
     const ws = this.ws
     if (!ws) return
 
-    ws.removeAllListeners()
+    if (this._wsIsBun) {
+      try { this._bunCleanup?.() } catch {}
+      this._bunCleanup = null
+    } else {
+      ws.removeAllListeners?.()
+    }
 
     try {
       const state = ws.readyState
-      if (state === WS_STATES.OPEN) ws.close(Node.WS_CLOSE_NORMAL)
-      else if (state !== WS_STATES.CLOSED) ws.terminate()
+      if (state === WS_STATES.OPEN || state === WS_STATES.CONNECTING) {
+        ws.close(Node.WS_CLOSE_NORMAL)
+      } else if (!this._wsIsBun && state !== WS_STATES.CLOSED) {
+        ws.terminate?.()
+      }
     } catch (err) {
       this._emitError(`WebSocket cleanup error: ${_functions.errMsg(err)}`)
     }
@@ -427,9 +490,7 @@ class Node {
   }
 
   async _resumePlayers() {
-    if (!this.sessionId) {
-      return
-    }
+    if (!this.sessionId) return
 
     try {
       await this.rest.makeRequest('PATCH', `/v4/sessions/${this.sessionId}`, {
@@ -452,7 +513,11 @@ class Node {
 
   _emitDebug(message) {
     if (!this.aqua?.listenerCount?.(AqualinkEvents.Debug)) return
-    this.aqua.emit(AqualinkEvents.Debug, this.name, typeof message === 'function' ? message() : message)
+    this.aqua.emit(
+      AqualinkEvents.Debug,
+      this.name,
+      typeof message === 'function' ? message() : message
+    )
   }
 }
 
