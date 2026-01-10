@@ -1,8 +1,12 @@
+'use strict'
+
 const { Buffer } = require('buffer')
 const { Agent: HttpsAgent, request: httpsRequest } = require('https')
 const { Agent: HttpAgent, request: httpRequest } = require('http')
 const http2 = require('http2')
 const { createBrotliDecompress, createUnzip, brotliDecompressSync, unzipSync } = require('zlib')
+
+const unrefTimer = (t) => { try { t?.unref?.() } catch {} }
 
 const BASE64_LOOKUP = new Uint8Array(256)
 for (let i = 65; i <= 90; i++) BASE64_LOOKUP[i] = 1
@@ -12,7 +16,6 @@ BASE64_LOOKUP[43] = BASE64_LOOKUP[47] = BASE64_LOOKUP[61] = BASE64_LOOKUP[95] = 
 
 const ENCODING_NONE = 0, ENCODING_BR = 1, ENCODING_GZIP = 2, ENCODING_DEFLATE = 3
 const MAX_RESPONSE_SIZE = 10485760
-const SMALL_RESPONSE_THRESHOLD = 512
 const COMPRESSION_MIN_SIZE = 1024
 const API_VERSION = 'v4'
 const UTF8 = 'utf8'
@@ -160,7 +163,7 @@ class Rest {
 
   _buildHeaders(hasPayload, payloadLength) {
     if (!hasPayload) return this.defaultHeaders
-    let h = this._headerPool.pop() || Object.create(null)
+    const h = this._headerPool.pop() || Object.create(null)
     h.Authorization = this.defaultHeaders.Authorization
     h.Accept = this.defaultHeaders.Accept
     h['Accept-Encoding'] = this.defaultHeaders['Accept-Encoding']
@@ -194,7 +197,8 @@ class Rest {
 
   _h1Request(method, url, headers, payload) {
     return new Promise((resolve, reject) => {
-      let req, timer, done = false, chunks = [], size = 0, prealloc = null
+      let req, timer, done = false
+      let chunks = null, size = 0, prealloc = null
 
       const finish = (ok, val) => {
         if (done) return
@@ -208,7 +212,7 @@ class Rest {
       req = this.request(url, { method, headers, agent: this.agent, timeout: this.timeout }, (res) => {
         if (timer) { clearTimeout(timer); timer = null }
 
-        const status = res.statusCode
+        const status = res.statusCode || 0
         const cl = res.headers['content-length']
         const contentType = res.headers['content-type'] || ''
 
@@ -226,6 +230,8 @@ class Rest {
         const encoding = _functions.getEncodingType(res.headers['content-encoding'])
 
         const handleResponse = (buffer) => {
+          if (buffer.length > MAX_RESPONSE_SIZE) return finish(false, ERRORS.RESPONSE_TOO_LARGE)
+
           const text = buffer.toString(UTF8)
           try {
             const result = _functions.parseBody(text, contentType, false)
@@ -239,15 +245,16 @@ class Rest {
           }
         }
 
-        if (clInt > 0 && clInt < SMALL_RESPONSE_THRESHOLD && encoding === ENCODING_NONE) {
-          res.once('data', handleResponse)
-          res.once('error', (e) => finish(false, e))
-          return
-        }
-
+        // For tiny compressed payloads, buffer compressed then decompress sync (fast path)
         if (encoding !== ENCODING_NONE && clInt > 0 && clInt < COMPRESSION_MIN_SIZE) {
           const compressed = []
-          res.on('data', (c) => compressed.push(c))
+          let csize = 0
+
+          res.on('data', (c) => {
+            csize += c.length
+            if (csize > MAX_RESPONSE_SIZE) return finish(false, ERRORS.RESPONSE_TOO_LARGE)
+            compressed.push(c)
+          })
           res.once('end', () => {
             try {
               handleResponse(_functions.decompressSync(Buffer.concat(compressed), encoding))
@@ -255,12 +262,17 @@ class Rest {
               finish(false, e)
             }
           })
+          res.once('aborted', () => finish(false, ERRORS.RESPONSE_ABORTED))
           res.once('error', (e) => finish(false, e))
           return
         }
 
-        if (clInt > 0 && clInt <= MAX_RESPONSE_SIZE) prealloc = Buffer.allocUnsafe(clInt)
-        chunks = []
+        // Only prealloc when NOT compressed (content-length is reliable for final size)
+        if (encoding === ENCODING_NONE && clInt > 0 && clInt <= MAX_RESPONSE_SIZE) {
+          prealloc = Buffer.allocUnsafe(clInt)
+        } else {
+          chunks = []
+        }
 
         let stream = res
         if (encoding !== ENCODING_NONE) {
@@ -286,12 +298,17 @@ class Rest {
 
         stream.once('end', () => {
           if (size === 0) return finish(true, null)
-          handleResponse(prealloc ? prealloc.slice(0, size) : (chunks.length === 1 ? chunks[0] : Buffer.concat(chunks, size)))
+          handleResponse(
+            prealloc
+              ? prealloc.slice(0, size)
+              : (chunks.length === 1 ? chunks[0] : Buffer.concat(chunks, size))
+          )
         })
       })
 
       req.once('error', (e) => finish(false, e))
       timer = setTimeout(() => finish(false, new Error(`Request timeout: ${this.timeout}ms`)), this.timeout)
+      unrefTimer(timer)
       payload ? req.end(payload) : req.end()
     })
   }
@@ -301,7 +318,8 @@ class Rest {
       this._clearH2()
       this._h2 = http2.connect(this.baseUrl)
       this._h2Timer = setTimeout(() => this._closeH2(), H2_TIMEOUT)
-      this._h2Timer.unref()
+      unrefTimer(this._h2Timer)
+
       const onEnd = () => this._clearH2()
       this._h2.once('error', onEnd)
       this._h2.once('close', onEnd)
@@ -317,14 +335,18 @@ class Rest {
 
   _closeH2() {
     if (this._h2Timer) { clearTimeout(this._h2Timer); this._h2Timer = null }
-    if (this._h2) { try { this._h2.close() } catch { } this._h2 = null }
+    if (this._h2) {
+      try { this._h2.close() } catch {}
+      this._h2 = null
+    }
   }
 
   _h2Request(method, path, headers, payload) {
     const session = this._getH2Session()
 
     return new Promise((resolve, reject) => {
-      let req, timer, done = false, chunks = [], size = 0, prealloc = null
+      let req, timer, done = false
+      let chunks = null, size = 0, prealloc = null
 
       const finish = (ok, val) => {
         if (done) return
@@ -353,6 +375,7 @@ class Rest {
 
         const status = rh[':status'] || 0
         const cl = rh['content-length']
+        const contentType = rh['content-type'] || ''
 
         if (status === 204 || cl === '0') {
           req.resume()
@@ -365,9 +388,15 @@ class Rest {
           return finish(false, ERRORS.RESPONSE_TOO_LARGE)
         }
 
-        if (clInt > 0 && clInt <= MAX_RESPONSE_SIZE) prealloc = Buffer.allocUnsafe(clInt)
-
         const encoding = _functions.getEncodingType(rh['content-encoding'])
+
+        // Only prealloc when NOT compressed
+        if (encoding === ENCODING_NONE && clInt > 0 && clInt <= MAX_RESPONSE_SIZE) {
+          prealloc = Buffer.allocUnsafe(clInt)
+        } else {
+          chunks = []
+        }
+
         const decomp = encoding !== ENCODING_NONE ? _functions.createDecompressor(encoding) : null
         const stream = decomp ? req.pipe(decomp) : req
 
@@ -387,9 +416,13 @@ class Rest {
 
         stream.once('end', () => {
           if (size === 0) return finish(true, null)
-          const buffer = prealloc ? prealloc.slice(0, size) : (chunks.length === 1 ? chunks[0] : Buffer.concat(chunks, size))
+
+          const buffer = prealloc
+            ? prealloc.slice(0, size)
+            : (chunks.length === 1 ? chunks[0] : Buffer.concat(chunks, size))
+
           try {
-            const result = JSON.parse(buffer.toString(UTF8))
+            const result = _functions.parseBody(buffer.toString(UTF8), contentType, true)
             if (status >= 400) {
               finish(false, _functions.createHttpError(status, method, this.baseUrl + path, rh, result))
             } else {
@@ -402,6 +435,7 @@ class Rest {
       })
 
       timer = setTimeout(() => finish(false, new Error(`Request timeout: ${this.timeout}ms`)), this.timeout)
+      unrefTimer(timer)
       payload ? req.end(payload) : req.end()
     })
   }
@@ -480,14 +514,14 @@ class Rest {
       try {
         const lyrics = await this.makeRequest('GET', `${this._getSessionPath()}/players/${guildId}/track/lyrics?skipTrackSource=${skip}`)
         if (this._validLyrics(lyrics)) return lyrics
-      } catch { }
+      } catch {}
     }
 
     if (hasEncoded) {
       try {
         const lyrics = await this.makeRequest('GET', `${this._endpoints.lyrics}?track=${encodeURIComponent(encoded)}&skipTrackSource=${skip}`)
         if (this._validLyrics(lyrics)) return lyrics
-      } catch { }
+      } catch {}
     }
 
     if (title) {
@@ -495,7 +529,7 @@ class Rest {
       try {
         const lyrics = await this.makeRequest('GET', `${this._endpoints.lyrics}/search?query=${encodeURIComponent(query)}`)
         if (this._validLyrics(lyrics)) return lyrics
-      } catch { }
+      } catch {}
     }
 
     return null
@@ -510,7 +544,10 @@ class Rest {
 
   async subscribeLiveLyrics(guildId, skipTrackSource = false) {
     try {
-      return await this.makeRequest('POST', `${this._getSessionPath()}/players/${guildId}/lyrics/subscribe?skipTrackSource=${skipTrackSource ? 'true' : 'false'}`) === null
+      return await this.makeRequest(
+        'POST',
+        `${this._getSessionPath()}/players/${guildId}/lyrics/subscribe?skipTrackSource=${skipTrackSource ? 'true' : 'false'}`
+      ) === null
     } catch {
       return false
     }
@@ -538,12 +575,12 @@ class Rest {
       volume: options.volume !== undefined ? options.volume : 0.8
     }
 
-    return await this.makeRequest("POST", `/v4/sessions/${this.sessionId}/players/${guildId}/mix`, payload)
+    return this.makeRequest('POST', `/v4/sessions/${this.sessionId}/players/${guildId}/mix`, payload)
   }
 
   async getActiveMixer(guildId) {
     if (!this.node.isNodelink) throw new Error('Mixer endpoints are only available on Nodelink nodes')
-    const response = await this.makeRequest("GET", `/v4/sessions/${this.sessionId}/players/${guildId}/mix`)
+    const response = await this.makeRequest('GET', `/v4/sessions/${this.sessionId}/players/${guildId}/mix`)
     return response?.mixes || []
   }
 
@@ -551,16 +588,15 @@ class Rest {
     if (!this.node.isNodelink) throw new Error('Mixer endpoints are only available on Nodelink nodes')
     if (!guildId || !mix || typeof volume !== 'number') throw new Error('You forget to set the guild_id, mix or volume options')
 
-    return await this.makeRequest("PATCH", `/v4/sessions/${this.sessionId}/players/${guildId}/mix/${mix}`, { volume })
+    return this.makeRequest('PATCH', `/v4/sessions/${this.sessionId}/players/${guildId}/mix/${mix}`, { volume })
   }
 
   async removeMixer(guildId, mix) {
     if (!this.node.isNodelink) throw new Error('Mixer endpoints are only available on Nodelink nodes')
     if (!guildId || !mix) throw new Error('You forget to set the guild_id and/or mix options')
 
-    return await this.makeRequest("DELETE", `/v4/sessions/${this.sessionId}/players/${guildId}/mix/${mix}`)
+    return this.makeRequest('DELETE', `/v4/sessions/${this.sessionId}/players/${guildId}/mix/${mix}`)
   }
-
 
   destroy() {
     if (this.agent) { this.agent.destroy(); this.agent = null }
