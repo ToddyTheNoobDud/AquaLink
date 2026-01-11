@@ -45,6 +45,7 @@ const PREVIOUS_IDS_MAX = 20
 const AUTOPLAY_MAX = 3
 const BATCHER_POOL_SIZE = 2
 const INVALID_LOADS = new Set(['error', 'empty', 'LOAD_FAILED', 'NO_MATCHES'])
+const NODELINK_STABILIZATION_DELAY = 500
 
 const _functions = {
   clamp(v) {
@@ -296,19 +297,31 @@ class Player extends EventEmitter {
     if (this.connected) return
     return new Promise((resolve, reject) => {
       let timer
-      const cleanup = () => {
-        if (timer) { this._pendingTimers?.delete(timer); clearTimeout(timer) }
-        this.off('playerUpdate', onUpdate)
-      }
       const onUpdate = payload => {
-        if (this.destroyed) { cleanup(); return reject(new Error('Player destroyed')) }
+        if (this.destroyed) {
+          if (timer) { this._pendingTimers?.delete(timer); clearTimeout(timer) }
+          this.off('playerUpdate', onUpdate)
+          return reject(new Error('Player destroyed'))
+        }
         if (payload?.state?.connected || _functions.isNum(payload?.state?.time)) {
-          cleanup()
-          return resolve()
+          this.off('playerUpdate', onUpdate)
+          if (timer) { this._pendingTimers?.delete(timer); clearTimeout(timer) }
+
+          const doResolve = () => {
+            if (!this.destroyed) resolve()
+          }
+          if (this.nodes?.info?.isNodelink) {
+            setTimeout(doResolve, NODELINK_STABILIZATION_DELAY)
+          } else {
+            doResolve()
+          }
         }
       }
       this.on('playerUpdate', onUpdate)
-      timer = this._createTimer(() => { cleanup(); reject(new Error('No connection confirmation')) }, timeout)
+      timer = this._createTimer(() => {
+        this.off('playerUpdate', onUpdate)
+        reject(new Error('No connection confirmation'))
+      }, timeout)
     })
   }
 
