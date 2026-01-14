@@ -4,9 +4,18 @@ const { Buffer } = require('buffer')
 const { Agent: HttpsAgent, request: httpsRequest } = require('https')
 const { Agent: HttpAgent, request: httpRequest } = require('http')
 const http2 = require('http2')
-const { createBrotliDecompress, createUnzip, brotliDecompressSync, unzipSync } = require('zlib')
+const {
+  createBrotliDecompress,
+  createUnzip,
+  brotliDecompressSync,
+  unzipSync,
+  createZstdDecompress,
+  zstdDecompressSync
+} = require('zlib')
 
 const unrefTimer = (t) => { try { t?.unref?.() } catch {} }
+
+const HAS_ZSTD = typeof createZstdDecompress === 'function' && typeof zstdDecompressSync === 'function'
 
 const BASE64_LOOKUP = new Uint8Array(256)
 for (let i = 65; i <= 90; i++) BASE64_LOOKUP[i] = 1
@@ -14,7 +23,7 @@ for (let i = 97; i <= 122; i++) BASE64_LOOKUP[i] = 1
 for (let i = 48; i <= 57; i++) BASE64_LOOKUP[i] = 1
 BASE64_LOOKUP[43] = BASE64_LOOKUP[47] = BASE64_LOOKUP[61] = BASE64_LOOKUP[95] = BASE64_LOOKUP[45] = 1
 
-const ENCODING_NONE = 0, ENCODING_BR = 1, ENCODING_GZIP = 2, ENCODING_DEFLATE = 3
+const ENCODING_NONE = 0, ENCODING_BR = 1, ENCODING_GZIP = 2, ENCODING_DEFLATE = 3, ENCODING_ZSTD = 4
 const MAX_RESPONSE_SIZE = 10485760
 const COMPRESSION_MIN_SIZE = 1024
 const API_VERSION = 'v4'
@@ -46,6 +55,10 @@ const _functions = {
   getEncodingType(header) {
     if (!header) return ENCODING_NONE
     const c = header.charCodeAt(0)
+
+    if (c === 122 && header.startsWith('zstd')) return ENCODING_ZSTD
+    if (c === 120 && header.startsWith('x-zstd')) return ENCODING_ZSTD
+
     if (c === 98 && header.startsWith('br')) return ENCODING_BR
     if (c === 103 && header.startsWith('gzip')) return ENCODING_GZIP
     if (c === 100 && header.startsWith('deflate')) return ENCODING_DEFLATE
@@ -71,10 +84,18 @@ const _functions = {
   },
 
   createDecompressor(type) {
+    if (type === ENCODING_ZSTD) {
+      if (!HAS_ZSTD) throw new Error('Unsupported content-encoding: zstd (zlib zstd APIs not available in this Node runtime)')
+      return createZstdDecompress()
+    }
     return type === ENCODING_BR ? createBrotliDecompress() : createUnzip()
   },
 
   decompressSync(buf, type) {
+    if (type === ENCODING_ZSTD) {
+      if (!HAS_ZSTD) throw new Error('Unsupported content-encoding: zstd (zlib zstd APIs not available in this Node runtime)')
+      return zstdDecompressSync(buf)
+    }
     return type === ENCODING_BR ? brotliDecompressSync(buf) : unzipSync(buf)
   }
 }
@@ -106,10 +127,12 @@ class Rest {
       lyrics: `${this._apiBase}/lyrics`
     })
 
+    const acceptEncoding = HAS_ZSTD ? 'zstd, br, gzip, deflate' : 'br, gzip, deflate'
+
     this.defaultHeaders = Object.freeze({
       Authorization: String(node.auth || node.password || ''),
       Accept: 'application/json, */*;q=0.5',
-      'Accept-Encoding': 'br, gzip, deflate',
+      'Accept-Encoding': acceptEncoding,
       'User-Agent': `Aqualink/${aqua?.version || '1.0'} (Node.js ${process.version})`
     })
 
@@ -245,7 +268,6 @@ class Rest {
           }
         }
 
-        // For tiny compressed payloads, buffer compressed then decompress sync (fast path)
         if (encoding !== ENCODING_NONE && clInt > 0 && clInt < COMPRESSION_MIN_SIZE) {
           const compressed = []
           let csize = 0
@@ -267,7 +289,6 @@ class Rest {
           return
         }
 
-        // Only prealloc when NOT compressed (content-length is reliable for final size)
         if (encoding === ENCODING_NONE && clInt > 0 && clInt <= MAX_RESPONSE_SIZE) {
           prealloc = Buffer.allocUnsafe(clInt)
         } else {
@@ -390,7 +411,6 @@ class Rest {
 
         const encoding = _functions.getEncodingType(rh['content-encoding'])
 
-        // Only prealloc when NOT compressed
         if (encoding === ENCODING_NONE && clInt > 0 && clInt <= MAX_RESPONSE_SIZE) {
           prealloc = Buffer.allocUnsafe(clInt)
         } else {
