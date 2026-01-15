@@ -60,6 +60,7 @@ class Filters {
     if (!player) throw new Error('Player instance is required')
     this.player = player
     this._pendingUpdate = false
+    this._dirty = new Set()
 
 
     this.filters = {
@@ -102,6 +103,7 @@ class Filters {
     if (current && _utils.shallowEqual(current, defaults, options, keys)) return this
 
     this.filters[filterName] = Object.assign({}, defaults, options)
+    this._dirty.add(filterName)
     return this._scheduleUpdate()
   }
 
@@ -122,6 +124,7 @@ class Filters {
     const next = bands ?? EMPTY_ARRAY
     if (_utils.equalizerEqual(this.filters.equalizer, next)) return this
     this.filters.equalizer = next
+    this._dirty.add('equalizer')
     return this._scheduleUpdate()
   }
 
@@ -147,7 +150,17 @@ class Filters {
 
     this.presets.bassboost = value
     const gain = (value - 1) * (1.25 / 9) - 0.25
-    return this.setEqualizer(_utils.makeEqArray(13, gain))
+
+    const current = Array.isArray(this.filters.equalizer) ? [...this.filters.equalizer] : []
+    const bands = _utils.makeEqArray(13, gain)
+
+    for (const b of bands) {
+      const idx = current.findIndex(e => e.band === b.band)
+      if (idx !== -1) current[idx] = b
+      else current.push(b)
+    }
+
+    return this.setEqualizer(current)
   }
 
   setSlowmode(enabled, options = {}) {
@@ -182,14 +195,23 @@ class Filters {
     const f = this.filters
     let changed = false
 
-    if (f.volume !== 1) { f.volume = 1; changed = true }
-    if (!_utils.eqIsEmpty(f.equalizer)) { f.equalizer = EMPTY_ARRAY; changed = true }
+    if (f.volume !== 1) {
+      f.volume = 1
+      this._dirty.add('volume')
+      changed = true
+    }
+    if (!_utils.eqIsEmpty(f.equalizer)) {
+      f.equalizer = EMPTY_ARRAY
+      this._dirty.add('equalizer')
+      changed = true
+    }
 
     const filterNames = Object.keys(FILTER_DEFAULTS)
     for (let i = 0; i < filterNames.length; i++) {
       const key = filterNames[i]
       if (f[key] !== null) {
         f[key] = null
+        this._dirty.add(key)
         changed = true
       }
     }
@@ -202,10 +224,18 @@ class Filters {
   }
 
   async updateFilters() {
-    if (!this.player) return this
+    if (!this.player || !this._dirty.size) return this
+
+    const payload = {}
+    for (const key of this._dirty) {
+      payload[key] = this.filters[key]
+    }
+
+    this._dirty.clear()
+
     await this.player.nodes.rest.updatePlayer({
       guildId: this.player.guildId,
-      data: { filters: this.filters }
+      data: { filters: payload }
     })
     return this
   }

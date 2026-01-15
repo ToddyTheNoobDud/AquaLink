@@ -52,7 +52,9 @@ const DEFAULT_OPTIONS = Object.freeze({
     resumePlayback: true,
     cooldownTime: 5000,
     maxFailoverAttempts: 5
-  })
+  }),
+  maxQueueSave: 10,
+  maxTracksRestore: 20
 })
 
 const _functions = {
@@ -118,6 +120,8 @@ class Aqua extends EventEmitter {
     this.allowedDomains = merged.allowedDomains || []
     this.loadBalancer = merged.loadBalancer
     this.useHttp2 = merged.useHttp2
+    this.maxQueueSave = merged.maxQueueSave
+    this.maxTracksRestore = merged.maxTracksRestore
     this.send = merged.send || this._createDefaultSend()
 
     this._nodeStates = new Map()
@@ -491,13 +495,11 @@ class Aqua extends EventEmitter {
     const player = this.players.get(d.guild_id)
     if (!player) return
 
-    // Attach current transaction ID to the data
     d.txId = player.txId
     if (t === 'VOICE_STATE_UPDATE') {
       if (d.user_id !== this.clientId) return
       if (player.connection) {
         if (!d.channel_id && player.connection.voiceChannel) {
-          // Let Connection.js handle null channel with its grace period
           player.connection.setStateUpdate(d)
         } else {
           player.connection.sessionId = d.session_id
@@ -666,7 +668,7 @@ class Aqua extends EventEmitter {
           u: player.current?.uri || null,
           p: player.position || 0,
           ts: player.timestamp || 0,
-          q: player.queue.slice(0, MAX_QUEUE_SAVE).map(tr => tr.uri),
+          q: player.queue.slice(0, this.maxQueueSave).map(tr => tr.uri),
           r: requester ? `${requester.id}:${requester.username}` : null,
           vol: player.volume,
           pa: player.paused,
@@ -742,7 +744,7 @@ class Aqua extends EventEmitter {
       })
       player._resuming = !!p.resuming
       const requester = _functions.parseRequester(p.r)
-      const tracksToResolve = [p.u, ...(p.q || [])].filter(Boolean).slice(0, MAX_TRACKS_RESTORE)
+      const tracksToResolve = [p.u, ...(p.q || [])].filter(Boolean).slice(0, this.maxTracksRestore)
       const resolved = await Promise.all(tracksToResolve.map(uri => this.resolve({ query: uri, requester }).catch(() => null)))
       const validTracks = resolved.flatMap(r => r?.tracks || [])
       if (validTracks.length && player.queue?.add) {

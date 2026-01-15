@@ -187,7 +187,6 @@ class Node {
 
     let payload
     try {
-      // JSON.parse accepts Buffer directly in modern Node/Bun, avoiding extra string conversion
       payload = JSON.parse(data)
     } catch (err) {
       this._emitDebug(() => `Invalid JSON from Lavalink: ${err.message}`)
@@ -483,7 +482,6 @@ class Node {
     this._headers['Session-Id'] = sessionId
 
     this.aqua.emit(AqualinkEvents.NodeReady, this, { resumed: !!payload.resumed })
-    this.aqua.emit(AqualinkEvents.NodeConnect, this)
 
     if (this.autoResume) {
       setImmediate(() => {

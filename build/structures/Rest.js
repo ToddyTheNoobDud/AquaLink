@@ -73,8 +73,7 @@ const _functions = {
     const isJson = forceJson || this.isJsonContent(contentType)
     if (isJson) {
       if (typeof data === 'string') return JSON.parse(data)
-      // Node 10+ handles Buffers in JSON.parse, but string conversion is "safest" for all data types
-      return JSON.parse(data.toString(UTF8))
+      return JSON.parse(data)
     }
     return typeof data === 'string' ? data : data.toString(UTF8)
   },

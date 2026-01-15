@@ -180,7 +180,6 @@ class Connection {
 
     if (this._lastEndpoint === endpoint && this.token === data.token) return
 
-    // If the update doesn't match our current transaction, ignore it
     if (data.txId && data.txId < this.txId) return
 
     this._stateGeneration++
@@ -217,7 +216,6 @@ class Connection {
 
     if (channelId) this._clearNullChannelTimer()
 
-    // Transaction check: ignore updates before our current request
     if (data.txId && data.txId < this.txId) return
 
     if (!channelId) {
@@ -234,7 +232,6 @@ class Connection {
 
     this.isWaitingForDisconnect = false
 
-    // Sync txId from player if needed
     if (p && p.txId > this.txId) this.txId = p.txId
 
     let needsUpdate = false

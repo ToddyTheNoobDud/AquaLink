@@ -117,8 +117,12 @@ class Track {
   }
 
   _computeArtwork() {
+    if (this.artworkUrl) return this.artworkUrl
     const id = this.identifier || (this.uri && YT_ID_REGEX.exec(this.uri)?.[1])
-    return id ? `https://i.ytimg.com/vi/${id}/hqdefault.jpg` : null
+    if (id && this.sourceName?.includes('youtube')) {
+      return `https://i.ytimg.com/vi/${id}/hqdefault.jpg`
+    }
+    return null
   }
 }
 
