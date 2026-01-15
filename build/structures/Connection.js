@@ -122,6 +122,7 @@ class Connection {
     this.token = null
     this.region = null
     this.sequence = 0
+    this.txId = 0
 
     this._lastEndpoint = null
     this._stateFlags = 0
@@ -136,6 +137,7 @@ class Connection {
     this._lastSentVoiceKey = ''
 
     this._nullChannelTimer = null
+    this.isWaitingForDisconnect = false
 
     this._lastStateReqAt = 0
     this._stateGeneration = 0
@@ -178,6 +180,9 @@ class Connection {
 
     if (this._lastEndpoint === endpoint && this.token === data.token) return
 
+    // If the update doesn't match our current transaction, ignore it
+    if (data.txId && data.txId < this.txId) return
+
     this._stateGeneration++
 
     if (this._lastEndpoint !== endpoint) {
@@ -212,12 +217,11 @@ class Connection {
 
     if (channelId) this._clearNullChannelTimer()
 
-    const reqCh = p?._voiceRequestChannel
-    const reqFresh = !!(reqCh && (Date.now() - (p._voiceRequestAt || 0)) < 5000)
+    // Transaction check: ignore updates before our current request
+    if (data.txId && data.txId < this.txId) return
 
     if (!channelId) {
-      if (reqFresh) return
-
+      this.isWaitingForDisconnect = true
       if (!this._nullChannelTimer) {
         this._nullChannelTimer = setTimeout(() => {
           this._nullChannelTimer = null
@@ -228,16 +232,17 @@ class Connection {
       return
     }
 
-    if (reqFresh && channelId !== reqCh) return
+    this.isWaitingForDisconnect = false
 
-    if (reqCh && channelId === reqCh) {
-      p._voiceRequestChannel = null
-    }
+    // Sync txId from player if needed
+    if (p && p.txId > this.txId) this.txId = p.txId
 
     let needsUpdate = false
 
     if (this.voiceChannel !== channelId) {
-      this._aqua.emit(AqualinkEvents.PlayerMove, this.voiceChannel, channelId)
+      p._reconnecting = true
+      p._resuming = true
+      this._aqua.emit(AqualinkEvents.PlayerMove, p, this.voiceChannel, channelId)
       this.voiceChannel = channelId
       p.voiceChannel = channelId
       needsUpdate = true
@@ -313,6 +318,7 @@ class Connection {
       return false
     }
 
+    this.txId = this._player.txId || this.txId
     this._stateFlags |= STATE.ATTEMPTING_RESUME
     this._reconnectAttempts++
     this._aqua.emit(AqualinkEvents.Debug, `Attempt resume: guild=${this._guildId} endpoint=${this.endpoint} session=${this.sessionId}`)

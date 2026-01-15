@@ -69,8 +69,14 @@ const _functions = {
     return ct && ct.charCodeAt(0) === 97 && ct.includes(JSON_CT)
   },
 
-  parseBody(text, contentType, forceJson) {
-    return (forceJson || this.isJsonContent(contentType)) ? JSON.parse(text) : text
+  parseBody(data, contentType, forceJson) {
+    const isJson = forceJson || this.isJsonContent(contentType)
+    if (isJson) {
+      if (typeof data === 'string') return JSON.parse(data)
+      // Node 10+ handles Buffers in JSON.parse, but string conversion is "safest" for all data types
+      return JSON.parse(data.toString(UTF8))
+    }
+    return typeof data === 'string' ? data : data.toString(UTF8)
   },
 
   createHttpError(status, method, url, headers, body, statusMessage) {
@@ -137,6 +143,7 @@ class Rest {
     })
 
     this._headerPool = []
+    this._tlsOptions = null
     this._setupAgent(node)
     this.useHttp2 = !!(aqua?.options?.useHttp2)
     this._h2 = null
@@ -156,11 +163,13 @@ class Rest {
 
     if (node.ssl) {
       opts.maxCachedSessions = node.maxCachedSessions || 200
-      if (node.rejectUnauthorized !== undefined) opts.rejectUnauthorized = node.rejectUnauthorized
-      if (node.ca) opts.ca = node.ca
-      if (node.cert) opts.cert = node.cert
-      if (node.key) opts.key = node.key
-      if (node.passphrase) opts.passphrase = node.passphrase
+      this._tlsOptions = Object.create(null)
+      if (node.rejectUnauthorized !== undefined) this._tlsOptions.rejectUnauthorized = opts.rejectUnauthorized = node.rejectUnauthorized
+      if (node.ca) this._tlsOptions.ca = opts.ca = node.ca
+      if (node.cert) this._tlsOptions.cert = opts.cert = node.cert
+      if (node.key) this._tlsOptions.key = opts.key = node.key
+      if (node.passphrase) this._tlsOptions.passphrase = opts.passphrase = node.passphrase
+      if (node.servername) this._tlsOptions.servername = node.servername
     }
 
     this.agent = new (node.ssl ? HttpsAgent : HttpAgent)(opts)
@@ -255,9 +264,8 @@ class Rest {
         const handleResponse = (buffer) => {
           if (buffer.length > MAX_RESPONSE_SIZE) return finish(false, ERRORS.RESPONSE_TOO_LARGE)
 
-          const text = buffer.toString(UTF8)
           try {
-            const result = _functions.parseBody(text, contentType, false)
+            const result = _functions.parseBody(buffer, contentType, false)
             if (status >= 400) {
               finish(false, _functions.createHttpError(status, method, url, res.headers, result, res.statusMessage))
             } else {
@@ -337,9 +345,8 @@ class Rest {
   _getH2Session() {
     if (!this._h2 || this._h2.closed || this._h2.destroyed) {
       this._clearH2()
-      this._h2 = http2.connect(this.baseUrl)
-      this._h2Timer = setTimeout(() => this._closeH2(), H2_TIMEOUT)
-      unrefTimer(this._h2Timer)
+      this._h2 = http2.connect(this.baseUrl, this._tlsOptions || undefined)
+      this._resetH2Timer()
 
       const onEnd = () => this._clearH2()
       this._h2.once('error', onEnd)
@@ -347,6 +354,14 @@ class Rest {
       this._h2.socket?.unref?.()
     }
     return this._h2
+  }
+
+  _resetH2Timer() {
+    if (this._h2Timer) { clearTimeout(this._h2Timer); this._h2Timer = null }
+    if (this._h2 && !this._h2.closed && !this._h2.destroyed) {
+      this._h2Timer = setTimeout(() => this._closeH2(), H2_TIMEOUT)
+      unrefTimer(this._h2Timer)
+    }
   }
 
   _clearH2() {
@@ -390,6 +405,7 @@ class Rest {
       if (headers['Content-Length']) h2h['Content-Length'] = headers['Content-Length']
 
       req = session.request(h2h)
+      this._resetH2Timer()
 
       req.once('response', (rh) => {
         if (timer) { clearTimeout(timer); timer = null }
@@ -442,7 +458,7 @@ class Rest {
             : (chunks.length === 1 ? chunks[0] : Buffer.concat(chunks, size))
 
           try {
-            const result = _functions.parseBody(buffer.toString(UTF8), contentType, true)
+            const result = _functions.parseBody(buffer, contentType, false)
             if (status >= 400) {
               finish(false, _functions.createHttpError(status, method, this.baseUrl + path, rh, result))
             } else {
@@ -545,7 +561,8 @@ class Rest {
     }
 
     if (title) {
-      const query = track?.info?.author ? `${title} ${track.info.author}` : title
+      const info = track.info || {}
+      const query = info.author ? `${title} ${info.author}` : title
       try {
         const lyrics = await this.makeRequest('GET', `${this._endpoints.lyrics}/search?query=${encodeURIComponent(query)}`)
         if (this._validLyrics(lyrics)) return lyrics

@@ -7,6 +7,7 @@ const Filters = require('./Filters')
 const { spAutoPlay, scAutoPlay } = require('../handlers/autoplay')
 const Queue = require('./Queue')
 
+const PLAYER_STATE = Object.freeze({ IDLE: 0, CONNECTING: 1, READY: 2, DISCONNECTING: 3, DESTROYED: 4 })
 const LOOP_MODES = Object.freeze({ NONE: 0, TRACK: 1, QUEUE: 2 })
 const LOOP_MODE_NAMES = Object.freeze(['none', 'track', 'queue'])
 const EVENT_HANDLERS = Object.freeze({
@@ -45,7 +46,6 @@ const PREVIOUS_IDS_MAX = 20
 const AUTOPLAY_MAX = 3
 const BATCHER_POOL_SIZE = 2
 const INVALID_LOADS = new Set(['error', 'empty', 'LOAD_FAILED', 'NO_MATCHES'])
-const NODELINK_STABILIZATION_DELAY = 500
 
 const _functions = {
   clamp(v) {
@@ -167,6 +167,8 @@ class Player extends EventEmitter {
     this.textChannel = options.textChannel
     this.voiceChannel = options.voiceChannel
     this.playing = this.paused = this.connected = this.destroyed = false
+    this.state = PLAYER_STATE.IDLE
+    this.txId = 0
     this.isAutoplayEnabled = this.isAutoplay = false
     this.autoplaySeed = this.current = this.nowPlayingMessage = null
     this.position = this.timestamp = this.ping = 0
@@ -245,12 +247,12 @@ class Player extends EventEmitter {
         this._voiceDownSince = Date.now()
         this._createTimer(() => {
           if (this.connected || this.destroyed || this.nodes?.info?.isNodelink) return
-          if (Date.now() < (this._suppressResumeUntil || 0)) return
           this.connection.attemptResume()
         }, 1000)
       }
     } else {
       this._voiceDownSince = 0
+      this.state = PLAYER_STATE.READY
     }
 
     this.aqua.emit(AqualinkEvents.PlayerUpdate, this, packet)
@@ -292,49 +294,9 @@ class Player extends EventEmitter {
     return this
   }
 
-  async _waitForConnection(timeout = RESUME_TIMEOUT) {
-    if (this.destroyed) return
-    if (this.connected) return
-    return new Promise((resolve, reject) => {
-      let timer
-      const onUpdate = payload => {
-        if (this.destroyed) {
-          if (timer) { this._pendingTimers?.delete(timer); clearTimeout(timer) }
-          this.off('playerUpdate', onUpdate)
-          return reject(new Error('Player destroyed'))
-        }
-        if (payload?.state?.connected || _functions.isNum(payload?.state?.time)) {
-          this.off('playerUpdate', onUpdate)
-          if (timer) { this._pendingTimers?.delete(timer); clearTimeout(timer) }
-
-          const doResolve = () => {
-            if (!this.destroyed) resolve()
-          }
-          if (this.nodes?.info?.isNodelink) {
-            setTimeout(doResolve, NODELINK_STABILIZATION_DELAY)
-          } else {
-            doResolve()
-          }
-        }
-      }
-      this.on('playerUpdate', onUpdate)
-      timer = this._createTimer(() => {
-        this.off('playerUpdate', onUpdate)
-        reject(new Error('No connection confirmation'))
-      }, timeout)
-    })
-  }
 
   async play() {
     if (this.destroyed || !this.queue.size) return this
-    if (!this.connected) {
-      try {
-        await this._waitForConnection(RESUME_TIMEOUT)
-        if (!this.connected || this.destroyed) return this
-      } catch {
-        return this
-      }
-    }
 
     const item = this.queue.dequeue()
     if (!item) return this
@@ -361,8 +323,9 @@ class Player extends EventEmitter {
     this.deaf = options.deaf !== undefined ? !!options.deaf : true
     this.mute = !!options.mute
     this.destroyed = false
+    this.state = PLAYER_STATE.CONNECTING
 
-    this._voiceRequestAt = Date.now()
+    this.txId++
     this._voiceRequestChannel = voiceChannel
 
     this.voiceChannel = voiceChannel
@@ -412,7 +375,11 @@ class Player extends EventEmitter {
   }
 
   destroy(options = {}) {
-    const { preserveClient = true, skipRemote = false } = options
+    const {
+      preserveClient = true, skipRemote = false,
+      preserveMessage = false, preserveReconnecting = false,
+      preserveTracks = false
+    } = options
     if (this.destroyed && !this.queue) return this
 
     if (!this.destroyed) {
@@ -429,12 +396,13 @@ class Player extends EventEmitter {
     this._pendingTimers = null
 
     this.connected = this.playing = this.paused = this.isAutoplay = false
+    this.state = PLAYER_STATE.DESTROYED
     this.autoplayRetries = this.reconnectionRetries = 0
-    this._reconnecting = false
+    if (!preserveReconnecting) this._reconnecting = false
     this._lastVoiceChannel = this.voiceChannel
     this.voiceChannel = null
 
-    if (this.shouldDeleteMessage && this.nowPlayingMessage) {
+    if (this.shouldDeleteMessage && this.nowPlayingMessage && !preserveMessage) {
       _functions.safeDel(this.nowPlayingMessage)
       this.nowPlayingMessage = null
     }
@@ -459,7 +427,7 @@ class Player extends EventEmitter {
     this._dataStore?.clear()
     this._dataStore = null
 
-    if (this.current?.dispose && !this.aqua?.options?.autoResume) this.current.dispose()
+    if (this.current?.dispose && !this.aqua?.options?.autoResume && !preserveTracks) this.current.dispose()
     if (this.connection) {
       try { this.connection.destroy() } catch { }
     }
@@ -690,11 +658,12 @@ class Player extends EventEmitter {
     return null
   }
 
-  trackStart() {
+  trackStart(player, track, payload = {}) {
     if (this.destroyed) return
     this.playing = true
     this.paused = false
-    this.aqua.emit(AqualinkEvents.TrackStart, this, this.current)
+    this.aqua.emit(AqualinkEvents.TrackStart, this, this.current, { ...payload, resumed: this._resuming })
+    this._resuming = false
   }
 
   async trackEnd(player, track, payload) {
@@ -705,12 +674,12 @@ class Player extends EventEmitter {
     const isReplaced = reason === 'replaced'
 
     if (track) this.previousTracks.push(track)
-    if (this.shouldDeleteMessage) _functions.safeDel(this.nowPlayingMessage)
+    if (this.shouldDeleteMessage && !this._reconnecting && !this._resuming) _functions.safeDel(this.nowPlayingMessage)
     this.current = null
 
     if (isFailure) {
       if (!this.queue.size) {
-        this.clearData()
+        this.clearData({ preserveTracks: this._reconnecting || this._resuming })
         this.aqua.emit(AqualinkEvents.QueueEnd, this)
       } else {
         this.aqua.emit(AqualinkEvents.TrackEnd, this, track, reason)
@@ -731,7 +700,7 @@ class Player extends EventEmitter {
     } else {
       this.playing = false
       if (this.leaveOnEnd && !this.destroyed) {
-        this.clearData()
+        this.clearData({ preserveTracks: this._reconnecting || this._resuming })
         this.destroy()
       }
       this.aqua.emit(AqualinkEvents.QueueEnd, this)
@@ -764,49 +733,31 @@ class Player extends EventEmitter {
   mixStarted(p, t, payload) { _functions.emitIfActive(this, AqualinkEvents.MixStarted, t, payload) }
   mixEnded(p, t, payload) { _functions.emitIfActive(this, AqualinkEvents.MixEnded, t, payload) }
 
+
   async _attemptVoiceResume() {
     if (!this.connection?.sessionId) throw new Error('No session')
     if (!await this.connection.attemptResume()) throw new Error('Resume failed')
-    return new Promise((resolve, reject) => {
-      let timeout
-      const cleanup = () => {
-        if (timeout) { this._pendingTimers?.delete(timeout); clearTimeout(timeout) }
-        this.off('playerUpdate', onUpdate)
-      }
-      const onUpdate = payload => {
-        if (payload?.state?.connected || _functions.isNum(payload?.state?.time)) {
-          cleanup()
-          resolve()
-        }
-      }
-      timeout = this._createTimer(() => { cleanup(); reject(new Error('No confirmation')) }, RESUME_TIMEOUT)
-      this.on('playerUpdate', onUpdate)
-    })
   }
 
   async socketClosed(player, track, payload) {
     if (this.destroyed) return
     const code = payload?.code
-
-    if (code === 4014 || code === 4022) {
-      this.aqua.emit(AqualinkEvents.SocketClosed, this, payload)
-
-      this.connected = false
-      if (!this._voiceDownSince) this._voiceDownSince = Date.now()
-
-      if (code !== 4014) {
-        this._suppressResumeUntil = Date.now() + 3000
-      }
-      return
-    }
+    let isRecoverable = [4015, 4009, 4006, 4014, 4022].includes(code)
+    if (code === 4014 && this.connection?.isWaitingForDisconnect) isRecoverable = false
 
     if (code === 4015 && !this.nodes?.info?.isNodelink) {
       try { await this._attemptVoiceResume(); return } catch { /* ignore */ }
     }
 
-    if (![4015, 4009, 4006].includes(code)) {
+    if (!isRecoverable) {
       this.aqua.emit(AqualinkEvents.SocketClosed, this, payload)
       return
+    }
+
+    if (code === 4014 || code === 4022) {
+      this.connected = false
+      if (!this._voiceDownSince) this._voiceDownSince = Date.now()
+      if (code === 4022) this._suppressResumeUntil = Date.now() + 3000
     }
 
     if (this._reconnecting) return
@@ -830,18 +781,25 @@ class Player extends EventEmitter {
       currentTrack: this.current,
       queue: this.queue?.toArray() || [],
       previousIdentifiers: Array.from(this.previousIdentifiers),
-      autoplaySeed: this.autoplaySeed
+      autoplaySeed: this.autoplaySeed,
+      nowPlayingMessage: this.nowPlayingMessage
     }
 
     this._reconnecting = true
-    this.destroy({ preserveClient: true, skipRemote: true })
+    this.destroy({
+      preserveClient: true, skipRemote: true,
+      preserveMessage: true, preserveReconnecting: true,
+      preserveTracks: true
+    })
 
     const reconnectTimers = new Set()
     const tryReconnect = async attempt => {
       if (aqua?.destroyed) { _functions.clearTimers(reconnectTimers); return }
       try {
         const np = await aqua.createConnection({
-          guildId, voiceChannel: vcId, textChannel: tcId, deaf, mute, defaultVolume: state.volume
+          guildId, voiceChannel: vcId, textChannel: tcId, deaf, mute, defaultVolume: state.volume,
+          preserveMessage: true,
+          resuming: true
         })
         if (!np) throw new Error('Failed to create player')
 
@@ -850,6 +808,7 @@ class Player extends EventEmitter {
         np.isAutoplayEnabled = state.isAutoplayEnabled
         np.autoplaySeed = state.autoplaySeed
         np.previousIdentifiers = new Set(state.previousIdentifiers)
+        np.nowPlayingMessage = state.nowPlayingMessage
 
         const ct = state.currentTrack
         if (ct) np.queue.add(ct)
@@ -907,11 +866,12 @@ class Player extends EventEmitter {
     return this._dataStore?.get(key)
   }
 
-  clearData() {
+  clearData(options = {}) {
+    const { preserveTracks = false } = options
     this.previousTracks?.clear()
     this._dataStore?.clear()
     this.previousIdentifiers?.clear()
-    if (this.current?.dispose) this.current.dispose()
+    if (this.current?.dispose && !preserveTracks) this.current.dispose()
     this.current = null
     this.position = this.timestamp = 0
     this.queue?.clear()

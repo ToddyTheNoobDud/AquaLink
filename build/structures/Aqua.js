@@ -489,13 +489,20 @@ class Aqua extends EventEmitter {
   updateVoiceState({ d, t }) {
     if (!d?.guild_id || (t !== 'VOICE_STATE_UPDATE' && t !== 'VOICE_SERVER_UPDATE')) return
     const player = this.players.get(d.guild_id)
-    if (!player || !player.nodes?.connected) return
+    if (!player) return
+
+    // Attach current transaction ID to the data
+    d.txId = player.txId
     if (t === 'VOICE_STATE_UPDATE') {
       if (d.user_id !== this.clientId) return
-      if (!d.channel_id) return void this.destroyPlayer(d.guild_id)
       if (player.connection) {
-        player.connection.sessionId = d.session_id
-        player.connection.setStateUpdate(d)
+        if (!d.channel_id && player.connection.voiceChannel) {
+          // Let Connection.js handle null channel with its grace period
+          player.connection.setStateUpdate(d)
+        } else {
+          player.connection.sessionId = d.session_id
+          player.connection.setStateUpdate(d)
+        }
       }
     } else {
       player.connection?.setServerUpdate(d)
@@ -515,7 +522,7 @@ class Aqua extends EventEmitter {
   createConnection(options) {
     if (!this.initiated) throw new Error('Aqua not initialized')
     const existing = this.players.get(options.guildId)
-    if (existing) {
+    if (existing && !existing.destroyed) {
       if (options.voiceChannel && existing.voiceChannel !== options.voiceChannel) {
         _functions.safeCall(() => existing.connect(options))
       }
@@ -528,7 +535,12 @@ class Aqua extends EventEmitter {
 
   createPlayer(node, options) {
     const existing = this.players.get(options.guildId)
-    if (existing) _functions.safeCall(() => existing.destroy())
+    if (existing) {
+      _functions.safeCall(() => existing.destroy({
+        preserveMessage: options.preserveMessage || !!options.resuming || false,
+        preserveTracks: !!options.resuming || false
+      }))
+    }
     const player = new Player(this, node, options)
     this.players.set(options.guildId, player)
     node?.players?.add?.(player)

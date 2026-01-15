@@ -10,6 +10,7 @@ const { AqualinkEvents } = require('./AqualinkEvents')
 
 const privateData = new WeakMap()
 
+const NODE_STATE = Object.freeze({ IDLE: 0, CONNECTING: 1, READY: 2, DISCONNECTING: 3, RECONNECTING: 4 })
 const WS_STATES = Object.freeze({ CONNECTING: 0, OPEN: 1, CLOSING: 2, CLOSED: 3 })
 const FATAL_CLOSE_CODES = Object.freeze([4003, 4004, 4010, 4011, 4012, 4015])
 const WS_PATH = '/v4/websocket'
@@ -89,6 +90,7 @@ class Node {
     this.skipUTF8Validation = options.skipUTF8Validation ?? true
 
     this.connected = false
+    this.state = NODE_STATE.IDLE
     this.info = null
     this.ws = null
     this.reconnectAttempted = 0
@@ -150,6 +152,7 @@ class Node {
 
   async _handleOpen() {
     this.connected = true
+    this.state = NODE_STATE.READY
     this._isConnecting = false
     this.reconnectAttempted = 0
     this._emitDebug('WebSocket connection established')
@@ -182,12 +185,10 @@ class Node {
   _handleMessage(data, isBinary) {
     if (isBinary) return
 
-    const str = Buffer.isBuffer(data) ? data.toString('utf8') : data
-    if (!str || typeof str !== 'string') return
-
     let payload
     try {
-      payload = JSON.parse(str)
+      // JSON.parse accepts Buffer directly in modern Node/Bun, avoiding extra string conversion
+      payload = JSON.parse(data)
     } catch (err) {
       this._emitDebug(() => `Invalid JSON from Lavalink: ${err.message}`)
       return
@@ -224,6 +225,8 @@ class Node {
 
   _handleClose(code, reason) {
     this.connected = false
+    const wasReady = this.state === NODE_STATE.READY
+    this.state = this.isDestroyed ? NODE_STATE.IDLE : NODE_STATE.RECONNECTING
     this._isConnecting = false
 
     this.aqua.emit(AqualinkEvents.NodeDisconnect, this, {
@@ -305,6 +308,7 @@ class Node {
     }
 
     this._isConnecting = true
+    this.state = NODE_STATE.CONNECTING
     this._cleanup()
 
     try {
@@ -400,6 +404,7 @@ class Node {
     if (this.isDestroyed) return
 
     this.isDestroyed = true
+    this.state = NODE_STATE.IDLE
     this._isConnecting = false
     this._clearReconnectTimeout()
     this._cleanup()
