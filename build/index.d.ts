@@ -154,6 +154,7 @@ declare module "aqualink" {
         _handleMessage(data: any, isBinary: boolean): void;
         _handleClose(code: number, reason: any): void;
         _handleReady(payload: any): Promise<void>;
+        _resumePlayers(): Promise<void>;
         _emitError(error: any): void;
         _emitDebug(message: string | (() => string)): void;
     }
@@ -177,6 +178,8 @@ declare module "aqualink" {
         voiceChannel: string;
         connection: Connection;
         filters: Filters;
+        state: number;
+        txId: number;
         volume: number;
         loop: LoopModeName | LoopMode;
         queue: Queue;
@@ -240,6 +243,7 @@ declare module "aqualink" {
         getLyrics(options?: LyricsOptions): Promise<LyricsResponse | null>;
         subscribeLiveLyrics(): Promise<any>;
         unsubscribeLiveLyrics(): Promise<any>;
+        liveLyrics(guildId: string, state: boolean): Promise<any>;
         autoplay(): Promise<Player>;
         setAutoplay(enabled: boolean): Player;
         updatePlayer(data: any): Promise<any>;
@@ -373,7 +377,7 @@ declare module "aqualink" {
 
         // Methods
         add(track: Track): Queue;
-        add(...tracks: Track[]): void;
+        add(...tracks: Track[]): Queue;
         push(track: Track): number;
         unshift(track: Track): number;
         shift(): Track | undefined;
@@ -386,6 +390,8 @@ declare module "aqualink" {
         at(index: number): Track | null;
         dequeue(): Track | undefined;
         enqueue(track: Track): Queue;
+        move(from: number, to: number): Queue;
+        swap(index1: number, index2: number): Queue;
     }
 
     export class Filters {
