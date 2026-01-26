@@ -477,11 +477,35 @@ class Node {
       return
     }
 
+    const oldSessionId = this.sessionId
+    const sessionChanged = oldSessionId && oldSessionId !== sessionId && !payload.resumed
+
     this.sessionId = sessionId
     this.rest.setSessionId(sessionId)
     this._headers['Session-Id'] = sessionId
 
-    this.aqua.emit(AqualinkEvents.NodeReady, this, { resumed: !!payload.resumed })
+    if (sessionChanged && this.aqua?.players) {
+      this._emitDebug(`Session changed from ${oldSessionId} to ${sessionId}, invalidating stale players`)
+      const playersToDestroy = []
+      for (const [guildId, player] of this.aqua.players) {
+        if (player?.nodes === this || player?.nodes?.name === this.name) {
+          playersToDestroy.push(guildId)
+        }
+      }
+      for (const guildId of playersToDestroy) {
+        try {
+          const player = this.aqua.players.get(guildId)
+          if (player?.destroy) {
+            this._emitDebug(`Destroying stale player for guild ${guildId}`)
+            player.destroy()
+          }
+        } catch (e) {
+          this._emitDebug(`Failed to destroy stale player ${guildId}: ${e?.message || e}`)
+        }
+      }
+    }
+
+    this.aqua.emit(AqualinkEvents.NodeReady, this, { resumed: !!payload.resumed, sessionChanged })
 
     if (this.autoResume) {
       setImmediate(() => {
