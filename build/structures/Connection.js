@@ -7,13 +7,13 @@ const UPDATE_TIMEOUT = 4000
 
 const RECONNECT_DELAY = 1000
 const MAX_RECONNECT_ATTEMPTS = 3
-const RESUME_BACKOFF_MAX = 8000
+const RESUME_BACKOFF_MAX = 60000
 
-const VOICE_DATA_TIMEOUT = 30000
+const VOICE_DATA_TIMEOUT = 90000
 
 const VOICE_FLUSH_DELAY = 50
 
-const NULL_CHANNEL_GRACE_MS = 1500
+const NULL_CHANNEL_GRACE_MS = 15000
 
 const STATE = {
   CONNECTED: 1,
@@ -443,6 +443,11 @@ class Connection {
     try {
       await this._rest.updatePlayer(payload)
     } catch (e) {
+      if (e.statusCode === 404 || e.response?.statusCode === 404) {
+        this._aqua.emit(AqualinkEvents.Debug, `Player ${this._guildId} not found (404). Destroying.`)
+        if (this._aqua) this._aqua.destroyPlayer(this._guildId)
+        return
+      }
       if (!_functions.isNetworkError(e)) {
         this._aqua.emit(AqualinkEvents.Debug, new Error(`Voice update failed: ${e?.message || e}`))
       }
