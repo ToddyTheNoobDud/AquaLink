@@ -41,10 +41,15 @@ class Queue {
   }
 
   shuffle() {
-    // Compact first if needed
     if (this._head > 0) {
-      this._items = this._items.slice(this._head)
-      this._head = 0
+      if (this._head > 0) {
+        const len = this._items.length - this._head
+        for (let i = 0; i < len; i++) {
+          this._items[i] = this._items[this._head + i]
+        }
+        this._items.length = len
+        this._head = 0
+      }
     }
     for (let i = this._items.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1))
@@ -101,11 +106,14 @@ class Queue {
   dequeue() {
     if (this._head >= this._items.length) return undefined
     const item = this._items[this._head]
-    this._items[this._head] = undefined // Allow GC
+    this._items[this._head] = undefined
     this._head++
-    // Compact when head is > 50% of array to prevent unbounded growth
     if (this._head > 0 && this._head > this._items.length / 2) {
-      this._items = this._items.slice(this._head)
+      const len = this._items.length - this._head
+      for (let i = 0; i < len; i++) {
+        this._items[i] = this._items[this._head + i]
+      }
+      this._items.length = len
       this._head = 0
     }
     return item

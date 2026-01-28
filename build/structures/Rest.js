@@ -13,6 +13,11 @@ const {
   zstdDecompressSync
 } = require('zlib')
 
+let autoplayModule = null
+try {
+  autoplayModule = require('../handlers/autoplay')
+} catch {}
+
 const unrefTimer = (t) => {
   try {
     t?.unref?.()
@@ -202,6 +207,10 @@ class Rest {
 
     this.agent = new (node.ssl ? HttpsAgent : HttpAgent)(opts)
     this.request = node.ssl ? httpsRequest : httpRequest
+
+    if (node.ssl && autoplayModule?.setSharedAgent) {
+      autoplayModule.setSharedAgent(this.agent)
+    }
 
     const origCreate = this.agent.createConnection.bind(this.agent)
     this.agent.createConnection = (options, cb) => {

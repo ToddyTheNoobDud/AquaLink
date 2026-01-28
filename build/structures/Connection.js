@@ -456,17 +456,7 @@ class Connection {
   _makeVoiceKey() {
     const p = this._player
     const vol = p?.volume ?? 100
-    return (
-      (this.sessionId || '') +
-      '|' +
-      (this.token || '') +
-      '|' +
-      (this.endpoint || '') +
-      '|' +
-      (p?.voiceChannel || '') +
-      '|' +
-      vol
-    )
+    return `${this.sessionId || ''}|${this.token || ''}|${this.endpoint || ''}|${p?.voiceChannel || ''}|${vol}`
   }
 
   _scheduleVoiceUpdate() {

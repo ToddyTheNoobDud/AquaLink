@@ -41,6 +41,27 @@ const FILTER_KEYS = Object.freeze(
 
 const EMPTY_ARRAY = Object.freeze([])
 
+const FILTER_POOL_SIZE = 16
+const filterPool = {
+  pools: Object.fromEntries(Object.keys(FILTER_DEFAULTS).map(k => [k, []])),
+
+  acquire(type) {
+    const pool = this.pools[type]
+    if (pool && pool.length > 0) {
+      return pool.pop()
+    }
+    return { ...FILTER_DEFAULTS[type] }
+  },
+
+  release(type, obj) {
+    if (!obj || !this.pools[type]) return
+    const pool = this.pools[type]
+    if (pool.length < FILTER_POOL_SIZE) {
+      pool.push(obj)
+    }
+  }
+}
+
 const _utils = Object.freeze({
   shallowEqual(current, defaults, override, keys) {
     if (!current) return false
@@ -73,6 +94,19 @@ const _utils = Object.freeze({
     const out = new Array(len)
     for (let i = 0; i < len; i++) out[i] = { band: i, gain }
     return out
+  },
+
+  mutateFilter(target, defaults, options, keys) {
+    let changed = false
+    for (let i = 0; i < keys.length; i++) {
+      const k = keys[i]
+      const newVal = k in options ? options[k] : defaults[k]
+      if (target[k] !== newVal) {
+        target[k] = newVal
+        changed = true
+      }
+    }
+    return changed
   }
 })
 
@@ -106,6 +140,11 @@ class Filters {
   }
 
   destroy() {
+    for (const [key, value] of Object.entries(this.filters)) {
+      if (value && typeof value === 'object' && key !== 'equalizer') {
+        filterPool.release(key, value)
+      }
+    }
     this._pendingUpdate = false
     this.player = null
   }
@@ -114,16 +153,27 @@ class Filters {
     const current = this.filters[filterName]
     if (!enabled) {
       if (current === null) return this
+      filterPool.release(filterName, current)
       this.filters[filterName] = null
+      this._dirty.add(filterName)
       return this._scheduleUpdate()
     }
 
     const defaults = FILTER_DEFAULTS[filterName]
     const keys = FILTER_KEYS[filterName]
-    if (current && _utils.shallowEqual(current, defaults, options, keys))
-      return this
 
-    this.filters[filterName] = Object.assign({}, defaults, options)
+    if (current) {
+      if (_utils.shallowEqual(current, defaults, options, keys)) {
+        return this
+      }
+      _utils.mutateFilter(current, defaults, options, keys)
+      this._dirty.add(filterName)
+      return this._scheduleUpdate()
+    }
+
+    const newFilter = filterPool.acquire(filterName)
+    _utils.mutateFilter(newFilter, defaults, options, keys)
+    this.filters[filterName] = newFilter
     this._dirty.add(filterName)
     return this._scheduleUpdate()
   }

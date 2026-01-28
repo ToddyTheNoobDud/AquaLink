@@ -2,13 +2,21 @@ const https = require('https')
 
 const AGENT_CONFIG = {
   keepAlive: true,
-  maxSockets: 5,
-  maxFreeSockets: 2,
+  maxSockets: 64,
+  maxFreeSockets: 32,
   timeout: 8000,
   freeSocketTimeout: 4000
 }
 
-const agent = new https.Agent(AGENT_CONFIG)
+let sharedAgent = null
+const getAgent = () => sharedAgent || (sharedAgent = new https.Agent(AGENT_CONFIG))
+
+const setSharedAgent = (agent) => {
+  if (agent && typeof agent.request === 'function') {
+    sharedAgent = agent
+  }
+}
+
 
 const SC_LINK_RE = /<a\s+itemprop="url"\s+href="(\/[^"]+)"/g
 const MAX_REDIRECTS = 3
@@ -23,7 +31,7 @@ const fastFetch = (url, depth = 0) =>
 
     const req = https.get(
       url,
-      { agent, timeout: DEFAULT_TIMEOUT_MS },
+      { agent: getAgent(), timeout: DEFAULT_TIMEOUT_MS },
       (res) => {
         const { statusCode, headers } = res
 
@@ -132,5 +140,6 @@ const spAutoPlay = async (seed, player, requester, excludedIds = []) => {
 
 module.exports = {
   scAutoPlay,
-  spAutoPlay
+  spAutoPlay,
+  setSharedAgent
 }

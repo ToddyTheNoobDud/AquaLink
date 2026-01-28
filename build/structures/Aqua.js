@@ -257,7 +257,11 @@ class Aqua extends EventEmitter {
     const id = node.name || node.host
     const now = Date.now()
     const cached = this._nodeLoadCache.get(id)
-    if (cached && now - cached.time < 5000) return cached.load
+    if (cached && now - cached.time < 5000) {
+      this._nodeLoadCache.delete(id)
+      this._nodeLoadCache.set(id, cached)
+      return cached.load
+    }
     const stats = node?.stats
     if (!stats) return 0
     const cores = Math.max(1, stats.cpu?.cores || 1)
@@ -267,11 +271,15 @@ class Aqua extends EventEmitter {
       (stats.playingPlayers || 0) * 0.75 +
       (stats.memory ? stats.memory.used / reservable : 0) * 40 +
       (node.rest?.calls || 0) * 0.001
-    this._nodeLoadCache.set(id, { load, time: now })
-    if (this._nodeLoadCache.size > MAX_CACHE_SIZE) {
-      const first = this._nodeLoadCache.keys().next().value
-      this._nodeLoadCache.delete(first)
+    if (this._nodeLoadCache.size >= MAX_CACHE_SIZE) {
+      const iterator = this._nodeLoadCache.keys()
+      while (this._nodeLoadCache.size >= MAX_CACHE_SIZE) {
+        const oldest = iterator.next().value
+        if (!oldest) break
+        this._nodeLoadCache.delete(oldest)
+      }
     }
+    this._nodeLoadCache.set(id, { load, time: now })
     return load
   }
 

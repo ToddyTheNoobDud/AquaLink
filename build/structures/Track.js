@@ -30,6 +30,7 @@ class Track {
     this.nodes = data.nodes || null
     this.requester = requester || null
     this._infoCache = null
+    this._artworkCache = undefined
   }
 
   get info() {
@@ -52,7 +53,9 @@ class Track {
   }
 
   get thumbnail() {
-    return this.artworkUrl || this._computeArtwork()
+    if (this.artworkUrl) return this.artworkUrl
+    if (this._artworkCache !== undefined) return this._artworkCache
+    return (this._artworkCache = this._computeArtwork())
   }
 
   async resolve(aqua, opts = {}) {
@@ -140,10 +143,13 @@ class Track {
 
   _computeArtwork() {
     if (this.artworkUrl) return this.artworkUrl
+    if (this._artworkCache !== undefined) return this._artworkCache
     const id = this.identifier || (this.uri && YT_ID_REGEX.exec(this.uri)?.[1])
     if (id && this.sourceName?.includes('youtube')) {
-      return `https://i.ytimg.com/vi/${id}/hqdefault.jpg`
+      this._artworkCache = `https://i.ytimg.com/vi/${id}/hqdefault.jpg`
+      return this._artworkCache
     }
+    this._artworkCache = null
     return null
   }
 }
