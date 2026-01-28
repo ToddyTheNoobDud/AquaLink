@@ -33,8 +33,8 @@ const EVENT_HANDLERS = Object.freeze({
 
 const WATCHDOG_INTERVAL = 15000
 const VOICE_DOWN_THRESHOLD = 10000
-const VOICE_ABANDON_MULTIPLIER = 3
-const RECONNECT_MAX = 3
+const VOICE_ABANDON_MULTIPLIER = 12
+const RECONNECT_MAX = 15
 const RESUME_TIMEOUT = 5000
 const MUTE_TOGGLE_DELAY = 300
 const SEEK_DELAY = 800
@@ -296,7 +296,8 @@ class Player extends EventEmitter {
 
 
   async play() {
-    if (this.destroyed || !this.queue.size) return this
+    if (this.destroyed || !this.queue) return this
+    if (!this.queue.size) return this
 
     const item = this.queue.dequeue()
     if (!item) return this
@@ -306,11 +307,13 @@ class Player extends EventEmitter {
       this.playing = true
       this.paused = false
       this.position = 0
+      if (this.destroyed || !this._updateBatcher) return this
       await this.batchUpdatePlayer({ guildId: this.guildId, track: { encoded: this.current.track } }, true)
       return this
     } catch (error) {
-      this.aqua.emit(AqualinkEvents.Error, error)
-      return this.queue.size ? this.play() : this
+      if (this.destroyed) return this
+      this.aqua?.emit(AqualinkEvents.Error, error)
+      return (this.queue && this.queue.size) ? this.play() : this
     }
   }
 
@@ -599,7 +602,7 @@ class Player extends EventEmitter {
   }
 
   async autoplay() {
-    if (this.destroyed || !this.isAutoplayEnabled || !this.previous || this.queue.size) return this
+    if (this.destroyed || !this.isAutoplayEnabled || !this.previous || (this.queue && this.queue.size)) return this
     const prev = this.previous
     const info = prev?.info
     if (!info?.sourceName || !info.identifier) return this
@@ -616,9 +619,10 @@ class Player extends EventEmitter {
       }
     }
 
-    for (let i = 0; !this.destroyed && i < AUTOPLAY_MAX && !this.queue.size; i++) {
+    for (let i = 0; !this.destroyed && i < AUTOPLAY_MAX && (this.queue && !this.queue.size); i++) {
       try {
         const track = await this._getAutoplayTrack(sourceName, identifier, uri, prev.requester)
+        if (this.destroyed || !this.queue) return this
         if (track?.info?.title) {
           this.autoplayRetries = 0
           track.requester = prev.requester || { id: 'Unknown' }
@@ -627,13 +631,20 @@ class Player extends EventEmitter {
           return this
         }
       } catch (err) {
-        this.aqua.emit(AqualinkEvents.Error, new Error(`Autoplay ${i + 1} fail: ${err.message}`))
+        if (this.destroyed) return this
+        this.aqua?.emit(AqualinkEvents.Error, new Error(`Autoplay ${i + 1} fail: ${err.message}`))
       }
     }
 
-    this.aqua.emit(AqualinkEvents.AutoplayFailed, this, new Error('Max retries'))
+    if (this.destroyed) return this
+    this.aqua?.emit(AqualinkEvents.AutoplayFailed, this, new Error('Max retries'))
     this.stop()
     return this
+  }
+
+  async liveLyrics(guildId, state) {
+    if (state) return await this.nodes.rest.subscribeLiveLyrics(guildId)
+    else return await this.nodes.rest.unsubscribeLiveLyrics(guildId)
   }
 
   async _getAutoplayTrack(sourceName, identifier, uri, requester) {
