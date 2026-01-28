@@ -366,7 +366,6 @@ class Aqua extends EventEmitter {
       if (current && player?.queue?.add) {
         player.queue.add(current)
         await player.play()
-        // Wait for trackStart before seeking to ensure track is loaded
         if (state.position > 0) {
           const seekOnce = (p) => {
             if (p.guildId === guildId) {
@@ -375,7 +374,6 @@ class Aqua extends EventEmitter {
             }
           }
           this.once(AqualinkEvents.TrackStart, seekOnce)
-          // Cleanup if player destroyed before track starts
           player.once('destroy', () => this.off(AqualinkEvents.TrackStart, seekOnce))
         }
         if (state.paused) player.pause(true)
@@ -468,7 +466,6 @@ class Aqua extends EventEmitter {
 
   _capturePlayerState(player) {
     if (!player) return null
-    // Estimate actual position based on timestamp and playing state
     let position = player.position || 0
     if (player.playing && !player.paused && player.timestamp) {
       const elapsed = Date.now() - player.timestamp
@@ -511,7 +508,6 @@ class Aqua extends EventEmitter {
       newPlayer.queue?.add?.(state.current, { toFront: true })
       if (this.failoverOptions.resumePlayback) {
         ops.push(newPlayer.play())
-        // Wait for trackStart before seeking to ensure track is loaded
         if (state.position > 0) {
           const guildId = newPlayer.guildId
           const seekOnce = (p) => {

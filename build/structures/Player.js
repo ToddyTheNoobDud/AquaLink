@@ -416,7 +416,6 @@ class Player extends EventEmitter {
     _functions.clearTimers(this._pendingTimers)
     this._pendingTimers = null
 
-    // Clear reconnection timers to prevent memory leaks when destroyed externally
     if (this._reconnectTimers) {
       _functions.clearTimers(this._reconnectTimers)
       this._reconnectTimers = null
@@ -819,7 +818,6 @@ class Player extends EventEmitter {
       preserveTracks: true
     })
 
-    // Store reconnect timers on instance for cleanup in destroy()
     this._reconnectTimers = new Set()
     const reconnectTimers = this._reconnectTimers
     const tryReconnect = async attempt => {

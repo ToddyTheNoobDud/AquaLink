@@ -41,7 +41,6 @@ class Queue {
   }
 
   shuffle() {
-    // Compact first if needed
     if (this._head > 0) {
       this._items = this._items.slice(this._head)
       this._head = 0
@@ -89,9 +88,8 @@ class Queue {
   dequeue() {
     if (this._head >= this._items.length) return undefined
     const item = this._items[this._head]
-    this._items[this._head] = undefined  // Allow GC
+    this._items[this._head] = undefined
     this._head++
-    // Compact when head is > 50% of array to prevent unbounded growth
     if (this._head > 0 && this._head > this._items.length / 2) {
       this._items = this._items.slice(this._head)
       this._head = 0
