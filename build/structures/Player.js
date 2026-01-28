@@ -163,7 +163,7 @@ class Player extends EventEmitter {
 
     this.aqua = aqua
     this.nodes = nodes
-    this.guildId = options.guildId
+    this.guildId = String(options.guildId)
     this.textChannel = options.textChannel
     this.voiceChannel = options.voiceChannel
     this.playing = this.paused = this.connected = this.destroyed = false
@@ -295,20 +295,37 @@ class Player extends EventEmitter {
   }
 
 
-  async play() {
+  async play(track, options = {}) {
     if (this.destroyed || !this.queue) return this
-    if (!this.queue.size) return this
 
-    const item = this.queue.dequeue()
-    if (!item) return this
+    if (track) {
+      this.current = track.track ? track : await track.resolve?.(this.aqua)
+    } else {
+      if (!this.queue.size) return this
+      const item = this.queue.dequeue()
+      if (!item) return this
+      this.current = item.track ? item : await item.resolve?.(this.aqua)
+    }
+
+    if (!this.current?.track) {
+      this.playing = false
+      throw new Error('Failed to resolve track')
+    }
+
     try {
-      this.current = item.track ? item : await item.resolve(this.aqua)
-      if (!this.current?.track) throw new Error('Failed to resolve track')
       this.playing = true
-      this.paused = false
-      this.position = 0
+      this.paused = !!options.paused
+      this.position = options.startTime || 0
       if (this.destroyed || !this._updateBatcher) return this
-      await this.batchUpdatePlayer({ guildId: this.guildId, track: { encoded: this.current.track } }, true)
+
+      const payload = {
+        guildId: this.guildId,
+        track: { encoded: this.current.track }
+      }
+      if (options.startTime > 0) payload.position = options.startTime
+      if (options.paused !== undefined) payload.paused = !!options.paused
+
+      await this.batchUpdatePlayer(payload, true)
       return this
     } catch (error) {
       if (this.destroyed) return this
@@ -686,7 +703,7 @@ class Player extends EventEmitter {
 
     if (track) this.previousTracks.push(track)
     if (this.shouldDeleteMessage && !this._reconnecting && !this._resuming) _functions.safeDel(this.nowPlayingMessage)
-    this.current = null
+    if (!isReplaced) this.current = null
 
     if (isFailure) {
       if (!this.queue.size) {
