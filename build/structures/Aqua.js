@@ -133,6 +133,7 @@ class Aqua extends EventEmitter {
     this._leastUsedNodesCacheTime = 0
     this._nodeLoadCache = new Map()
     this._eventHandlers = null
+    this._loading = false
 
     if (this.autoResume) this._bindEventHandlers()
   }
@@ -245,9 +246,16 @@ class Aqua extends EventEmitter {
   }
 
   async init(clientId) {
+    if (clientId) {
+      const newId = String(clientId)
+      if (this.clientId !== newId) {
+        this.clientId = newId
+      }
+    }
+
     if (this.initiated) return this
-    this.clientId = clientId
     if (!this.clientId) return this
+    await this._loadNodeSessions().catch(() => { })
     const results = await Promise.allSettled(
       this.nodes.map(n => Promise.race([this._createNode(n), _functions.delay(NODE_TIMEOUT).then(() => { throw new Error('Timeout') })]))
     )
@@ -309,7 +317,7 @@ class Aqua extends EventEmitter {
       if (state) {
         state.originalNodeId = id
         state.brokenAt = now
-        this._brokenPlayers.set(player.guildId, state)
+        this._brokenPlayers.set(String(player.guildId), state)
       }
     }
   }
@@ -662,6 +670,12 @@ class Aqua extends EventEmitter {
       const buffer = []
       let drainPromise = Promise.resolve()
 
+      const nodeSessions = {}
+      for (const node of this.nodeMap.values()) {
+        if (node.sessionId) nodeSessions[node.name] = node.sessionId
+      }
+      buffer.push(JSON.stringify({ type: 'node_sessions', data: nodeSessions }))
+
       for (const player of this.players.values()) {
         const requester = player.requester || player.current?.requester
         const data = {
@@ -671,7 +685,7 @@ class Aqua extends EventEmitter {
           u: player.current?.uri || null,
           p: player.position || 0,
           ts: player.timestamp || 0,
-          q: player.queue.slice(0, this.maxQueueSave).map(tr => tr.uri),
+          q: player.queue.toArray().slice(0, this.maxQueueSave).map(tr => tr.uri),
           r: requester ? `${requester.id}:${requester.username}` : null,
           vol: player.volume,
           pa: player.paused,
@@ -696,15 +710,19 @@ class Aqua extends EventEmitter {
       ws = null
       await fs.promises.rename(tempFile, filePath)
     } catch (error) {
+      console.error(`[Aqua/Autoresume]Error saving players:`, error)
       this.emit(AqualinkEvents.Error, null, error)
       if (ws) _functions.safeCall(() => ws.destroy())
       await fs.promises.unlink(tempFile).catch(_functions.noop)
     } finally {
+      if (ws) _functions.safeCall(() => ws.destroy())
       await fs.promises.unlink(lockFile).catch(_functions.noop)
     }
   }
 
   async loadPlayers(filePath = './AquaPlayers.jsonl') {
+    if (this._loading) return
+    this._loading = true
     const lockFile = `${filePath}.lock`
     let stream = null, rl = null
     try {
@@ -718,7 +736,11 @@ class Aqua extends EventEmitter {
       const batch = []
       for await (const line of rl) {
         if (!line.trim()) continue
-        try { batch.push(JSON.parse(line)) } catch { continue }
+        try {
+          const parsed = JSON.parse(line)
+          if (parsed.type === 'node_sessions') continue
+          batch.push(parsed)
+        } catch { continue }
         if (batch.length >= PLAYER_BATCH_SIZE) {
           await Promise.allSettled(batch.map(p => this._restorePlayer(p)))
           batch.length = 0
@@ -727,8 +749,12 @@ class Aqua extends EventEmitter {
       if (batch.length) await Promise.allSettled(batch.map(p => this._restorePlayer(p)))
       await fs.promises.writeFile(filePath, '')
     } catch (err) {
-      if (err.code !== 'ENOENT') this.emit(AqualinkEvents.Error, null, err)
+      if (err.code !== 'ENOENT') {
+        console.error(`[Aqua/Autoresume]Error loading players:`, err)
+        this.emit(AqualinkEvents.Error, null, err)
+      }
     } finally {
+      this._loading = false
       if (rl) _functions.safeCall(() => rl.close())
       if (stream) _functions.safeCall(() => stream.destroy())
       await fs.promises.unlink(lockFile).catch(_functions.noop)
@@ -737,8 +763,9 @@ class Aqua extends EventEmitter {
 
   async _restorePlayer(p) {
     try {
-      const player = this.players.get(p.g) || this.createPlayer(this._chooseLeastBusyNode(this.leastUsedNodes), {
-        guildId: p.g,
+      const gId = String(p.g)
+      const player = this.players.get(gId) || this.createPlayer(this._chooseLeastBusyNode(this.leastUsedNodes), {
+        guildId: gId,
         textChannel: p.t,
         voiceChannel: p.v,
         defaultVolume: p.vol || 65,
@@ -751,7 +778,6 @@ class Aqua extends EventEmitter {
       const resolved = await Promise.all(tracksToResolve.map(uri => this.resolve({ query: uri, requester }).catch(() => null)))
       const validTracks = resolved.flatMap(r => r?.tracks || [])
       if (validTracks.length && player.queue?.add) {
-        if (player.queue.length <= 2) player.queue.length = 0
         player.queue.add(...validTracks)
       }
       if (p.u && validTracks[0]) {
@@ -759,15 +785,15 @@ class Aqua extends EventEmitter {
           if (typeof player.setVolume === 'function') await player.setVolume(p.vol)
           else player.volume = p.vol
         }
-        await player.play()
-        if (p.p > 0) _functions.unrefTimeout(() => player.seek?.(p.p), SEEK_DELAY)
-        if (p.pa) await player.pause(true)
+        await player.play(undefined, { startTime: p.p, paused: p.pa })
       }
       if (p.nw && p.t) {
         const channel = this.client.channels?.cache?.get(p.t)
         if (channel?.messages) player.nowPlayingMessage = await channel.messages.fetch(p.nw).catch(() => null)
       }
-    } catch { }
+    } catch (e) {
+      console.error(`[Aqua/Autoresume]Failed to restore player for guild: ${p.g}`, e)
+    }
   }
 
   async _waitForFirstNode(timeout = NODE_TIMEOUT) {
@@ -807,6 +833,34 @@ class Aqua extends EventEmitter {
     if (this._rebuildLocks.size > MAX_REBUILD_LOCKS) this._rebuildLocks.clear()
     for (const id of this._nodeStates.keys()) {
       if (!this.nodeMap.has(id)) this._nodeStates.delete(id)
+    }
+  }
+
+  async _loadNodeSessions(filePath = './AquaPlayers.jsonl') {
+    let stream = null, rl = null
+    try {
+      await fs.promises.access(filePath)
+      stream = fs.createReadStream(filePath, { encoding: 'utf8' })
+      rl = readline.createInterface({ input: stream, crlfDelay: Infinity })
+
+      for await (const line of rl) {
+        if (!line.trim()) continue
+        try {
+          const parsed = JSON.parse(line)
+          if (parsed.type === 'node_sessions') {
+            for (const [name, sessionId] of Object.entries(parsed.data)) {
+              const nodeOptions = this.nodes.find(n => (n.name || n.host) === name)
+              if (nodeOptions) {
+                nodeOptions.sessionId = sessionId
+              }
+            }
+            break
+          }
+        } catch { continue }
+      }
+    } catch { } finally {
+      if (rl) _functions.safeCall(() => rl.close())
+      if (stream) _functions.safeCall(() => stream.destroy())
     }
   }
 }
