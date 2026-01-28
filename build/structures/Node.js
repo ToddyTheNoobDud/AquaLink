@@ -365,11 +365,6 @@ class Node {
       ws.once('error', h.error)
       ws.on('message', h.message)
       ws.once('close', h.close)
-      ws.once('upgrade', (res) => {
-        console.log(`[Aqualink/Node] WebSocket upgrade headers for ${this.name}:`, res.headers);
-        const compression = res.headers['content-encoding'] || res.headers['sec-websocket-extensions'] || 'none';
-        console.log(`[Aqualink/Node] WebSocket compression for ${this.name}: ${compression}`);
-      });
 
       this.ws = ws;
     } catch (err) {
