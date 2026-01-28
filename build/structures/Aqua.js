@@ -492,7 +492,7 @@ class Aqua extends EventEmitter {
 
   updateVoiceState({ d, t }) {
     if (!d?.guild_id || (t !== 'VOICE_STATE_UPDATE' && t !== 'VOICE_SERVER_UPDATE')) return
-    const player = this.players.get(d.guild_id)
+    const player = this.players.get(String(d.guild_id))
     if (!player) return
 
     d.txId = player.txId
@@ -523,7 +523,7 @@ class Aqua extends EventEmitter {
 
   createConnection(options) {
     if (!this.initiated) throw new Error('Aqua not initialized')
-    const existing = this.players.get(options.guildId)
+    const existing = this.players.get(String(options.guildId))
     if (existing && !existing.destroyed) {
       if (options.voiceChannel && existing.voiceChannel !== options.voiceChannel) {
         _functions.safeCall(() => existing.connect(options))
@@ -544,7 +544,8 @@ class Aqua extends EventEmitter {
       }))
     }
     const player = new Player(this, node, options)
-    this.players.set(options.guildId, player)
+    const guildId = String(options.guildId)
+    this.players.set(guildId, player)
     node?.players?.add?.(player)
     player.once('destroy', () => this._handlePlayerDestroy(player))
     player.connect(options)
@@ -554,14 +555,16 @@ class Aqua extends EventEmitter {
 
   _handlePlayerDestroy(player) {
     player.nodes?.players?.delete?.(player)
-    if (this.players.get(player.guildId) === player) this.players.delete(player.guildId)
+    const guildId = String(player.guildId)
+    if (this.players.get(guildId) === player) this.players.delete(guildId)
     this.emit(AqualinkEvents.PlayerDestroyed, player)
   }
 
   async destroyPlayer(guildId) {
-    const player = this.players.get(guildId)
+    const id = String(guildId)
+    const player = this.players.get(id)
     if (!player) return
-    this.players.delete(guildId)
+    this.players.delete(id)
     _functions.safeCall(() => player.removeAllListeners())
     await _functions.safeCall(() => player.destroy())
   }
@@ -634,7 +637,7 @@ class Aqua extends EventEmitter {
   }
 
   get(guildId) {
-    const player = this.players.get(guildId)
+    const player = this.players.get(String(guildId))
     if (!player) throw new Error(`Player not found: ${guildId}`)
     return player
   }
