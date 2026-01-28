@@ -364,6 +364,7 @@ declare module "aqualink" {
         updateMixerVolume(guildId: string, mix: string, volume: number): Promise<any>;
         removeMixer(guildId: string, mix: string): Promise<any>;
         getLoadLyrics(encodedTrack: string): Promise<LyricsResponse>;
+        loadTracks(identifier: string): Promise<any>;
         destroy(): void;
     }
 

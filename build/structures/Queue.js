@@ -3,14 +3,15 @@
 class Queue {
   constructor() {
     this._items = []
+    this._head = 0
   }
 
   get size() {
-    return this._items.length
+    return this._items.length - this._head
   }
 
   get first() {
-    return this._items[0] || null
+    return this._items[this._head] || null
   }
 
   get last() {
@@ -23,7 +24,7 @@ class Queue {
   }
 
   remove(track) {
-    const idx = this._items.indexOf(track)
+    const idx = this._items.indexOf(track, this._head)
     if (idx === -1) return false
     const removed = this._items[idx]
     this._items.splice(idx, 1)
@@ -32,13 +33,19 @@ class Queue {
   }
 
   clear() {
-    for (let i = 0; i < this._items.length; i++) {
+    for (let i = this._head; i < this._items.length; i++) {
       if (this._items[i]?.dispose) this._items[i].dispose()
     }
     this._items.length = 0
+    this._head = 0
   }
 
   shuffle() {
+    // Compact first if needed
+    if (this._head > 0) {
+      this._items = this._items.slice(this._head)
+      this._head = 0
+    }
     for (let i = this._items.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1))
       const temp = this._items[i]
@@ -49,17 +56,21 @@ class Queue {
   }
 
   move(from, to) {
-    if (from < 0 || from >= this._items.length || to < 0 || to >= this._items.length) return this
-    const [item] = this._items.splice(from, 1)
-    this._items.splice(to, 0, item)
+    const actualFrom = from + this._head
+    const actualTo = to + this._head
+    if (from < 0 || actualFrom >= this._items.length || to < 0 || actualTo >= this._items.length) return this
+    const [item] = this._items.splice(actualFrom, 1)
+    this._items.splice(actualTo, 0, item)
     return this
   }
 
   swap(index1, index2) {
-    if (index1 < 0 || index1 >= this._items.length || index2 < 0 || index2 >= this._items.length) return this
-    const temp = this._items[index1]
-    this._items[index1] = this._items[index2]
-    this._items[index2] = temp
+    const actual1 = index1 + this._head
+    const actual2 = index2 + this._head
+    if (index1 < 0 || actual1 >= this._items.length || index2 < 0 || actual2 >= this._items.length) return this
+    const temp = this._items[actual1]
+    this._items[actual1] = this._items[actual2]
+    this._items[actual2] = temp
     return this
   }
 
@@ -68,19 +79,28 @@ class Queue {
   }
 
   toArray() {
-    return [...this._items]
+    return this._items.slice(this._head)
   }
 
   at(index) {
-    return this._items[index] || null
+    return this._items[this._head + index] || null
   }
 
   dequeue() {
-    return this._items.shift()
+    if (this._head >= this._items.length) return undefined
+    const item = this._items[this._head]
+    this._items[this._head] = undefined  // Allow GC
+    this._head++
+    // Compact when head is > 50% of array to prevent unbounded growth
+    if (this._head > 0 && this._head > this._items.length / 2) {
+      this._items = this._items.slice(this._head)
+      this._head = 0
+    }
+    return item
   }
 
   isEmpty() {
-    return this._items.length === 0
+    return this.size === 0
   }
 
   enqueue(track) {

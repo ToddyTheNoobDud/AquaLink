@@ -494,11 +494,8 @@ class Node {
       }
       for (const guildId of playersToDestroy) {
         try {
-          const player = this.aqua.players.get(guildId)
-          if (player?.destroy) {
-            this._emitDebug(`Destroying stale player for guild ${guildId}`)
-            player.destroy()
-          }
+          this._emitDebug(`Destroying stale player for guild ${guildId}`)
+          await this.aqua.destroyPlayer(guildId)
         } catch (e) {
           this._emitDebug(`Failed to destroy stale player ${guildId}: ${e?.message || e}`)
         }

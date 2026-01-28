@@ -180,6 +180,7 @@ class Player extends EventEmitter {
     this._resuming = !!options.resuming
     this._voiceWatchdogTimer = null
     this._pendingTimers = new Set()
+    this._reconnectTimers = null
     this._dataStore = null
 
     this.volume = _functions.clamp(options.defaultVolume || 100)
@@ -415,6 +416,12 @@ class Player extends EventEmitter {
     _functions.clearTimers(this._pendingTimers)
     this._pendingTimers = null
 
+    // Clear reconnection timers to prevent memory leaks when destroyed externally
+    if (this._reconnectTimers) {
+      _functions.clearTimers(this._reconnectTimers)
+      this._reconnectTimers = null
+    }
+
     this.connected = this.playing = this.paused = this.isAutoplay = false
     this.state = PLAYER_STATE.DESTROYED
     this.autoplayRetries = this.reconnectionRetries = 0
@@ -576,16 +583,8 @@ class Player extends EventEmitter {
   }
 
   shuffle() {
-    if (this.destroyed || !this.queue.size) return this
-    const items = this.queue.toArray()
-    const len = items.length
-    if (len <= 1) return this
-    for (let i = len - 1; i > 0; i--) {
-      const j = _functions.randIdx(i + 1)
-      if (i !== j) [items[i], items[j]] = [items[j], items[i]]
-    }
-    this.queue.clear()
-    for (let i = 0; i < len; i++) this.queue.add(items[i])
+    if (this.destroyed || !this.queue?.size) return this
+    this.queue.shuffle()
     return this
   }
 
@@ -820,7 +819,9 @@ class Player extends EventEmitter {
       preserveTracks: true
     })
 
-    const reconnectTimers = new Set()
+    // Store reconnect timers on instance for cleanup in destroy()
+    this._reconnectTimers = new Set()
+    const reconnectTimers = this._reconnectTimers
     const tryReconnect = async attempt => {
       if (aqua?.destroyed) { _functions.clearTimers(reconnectTimers); return }
       try {

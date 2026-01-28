@@ -262,7 +262,7 @@ class Connection {
     if (needsUpdate) this._scheduleVoiceUpdate()
   }
 
-  _handleDisconnect() {
+  async _handleDisconnect() {
     if (this._destroyed) return
 
     this._stateFlags = (this._stateFlags | STATE.DISCONNECTING) & ~STATE.CONNECTED
@@ -277,9 +277,11 @@ class Connection {
     this._stateFlags |= STATE.VOICE_DATA_STALE
 
     try {
-      this._player?.destroy?.()
+      if (this._aqua && this._guildId) {
+        await this._aqua.destroyPlayer(this._guildId)
+      }
     } catch (e) {
-      this._aqua.emit(AqualinkEvents.Debug, new Error(`Player destroy failed: ${e?.message || e}`))
+      this._aqua?.emit?.(AqualinkEvents.Debug, new Error(`Player destroy failed: ${e?.message || e}`))
     } finally {
       this._stateFlags &= ~STATE.DISCONNECTING
     }

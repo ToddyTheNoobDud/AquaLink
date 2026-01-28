@@ -209,11 +209,16 @@ class Aqua extends EventEmitter {
     for (const n of this.nodeMap.values()) {
       if (n.connected) connected.push(n)
     }
-    const sorted = this.loadBalancer === 'leastRest'
-      ? connected.sort((a, b) => (a.rest?.calls || 0) - (b.rest?.calls || 0))
-      : this.loadBalancer === 'random'
-        ? connected.sort(() => Math.random() - 0.5)
-        : connected.sort((a, b) => this._getNodeLoad(a) - this._getNodeLoad(b))
+    let sorted
+    if (this.loadBalancer === 'leastRest') {
+      sorted = connected.sort((a, b) => (a.rest?.calls || 0) - (b.rest?.calls || 0))
+    } else if (this.loadBalancer === 'random') {
+      sorted = connected.sort(() => Math.random() - 0.5)
+    } else {
+      const withLoads = connected.map(n => ({ node: n, load: this._getNodeLoad(n) }))
+      withLoads.sort((a, b) => a.load - b.load)
+      sorted = withLoads.map(x => x.node)
+    }
     this._leastUsedNodesCache = Object.freeze(sorted)
     this._leastUsedNodesCacheTime = now
     return this._leastUsedNodesCache
@@ -361,7 +366,18 @@ class Aqua extends EventEmitter {
       if (current && player?.queue?.add) {
         player.queue.add(current)
         await player.play()
-        if (state.position > 0) _functions.unrefTimeout(() => player.seek?.(state.position), SEEK_DELAY)
+        // Wait for trackStart before seeking to ensure track is loaded
+        if (state.position > 0) {
+          const seekOnce = (p) => {
+            if (p.guildId === guildId) {
+              this.off(AqualinkEvents.TrackStart, seekOnce)
+              _functions.unrefTimeout(() => player.seek?.(state.position), 50)
+            }
+          }
+          this.once(AqualinkEvents.TrackStart, seekOnce)
+          // Cleanup if player destroyed before track starts
+          player.once('destroy', () => this.off(AqualinkEvents.TrackStart, seekOnce))
+        }
         if (state.paused) player.pause(true)
       }
       return player
@@ -452,13 +468,19 @@ class Aqua extends EventEmitter {
 
   _capturePlayerState(player) {
     if (!player) return null
+    // Estimate actual position based on timestamp and playing state
+    let position = player.position || 0
+    if (player.playing && !player.paused && player.timestamp) {
+      const elapsed = Date.now() - player.timestamp
+      position = Math.min(position + elapsed, player.current?.info?.length || position + elapsed)
+    }
     return {
       guildId: player.guildId,
       textChannel: player.textChannel,
       voiceChannel: player.voiceChannel,
       volume: player.volume ?? 100,
       paused: !!player.paused,
-      position: player.position || 0,
+      position,
       current: player.current || null,
       queue: player.queue?.toArray?.() || EMPTY_ARRAY,
       loop: player.loop,
@@ -489,7 +511,18 @@ class Aqua extends EventEmitter {
       newPlayer.queue?.add?.(state.current, { toFront: true })
       if (this.failoverOptions.resumePlayback) {
         ops.push(newPlayer.play())
-        if (state.position > 0) _functions.unrefTimeout(() => newPlayer.seek?.(state.position), SEEK_DELAY)
+        // Wait for trackStart before seeking to ensure track is loaded
+        if (state.position > 0) {
+          const guildId = newPlayer.guildId
+          const seekOnce = (p) => {
+            if (p.guildId === guildId) {
+              this.off(AqualinkEvents.TrackStart, seekOnce)
+              _functions.unrefTimeout(() => newPlayer.seek?.(state.position), 50)
+            }
+          }
+          this.once(AqualinkEvents.TrackStart, seekOnce)
+          newPlayer.once('destroy', () => this.off(AqualinkEvents.TrackStart, seekOnce))
+        }
         if (state.paused) ops.push(newPlayer.pause(true))
       }
     }
