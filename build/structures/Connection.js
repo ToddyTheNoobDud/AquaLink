@@ -27,6 +27,7 @@ const _functions = {
   safeUnref: t => (typeof t?.unref === 'function' ? t.unref() : undefined),
   isValidNumber: n => typeof n === 'number' && n >= 0 && Number.isFinite(n),
   isNetworkError: e => !!e && (e.code === 'ECONNREFUSED' || e.code === 'ENOTFOUND' || e.code === 'ETIMEDOUT'),
+  noop: () => {},
   extractRegion: endpoint => {
     if (typeof endpoint !== 'string') return 'unknown'
     endpoint = endpoint.trim()
@@ -339,6 +340,7 @@ class Connection {
       this._aqua.emit(AqualinkEvents.Debug, `Resume PATCH sent for guild ${this._guildId}`)
       return true
     } catch (e) {
+      if (this._destroyed || !this._aqua) throw e
       this._consecutiveFailures++
       this._aqua.emit(AqualinkEvents.Debug, `Resume failed for guild ${this._guildId}: ${e?.message || e}`)
 
@@ -433,7 +435,9 @@ class Connection {
     }
     this._lastSentVoiceKey = key
 
-    this._sendUpdate(pending.payload).finally(() => sharedPool.release(pending.payload))
+    this._sendUpdate(pending.payload)
+      .catch(_functions.noop)
+      .finally(() => sharedPool.release(pending.payload))
   }
 
   async _sendUpdate(payload) {
@@ -444,9 +448,11 @@ class Connection {
       await this._rest.updatePlayer(payload)
     } catch (e) {
       if (e.statusCode === 404 || e.response?.statusCode === 404) {
-        this._aqua.emit(AqualinkEvents.Debug, `Player ${this._guildId} not found (404). Destroying.`)
-        if (this._aqua) this._aqua.destroyPlayer(this._guildId)
-        return
+        if (this._aqua) {
+          this._aqua.emit(AqualinkEvents.Debug, `Player ${this._guildId} not found (404). Destroying.`)
+          await this._aqua.destroyPlayer(this._guildId)
+        }
+        throw e
       }
       if (!_functions.isNetworkError(e)) {
         this._aqua.emit(AqualinkEvents.Debug, new Error(`Voice update failed: ${e?.message || e}`))
