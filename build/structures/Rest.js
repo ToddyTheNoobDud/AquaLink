@@ -110,7 +110,7 @@ class Rest {
     this.aqua = aqua
     this.node = node
     this.sessionId = node.sessionId
-    this.timeout = node.timeout || 15000
+    this.timeout = node.timeout || 30000
 
     const protocol = node.ssl ? 'https:' : 'http:'
     const host = node.host.includes(':') && !node.host.startsWith('[') ? `[${node.host}]` : node.host
@@ -218,9 +218,10 @@ class Rest {
     const headers = this._buildHeaders(!!payload, payloadLen)
 
     try {
-      return this.useHttp2 && payloadLen >= HTTP2_THRESHOLD
+      const resp = this.useHttp2 && payloadLen >= HTTP2_THRESHOLD
         ? await this._h2Request(method, endpoint, headers, payload)
         : await this._h1Request(method, url, headers, payload)
+      return resp
     } finally {
       this._returnHeaders(headers)
     }
