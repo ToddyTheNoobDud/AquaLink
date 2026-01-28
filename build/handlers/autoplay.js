@@ -17,51 +17,59 @@ const MAX_SC_LINKS = 50
 const MAX_SP_RESULTS = 5
 const DEFAULT_TIMEOUT_MS = 8000
 
-const fastFetch = (url, depth = 0) => new Promise((resolve, reject) => {
-  if (depth > MAX_REDIRECTS) return reject(new Error('Too many redirects'))
+const fastFetch = (url, depth = 0) =>
+  new Promise((resolve, reject) => {
+    if (depth > MAX_REDIRECTS) return reject(new Error('Too many redirects'))
 
-  const req = https.get(url, { agent, timeout: DEFAULT_TIMEOUT_MS }, res => {
-    const { statusCode, headers } = res
+    const req = https.get(
+      url,
+      { agent, timeout: DEFAULT_TIMEOUT_MS },
+      (res) => {
+        const { statusCode, headers } = res
 
-    if (statusCode >= 300 && statusCode < 400 && headers.location) {
-      res.resume()
-      return fastFetch(new URL(headers.location, url).href, depth + 1).then(resolve, reject)
-    }
+        if (statusCode >= 300 && statusCode < 400 && headers.location) {
+          res.resume()
+          return fastFetch(new URL(headers.location, url).href, depth + 1).then(
+            resolve,
+            reject
+          )
+        }
 
-    if (statusCode !== 200) {
-      res.resume()
-      return reject(new Error(`HTTP ${statusCode}`))
-    }
+        if (statusCode !== 200) {
+          res.resume()
+          return reject(new Error(`HTTP ${statusCode}`))
+        }
 
-    const chunks = []
-    let received = 0
+        const chunks = []
+        let received = 0
 
-    res.on('data', chunk => {
-      received += chunk.length
-      if (received > MAX_RESPONSE_BYTES) {
-        req.destroy(new Error('Response too large'))
-        return
+        res.on('data', (chunk) => {
+          received += chunk.length
+          if (received > MAX_RESPONSE_BYTES) {
+            req.destroy(new Error('Response too large'))
+            return
+          }
+          chunks.push(chunk)
+        })
+
+        res.on('end', () => {
+          try {
+            const buf = Buffer.concat(chunks)
+            resolve(buf.toString())
+          } catch (err) {
+            reject(err)
+          }
+        })
       }
-      chunks.push(chunk)
-    })
+    )
 
-    res.on('end', () => {
-      try {
-        const buf = Buffer.concat(chunks)
-        resolve(buf.toString())
-      } catch (err) {
-        reject(err)
-      }
-    })
+    req.on('error', reject)
+    req.setTimeout(DEFAULT_TIMEOUT_MS, () => req.destroy(new Error('Timeout')))
   })
 
-  req.on('error', reject)
-  req.setTimeout(DEFAULT_TIMEOUT_MS, () => req.destroy(new Error('Timeout')))
-})
-
-const shuffleInPlace = arr => {
+const shuffleInPlace = (arr) => {
   for (let i = arr.length - 1; i > 0; i--) {
-    const j = Math.random() * (i + 1) | 0
+    const j = (Math.random() * (i + 1)) | 0
     const tmp = arr[i]
     arr[i] = arr[j]
     arr[j] = tmp
@@ -69,7 +77,7 @@ const shuffleInPlace = arr => {
   return arr
 }
 
-const scAutoPlay = async baseUrl => {
+const scAutoPlay = async (baseUrl) => {
   try {
     const html = await fastFetch(`${baseUrl}/recommended`)
     const links = []
@@ -90,7 +98,11 @@ const spAutoPlay = async (seed, player, requester, excludedIds = []) => {
     if (!seed?.trackId) return null
 
     const seedQuery = `seed_tracks=${seed.trackId}${seed.artistIds ? `&seed_artists=${seed.artistIds}` : ''}`
-    const res = await player.aqua.resolve({ query: seedQuery, source: 'spsearch', requester })
+    const res = await player.aqua.resolve({
+      query: seedQuery,
+      source: 'spsearch',
+      requester
+    })
 
     const candidates = res?.tracks || []
     if (!candidates.length) return null
@@ -103,7 +115,10 @@ const spAutoPlay = async (seed, player, requester, excludedIds = []) => {
     for (const t of candidates) {
       if (seen.has(t.identifier)) continue
       seen.add(t.identifier)
-      t.pluginInfo = { ...(t.pluginInfo || {}), clientData: { fromAutoplay: true } }
+      t.pluginInfo = {
+        ...(t.pluginInfo || {}),
+        clientData: { fromAutoplay: true }
+      }
       out.push(t)
       if (out.length === MAX_SP_RESULTS) break
     }

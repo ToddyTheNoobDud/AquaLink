@@ -1,4 +1,4 @@
-'use strict';
+'use strict'
 
 const AqualinkEvents = {
   TrackStart: 'trackStart',
@@ -40,6 +40,6 @@ const AqualinkEvents = {
   PauseEvent: 'pauseEvent',
   MixStarted: 'mixStarted',
   MixEnded: 'mixEnded'
-};
+}
 
-module.exports = { AqualinkEvents };
+module.exports = { AqualinkEvents }

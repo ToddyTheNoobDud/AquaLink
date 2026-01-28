@@ -1,10 +1,11 @@
 'use strict'
 
-const YT_ID_REGEX = /(?:[?&]v=|youtu\.be\/|\/embed\/|\/shorts\/)([A-Za-z0-9_-]{11})/
+const YT_ID_REGEX =
+  /(?:[?&]v=|youtu\.be\/|\/embed\/|\/shorts\/)([A-Za-z0-9_-]{11})/
 
 const _h = {
-  str: (v, d = '') => typeof v === 'string' ? v : d,
-  num: (v, d = 0) => Number.isFinite(v) ? v : d
+  str: (v, d = '') => (typeof v === 'string' ? v : d),
+  num: (v, d = 0) => (Number.isFinite(v) ? v : d)
 }
 
 class Track {
@@ -32,7 +33,7 @@ class Track {
   }
 
   get info() {
-    return this._infoCache ||= Object.freeze({
+    return (this._infoCache ||= Object.freeze({
       identifier: this.identifier,
       isSeekable: this.isSeekable,
       position: this.position,
@@ -43,7 +44,7 @@ class Track {
       uri: this.uri,
       sourceName: this.sourceName,
       artworkUrl: this.artworkUrl || this._computeArtwork()
-    })
+    }))
   }
 
   get length() {
@@ -58,14 +59,20 @@ class Track {
     if (typeof this.track === 'string' && this.track) return this
     if (!aqua?.resolve) return null
 
-    const platform = opts.platform || aqua?.options?.defaultSearchPlatform || 'ytsearch'
+    const platform =
+      opts.platform || aqua?.options?.defaultSearchPlatform || 'ytsearch'
     const node = opts.node || this.node || this.nodes
 
     let query = this.uri
     if (!query) {
       if (this.title) {
-        query = this.author ? `${this.author} - ${this.title}`.trim() : this.title.trim()
-      } else if (this.identifier && this.sourceName?.toLowerCase().includes('youtube')) {
+        query = this.author
+          ? `${this.author} - ${this.title}`.trim()
+          : this.title.trim()
+      } else if (
+        this.identifier &&
+        this.sourceName?.toLowerCase().includes('youtube')
+      ) {
         query = this.identifier
       }
     }
@@ -86,7 +93,10 @@ class Track {
 
     const fi = found.info || {}
 
-    this.track = typeof found.track === 'string' ? found.track : (found.encoded || this.track)
+    this.track =
+      typeof found.track === 'string'
+        ? found.track
+        : found.encoded || this.track
     this.identifier = fi.identifier ?? this.identifier
     this.title = fi.title ?? this.title
     this.author = fi.author ?? this.author
@@ -107,13 +117,25 @@ class Track {
   isValid() {
     return Boolean(
       (typeof this.track === 'string' && this.track) ||
-      (typeof this.uri === 'string' && this.uri)
+        (typeof this.uri === 'string' && this.uri)
     )
   }
 
   dispose() {
-    this._infoCache = this.requester = this.node = this.nodes = this.playlist = this.track = null
-    this.identifier = this.author = this.title = this.uri = this.sourceName = this.artworkUrl = ''
+    this._infoCache =
+      this.requester =
+      this.node =
+      this.nodes =
+      this.playlist =
+      this.track =
+        null
+    this.identifier =
+      this.author =
+      this.title =
+      this.uri =
+      this.sourceName =
+      this.artworkUrl =
+        ''
   }
 
   _computeArtwork() {

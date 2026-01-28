@@ -41,6 +41,7 @@ class Queue {
   }
 
   shuffle() {
+    // Compact first if needed
     if (this._head > 0) {
       this._items = this._items.slice(this._head)
       this._head = 0
@@ -57,7 +58,13 @@ class Queue {
   move(from, to) {
     const actualFrom = from + this._head
     const actualTo = to + this._head
-    if (from < 0 || actualFrom >= this._items.length || to < 0 || actualTo >= this._items.length) return this
+    if (
+      from < 0 ||
+      actualFrom >= this._items.length ||
+      to < 0 ||
+      actualTo >= this._items.length
+    )
+      return this
     const [item] = this._items.splice(actualFrom, 1)
     this._items.splice(actualTo, 0, item)
     return this
@@ -66,7 +73,13 @@ class Queue {
   swap(index1, index2) {
     const actual1 = index1 + this._head
     const actual2 = index2 + this._head
-    if (index1 < 0 || actual1 >= this._items.length || index2 < 0 || actual2 >= this._items.length) return this
+    if (
+      index1 < 0 ||
+      actual1 >= this._items.length ||
+      index2 < 0 ||
+      actual2 >= this._items.length
+    )
+      return this
     const temp = this._items[actual1]
     this._items[actual1] = this._items[actual2]
     this._items[actual2] = temp
@@ -88,8 +101,9 @@ class Queue {
   dequeue() {
     if (this._head >= this._items.length) return undefined
     const item = this._items[this._head]
-    this._items[this._head] = undefined
+    this._items[this._head] = undefined // Allow GC
     this._head++
+    // Compact when head is > 50% of array to prevent unbounded growth
     if (this._head > 0 && this._head > this._items.length / 2) {
       this._items = this._items.slice(this._head)
       this._head = 0
