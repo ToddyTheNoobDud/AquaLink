@@ -297,7 +297,8 @@ class Player extends EventEmitter {
 
 
     async play() {
-        if (this.destroyed || !this.queue.size) return this
+        if (this.destroyed || !this.queue) return this
+        if (!this.queue.size) return this
 
         const item = this.queue.dequeue()
         if (!item) return this
@@ -310,6 +311,7 @@ class Player extends EventEmitter {
             this.playing = true
             this.paused = false
             this.position = 0
+            if (this.destroyed || !this._updateBatcher) return this
             await this.batchUpdatePlayer({ guildId: this.guildId, track: { encoded: this.current.track } }, true)
         } catch (error) {
             if (!this.destroyed) this.aqua?.emit(AqualinkEvents.Error, error)
@@ -702,7 +704,7 @@ class Player extends EventEmitter {
             this.queue.add(track)
         }
 
-        if (this.queue.size) {
+        if (this.queue.size && !isReplaced) {
             this.aqua.emit(AqualinkEvents.TrackEnd, this, track, reason)
             await this.play()
         } else if (this.isAutoplayEnabled && !isReplaced) {
