@@ -521,6 +521,7 @@ class Node {
         resuming: true,
         timeout: this.resumeTimeout
       })
+
       if (this.aqua.loadPlayers) {
         await this.aqua.loadPlayers()
       }
