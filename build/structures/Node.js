@@ -365,8 +365,13 @@ class Node {
       ws.once('error', h.error)
       ws.on('message', h.message)
       ws.once('close', h.close)
+      ws.once('upgrade', (res) => {
+        console.log(`[Aqualink/Node] WebSocket upgrade headers for ${this.name}:`, res.headers);
+        const compression = res.headers['content-encoding'] || res.headers['sec-websocket-extensions'] || 'none';
+        console.log(`[Aqualink/Node] WebSocket compression for ${this.name}: ${compression}`);
+      });
 
-      this.ws = ws
+      this.ws = ws;
     } catch (err) {
       this._isConnecting = false
       this._emitError(`Failed to create WebSocket: ${_functions.errMsg(err)}`)
@@ -524,7 +529,7 @@ class Node {
         resuming: true,
         timeout: this.resumeTimeout
       })
-      if (this.aqua.loadPlayers && !this.isNodelink) {
+      if (this.aqua.loadPlayers) {
         await this.aqua.loadPlayers()
       }
     } catch (err) {
