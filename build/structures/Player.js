@@ -263,10 +263,16 @@ class Player extends EventEmitter {
     this.timestamp = _functions.isNum(s.time) ? s.time : Date.now()
 
     if (!this.connected) {
-      if (!this._voiceDownSince) {
+      if (!this._voiceDownSince && !this._reconnecting && !this._voiceRecovering) {
         this._voiceDownSince = Date.now()
         this._createTimer(() => {
-          if (this.connected || this.destroyed || this.nodes?.info?.isNodelink)
+          if (
+            this.connected ||
+            this.destroyed ||
+            this._reconnecting ||
+            this._voiceRecovering ||
+            this.nodes?.info?.isNodelink
+          )
             return
           this.connection.attemptResume()
         }, 1000)
@@ -387,7 +393,9 @@ class Player extends EventEmitter {
       this.nodes?.info?.isNodelink ||
       this.destroyed ||
       !this.voiceChannel ||
-      this.connected
+      this.connected ||
+      this._reconnecting ||
+      this._voiceRecovering
     )
       return false
     if (
@@ -395,7 +403,7 @@ class Player extends EventEmitter {
       Date.now() - this._voiceDownSince < VOICE_DOWN_THRESHOLD
     )
       return false
-    return !this._voiceRecovering && this.reconnectionRetries < RECONNECT_MAX
+    return this.reconnectionRetries < RECONNECT_MAX
   }
 
   async _voiceWatchdog() {
@@ -947,18 +955,21 @@ class Player extends EventEmitter {
   }
 
   async socketClosed(player, track, payload) {
-    if (this.destroyed) return
+    if (this.destroyed || this._reconnecting) return
+
     const code = payload?.code
     let isRecoverable = [4015, 4009, 4006, 4014, 4022].includes(code)
     if (code === 4014 && this.connection?.isWaitingForDisconnect)
       isRecoverable = false
 
     if (code === 4015 && !this.nodes?.info?.isNodelink) {
+      this._reconnecting = true
       try {
         await this._attemptVoiceResume()
+        this._reconnecting = false
         return
       } catch {
-        /* ignore */
+        this._reconnecting = false
       }
     }
 
@@ -973,8 +984,6 @@ class Player extends EventEmitter {
       if (!this._voiceDownSince) this._voiceDownSince = Date.now()
       if (code === 4022) this._suppressResumeUntil = Date.now() + 3000
     }
-
-    if (this._reconnecting) return
 
     const aqua = this.aqua
     const vcId = _functions.toId(this.voiceChannel)
