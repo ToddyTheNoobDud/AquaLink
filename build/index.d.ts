@@ -50,16 +50,81 @@ declare module 'aqualink' {
     get leastUsedNodes(): Node[]
 
     // Core Methods
+    /**
+     * Initializes the specific client id and connects to all nodes
+     * @param clientId Client ID
+     * @example
+     * ```ts
+     * await aqua.init(client.user.id);
+     * ```
+     */
     init(clientId: string): Promise<Aqua>
+
+    /**
+     * Creates a new node connection
+     * @param options Modified node options
+     */
     createNode(options: NodeOptions): Promise<Node>
+
+    /**
+     * Destroys a node by identifier
+     * @param identifier Node identifier (name or host)
+     */
     destroyNode(identifier: string): void
+
+    /**
+     * Updates the voice state of a player
+     * @param data Voice state update packet
+     */
     updateVoiceState(data: VoiceStateUpdate | VoiceServerUpdate): void
+
+    /**
+     * Fetches nodes in a specific region
+     * @param region Region name
+     */
     fetchRegion(region: string): Node[]
+
+    /**
+     * Creates a connection for a player
+     * @param options Connection options
+     */
     createConnection(options: ConnectionOptions): Player
+
+    /**
+     * Creates a player on a specific node
+     * @param node Node to create player on
+     * @param options Player options
+     */
     createPlayer(node: Node, options: PlayerOptions): Player
+
+    /**
+     * Destroys a player
+     * @param guildId Guild ID
+     */
     destroyPlayer(guildId: string): Promise<void>
+
+    /**
+     * Resolves a track or playlist
+     * @param options Resolution options
+     * @example
+     * ```ts
+     * const result = await aqua.resolve({ query: 'https://...', requester: user });
+     * ```
+     */
     resolve(options: ResolveOptions): Promise<ResolveResponse>
+
+    /**
+     * Gets an existing player
+     * @param guildId Guild ID
+     */
     get(guildId: string): Player
+
+    /**
+     * Searches for tracks
+     * @param query Search query
+     * @param requester Requester object
+     * @param source Search source (ytsearch, scsearch, etc)
+     */
     search(
       query: string,
       requester: any,
@@ -68,12 +133,16 @@ declare module 'aqualink' {
 
     // Save/Load Methods
     savePlayer(filePath?: string): Promise<void>
+    savePlayerSync(filePath?: string): void
     loadPlayers(filePath?: string): Promise<void>
 
     // Failover and Migration Methods
     handleNodeFailover(failedNode: Node): Promise<void>
 
     // Utility Methods
+    /**
+     * Destroys the Aqua instance and all players
+     */
     destroy(): Promise<void>
 
     // Internal Methods
@@ -244,29 +313,118 @@ declare module 'aqualink' {
     _boundPlayerUpdate: (packet: any) => void
     _boundEvent: (payload: any) => void
     _boundAquaPlayerMove: (oldChannel: string, newChannel: string) => void
+    _lastVoiceChannel: string | null
 
     // Getters
     get previous(): Track | null
     get currenttrack(): Track | null
 
     // Core Methods
-    play(): Promise<Player>
+    /**
+     * Plays a track. If no track is provided, plays the next track in the queue.
+     * @param track The track to play
+     * @param options Options for playback
+     * @example
+     * ```ts
+     * // Play the next track in the queue
+     * await player.play();
+     *
+     * // Play a specific track
+     * await player.play(track);
+     * ```
+     */
+    play(track?: Track | null, options?: { paused?: boolean; startTime?: number; noReplace?: boolean }): Promise<Player>
+
+    /**
+     * Connects the player to a voice channel
+     * @param options Connection options
+     * @example
+     * ```ts
+     * player.connect({
+     *   guildId: '...',
+     *   voiceChannel: '...',
+     *   deaf: true
+     * });
+     * ```
+     */
     connect(options?: ConnectionOptions): Player
+
+    /**
+     * Destroys the player and optionally cleans up resources
+     * @param options Destruction options
+     */
     destroy(options?: {
       preserveClient?: boolean
       skipRemote?: boolean
+      preserveMessage?: boolean
+      preserveReconnecting?: boolean
+      preserveTracks?: boolean
     }): Player
+
+    /**
+     * Pauses or resumes the player
+     * @param paused Whether to pause
+     */
     pause(paused: boolean): Player
+
+    /**
+     * Seeks to a position in the current track
+     * @param position Position in milliseconds
+     */
     seek(position: number): Player
+
+    /**
+     * Stops the playback
+     */
     stop(): Player
+
+    /**
+     * Sets the player volume
+     * @param volume Volume (0-1000)
+     */
     setVolume(volume: number): Player
+
+    /**
+     * Sets the loop mode
+     * @param mode Loop mode (off, track, queue)
+     */
     setLoop(mode: LoopMode | LoopModeName): Player
+
+    /**
+     * Sets the text channel for the player
+     * @param channel Channel ID
+     */
     setTextChannel(channel: string): Player
+
+    /**
+     * Sets the voice channel and moves the player
+     * @param channel Channel ID
+     */
     setVoiceChannel(channel: string): Player
+
+    /**
+     * Disconnects the player from voice
+     */
     disconnect(): Player
+
+    /**
+     * Shuffles the queue
+     */
     shuffle(): Player
+
+    /**
+     * Gets the player queue
+     */
     getQueue(): Queue
+
+    /**
+     * Replays the current track from the beginning
+     */
     replay(): Player
+
+    /**
+     * Skips the current track
+     */
     skip(): Player
 
     // Advanced Methods
@@ -355,9 +513,24 @@ declare module 'aqualink' {
     get thumbnail(): string
 
     // Methods
+    /**
+     * Resolves local artwork/thumbnail
+     */
     resolveThumbnail(url?: string): string | null
+
+    /**
+     * Resolves the track if it needs (re)resolution
+     */
     resolve(aqua: Aqua, opts?: TrackResolutionOptions): Promise<Track | null>
+
+    /**
+     * Checks if the track is valid
+     */
     isValid(): boolean
+
+    /**
+     * Disposes the track and frees resources
+     */
     dispose(): void
 
     // Internal Methods
@@ -380,13 +553,54 @@ declare module 'aqualink' {
     useHttp2: boolean
 
     // Core Methods
+    /**
+     * Sets the session ID for the REST connection
+     * @param sessionId The session ID
+     */
     setSessionId(sessionId: string): void
+
+    /**
+     * Makes a generic request to the Lavalink REST API
+     * @param method HTTP method
+     * @param endpoint API endpoint
+     * @param body Request body
+     */
     makeRequest(method: HttpMethod, endpoint: string, body?: any): Promise<any>
+
+    /**
+     * Updates a player via REST
+     * @param options Update options
+     */
     updatePlayer(options: UpdatePlayerOptions): Promise<any>
+
+    /**
+     * Destroys a player via REST
+     * @param guildId Guild ID
+     */
     destroyPlayer(guildId: string): Promise<any>
+
+    /**
+     * Gets lyrics for a track
+     * @param options Lyrics options
+     */
     getLyrics(options: GetLyricsOptions): Promise<LyricsResponse>
+
+    /**
+     * Subscribes to live lyrics events
+     * @param guildId Guild ID
+     * @param sync Whether to sync with playback
+     */
     subscribeLiveLyrics(guildId: string, sync?: boolean): Promise<any>
+
+    /**
+     * Unsubscribes from live lyrics
+     * @param guildId Guild ID
+     */
     unsubscribeLiveLyrics(guildId: string): Promise<any>
+
+    /**
+     * Gets node statistics
+     */
     getStats(): Promise<NodeStats>
 
     // Additional REST Methods
@@ -421,14 +635,33 @@ declare module 'aqualink' {
     readonly last: Track | null
 
     // Methods
+    /**
+     * Adds a track to the queue
+     * @param track Track to add
+     */
     add(track: Track): Queue
+
+    /**
+     * Adds multiple tracks to the queue
+     * @param tracks Tracks to add
+     */
     add(...tracks: Track[]): Queue
+
     push(track: Track): number
     unshift(track: Track): number
     shift(): Track | undefined
     remove(track: Track): boolean
+
+    /**
+     * Clears the queue
+     */
     clear(): void
+
+    /**
+     * Shuffles the queue
+     */
     shuffle(): Queue
+
     peek(): Track | null
     isEmpty(): boolean
     toArray(): Track[]
@@ -509,6 +742,9 @@ declare module 'aqualink' {
     _updateTimer: NodeJS.Timeout | null
     _hasDebugListeners: boolean
     _hasMoveListeners: boolean
+    _lastSentVoiceKey: string
+    _lastVoiceDataUpdate: number
+    _stateFlags: number
 
     // Methods
     setServerUpdate(data: VoiceServerUpdate['d']): void
