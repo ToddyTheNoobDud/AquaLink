@@ -528,11 +528,15 @@ class Connection {
       await this._rest.updatePlayer(payload)
     } catch (e) {
       if (e.statusCode === 404 || e.response?.statusCode === 404) {
+        const isSessionError = e.body?.message?.includes('sessionId') || false
         if (this._aqua) {
           this._aqua.emit(
             AqualinkEvents.Debug,
-            `Player ${this._guildId} not found (404). Destroying.`
+            `[Aqua/Connection] Player ${this._guildId} not found (404)${isSessionError ? ' - Session invalid' : ''}. Destroying.`
           )
+          if (isSessionError && this._player?.nodes?._clearSession) {
+            this._player.nodes._clearSession()
+          }
           await this._aqua.destroyPlayer(this._guildId)
         }
         throw e
