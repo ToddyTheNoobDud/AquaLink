@@ -216,8 +216,9 @@ class Connection {
     this._scheduleVoiceUpdate()
   }
 
-  resendVoiceUpdate() {
+  resendVoiceUpdate(force = false) {
     if (this._destroyed || !this._hasValidVoiceData()) return false
+    if (force) this._lastSentVoiceKey = ''
     this._scheduleVoiceUpdate()
     return true
   }
