@@ -1,5 +1,3 @@
-'use strict'
-
 const fs = require('node:fs')
 const readline = require('node:readline')
 const { EventEmitter } = require('tseep')
@@ -23,7 +21,6 @@ const MAX_CONCURRENT_OPS = 10
 const BROKEN_PLAYER_TTL = 300000
 const FAILOVER_CLEANUP_TTL = 600000
 const PLAYER_BATCH_SIZE = 20
-const SEEK_DELAY = 120
 const RECONNECT_DELAY = 400
 const CACHE_VALID_TIME = 12000
 const NODE_TIMEOUT = 30000
@@ -31,8 +28,6 @@ const MAX_CACHE_SIZE = 20
 const MAX_FAILOVER_QUEUE = 50
 const MAX_REBUILD_LOCKS = 100
 const WRITE_BUFFER_SIZE = 100
-const MAX_QUEUE_SAVE = 10
-const MAX_TRACKS_RESTORE = 20
 
 const DEFAULT_OPTIONS = Object.freeze({
   shouldDeleteMessage: false,
@@ -181,7 +176,9 @@ class Aqua extends EventEmitter {
         }
         if (batch.length)
           queueMicrotask(() =>
-            batch.forEach((p) => p.connection.resendVoiceUpdate())
+            batch.forEach((p) => {
+              p.connection.resendVoiceUpdate()
+            })
           )
       }
     }
@@ -536,7 +533,7 @@ class Aqua extends EventEmitter {
         return newPlayer
       } catch (error) {
         if (retry === maxRetries - 1) throw error
-        await _functions.delay(retryDelay * Math.pow(1.5, retry))
+        await _functions.delay(retryDelay * 1.5 ** retry)
       }
     }
   }
@@ -866,7 +863,7 @@ class Aqua extends EventEmitter {
         buffer.push(JSON.stringify(data))
 
         if (buffer.length >= WRITE_BUFFER_SIZE) {
-          const chunk = buffer.join('\n') + '\n'
+          const chunk = `${buffer.join('\n')}\n`
           buffer.length = 0
           if (!ws.write(chunk)) {
             drainPromise = drainPromise.then(
@@ -876,7 +873,7 @@ class Aqua extends EventEmitter {
         }
       }
 
-      if (buffer.length) ws.write(buffer.join('\n') + '\n')
+      if (buffer.length) ws.write(`${buffer.join('\n')}\n`)
       await drainPromise
       await new Promise((resolve, reject) =>
         ws.end((err) => (err ? reject(err) : resolve()))
@@ -943,7 +940,7 @@ class Aqua extends EventEmitter {
     try {
       const gId = String(p.g)
       const existing = this.players.get(gId)
-      if (existing && existing.playing) return
+      if (existing?.playing) return
 
       const player =
         existing ||
@@ -1076,7 +1073,6 @@ class Aqua extends EventEmitter {
             break
           }
         } catch {
-          continue
         }
       }
     } catch {

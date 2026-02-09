@@ -1,9 +1,7 @@
-'use strict'
-
-const { Buffer } = require('buffer')
-const { Agent: HttpsAgent, request: httpsRequest } = require('https')
-const { Agent: HttpAgent, request: httpRequest } = require('http')
-const http2 = require('http2')
+const { Buffer } = require('node:buffer')
+const { Agent: HttpsAgent, request: httpsRequest } = require('node:https')
+const { Agent: HttpAgent, request: httpRequest } = require('node:http')
+const http2 = require('node:http2')
 const {
   createBrotliDecompress,
   createUnzip,
@@ -11,7 +9,7 @@ const {
   unzipSync,
   createZstdDecompress,
   zstdDecompressSync
-} = require('zlib')
+} = require('node:zlib')
 
 let autoplayModule = null
 try {

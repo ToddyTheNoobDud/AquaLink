@@ -237,7 +237,7 @@ declare module 'aqualink' {
     _isConnecting: boolean
     _debugEnabled: boolean
     _headers: Record<string, string>
-    _boundHandlers: Record<string, Function>
+    _boundHandlers: Record<string, ReturnType<typeof this._boundHandlers>>
 
     // Methods
     connect(): Promise<void>
@@ -314,6 +314,7 @@ declare module 'aqualink' {
     _boundEvent: (payload: any) => void
     _boundAquaPlayerMove: (oldChannel: string, newChannel: string) => void
     _lastVoiceChannel: string | null
+    _lastTextChannel: string | null
 
     // Getters
     get previous(): Track | null

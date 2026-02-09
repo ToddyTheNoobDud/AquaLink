@@ -1,5 +1,3 @@
-'use strict'
-
 const IS_BUN = !!(process?.isBun || process?.versions?.bun || globalThis.Bun)
 if (process && typeof process.isBun !== 'boolean') process.isBun = IS_BUN
 
@@ -263,7 +261,6 @@ class Node {
 
   _handleClose(code, reason) {
     this.connected = false
-    const wasReady = this.state === NODE_STATE.READY
     this.state = this.isDestroyed ? NODE_STATE.IDLE : NODE_STATE.RECONNECTING
     this._isConnecting = false
 
@@ -343,7 +340,7 @@ class Node {
   _calcBackoff(attempt) {
     const baseBackoff =
       this.reconnectTimeout *
-      Math.pow(Node.BACKOFF_MULTIPLIER, Math.min(attempt, 10))
+      Node.BACKOFF_MULTIPLIER ** Math.min(attempt, 10)
     const maxJitter = Math.min(
       Node.JITTER_MAX,
       baseBackoff * Node.JITTER_FACTOR

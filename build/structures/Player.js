@@ -1,5 +1,3 @@
-'use strict'
-
 const { EventEmitter } = require('tseep')
 const { AqualinkEvents } = require('./AqualinkEvents')
 const Connection = require('./Connection')
@@ -41,7 +39,6 @@ const WATCHDOG_INTERVAL = 15000
 const VOICE_DOWN_THRESHOLD = 10000
 const VOICE_ABANDON_MULTIPLIER = 12
 const RECONNECT_MAX = 15
-const RESUME_TIMEOUT = 5000
 const MUTE_TOGGLE_DELAY = 300
 const SEEK_DELAY = 800
 const PAUSE_DELAY = 1200
@@ -487,6 +484,7 @@ class Player extends EventEmitter {
     this.autoplayRetries = this.reconnectionRetries = 0
     if (!preserveReconnecting) this._reconnecting = false
     this._lastVoiceChannel = this.voiceChannel
+    this._lastTextChannel = this.textChannel
     this.voiceChannel = null
 
     if (
@@ -736,7 +734,7 @@ class Player extends EventEmitter {
       this.destroyed ||
       !this.isAutoplayEnabled ||
       !this.previous ||
-      (this.queue && this.queue.size)
+      (this.queue?.size)
     )
       return this
     const prev = this.previous
@@ -1111,7 +1109,10 @@ class Player extends EventEmitter {
 
   set(key, value) {
     if (this.destroyed) return
-    ;(this._dataStore || (this._dataStore = new Map())).set(key, value)
+    if (!this._dataStore) {
+      this._dataStore = new Map()
+    }
+    this._dataStore.set(key, value)
   }
 
   get(key) {

@@ -1,5 +1,3 @@
-'use strict'
-
 const AqualinkEvents = {
   TrackStart: 'trackStart',
   TrackEnd: 'trackEnd',

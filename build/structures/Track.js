@@ -1,5 +1,3 @@
-'use strict'
-
 const YT_ID_REGEX =
   /(?:[?&]v=|youtu\.be\/|\/embed\/|\/shorts\/)([A-Za-z0-9_-]{11})/
 
@@ -30,11 +28,12 @@ class Track {
     this.nodes = data.nodes || null
     this.requester = requester || null
     this._infoCache = null
-    this._artworkCache = undefined
+    this._artworkCache = undefined  // undefined = not computed, null = computed but no artwork
   }
 
   get info() {
-    return (this._infoCache ||= Object.freeze({
+    if (this._infoCache) return this._infoCache
+    this._infoCache = Object.freeze({
       identifier: this.identifier,
       isSeekable: this.isSeekable,
       position: this.position,
@@ -45,7 +44,8 @@ class Track {
       uri: this.uri,
       sourceName: this.sourceName,
       artworkUrl: this.artworkUrl || this._computeArtwork()
-    }))
+    })
+    return this._infoCache
   }
 
   get length() {
@@ -55,7 +55,8 @@ class Track {
   get thumbnail() {
     if (this.artworkUrl) return this.artworkUrl
     if (this._artworkCache !== undefined) return this._artworkCache
-    return (this._artworkCache = this._computeArtwork())
+    this._artworkCache = this._computeArtwork()
+    return this._artworkCache
   }
 
   async resolve(aqua, opts = {}) {

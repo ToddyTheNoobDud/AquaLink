@@ -1,5 +1,3 @@
-'use strict'
-
 class Queue {
   constructor() {
     this._items = []
@@ -106,7 +104,7 @@ class Queue {
   dequeue() {
     if (this._head >= this._items.length) return undefined
     const item = this._items[this._head]
-    this._items[this._head] = undefined
+    this._items[this._head] = undefined // Allow GC
     this._head++
     if (this._head > 0 && this._head > this._items.length / 2) {
       const len = this._items.length - this._head

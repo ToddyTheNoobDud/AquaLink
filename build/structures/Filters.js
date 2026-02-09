@@ -1,5 +1,3 @@
-'use strict'
-
 const FILTER_DEFAULTS = Object.freeze({
   karaoke: Object.freeze({
     level: 1,

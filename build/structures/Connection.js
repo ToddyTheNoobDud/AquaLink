@@ -1,5 +1,3 @@
-'use strict'
-
 const { AqualinkEvents } = require('./AqualinkEvents')
 
 const POOL_SIZE = 12
