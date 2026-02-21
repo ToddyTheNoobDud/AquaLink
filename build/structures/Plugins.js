@@ -3,8 +3,8 @@ class Plugin {
     this.name = name
   }
 
-  load(aqua) {}
-  unload(aqua) {}
+  load(_aqua) {}
+  unload(_aqua) {}
 }
 
 module.exports = Plugin

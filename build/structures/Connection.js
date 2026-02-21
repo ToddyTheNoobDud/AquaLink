@@ -1,4 +1,5 @@
 const { AqualinkEvents } = require('./AqualinkEvents')
+const { unrefTimer, noop } = require('../utils')
 
 const POOL_SIZE = 12
 const UPDATE_TIMEOUT = 4000
@@ -14,8 +15,8 @@ const POST_RESUME_COOLDOWN = 6000
 
 const NULL_CHANNEL_GRACE_MS = 15000
 
-const MIGRATION_COOLDOWN_MS = 10000   // minimum ms between migrations for the same player
-const MIGRATION_DEBOUNCE_MS = 1500    // debounce window after endpoint change before evaluating
+const MIGRATION_COOLDOWN_MS = 10000 // minimum ms between migrations for the same player
+const MIGRATION_DEBOUNCE_MS = 1500 // debounce window after endpoint change before evaluating
 
 const STATE = {
   CONNECTED: 1,
@@ -26,14 +27,14 @@ const STATE = {
 }
 
 const _functions = {
-  safeUnref: (t) => (typeof t?.unref === 'function' ? t.unref() : undefined),
+  safeUnref: unrefTimer,
   isValidNumber: (n) => typeof n === 'number' && n >= 0 && Number.isFinite(n),
   isNetworkError: (e) =>
     !!e &&
     (e.code === 'ECONNREFUSED' ||
       e.code === 'ENOTFOUND' ||
       e.code === 'ETIMEDOUT'),
-  noop: () => {},
+  noop: noop,
   extractRegion: (endpoint) => {
     if (typeof endpoint !== 'string') return 'unknown'
     endpoint = endpoint.trim()
@@ -52,16 +53,20 @@ const _functions = {
     const label = (dot === -1 ? endpoint : endpoint.slice(0, dot)).toLowerCase()
     if (!label) return 'unknown'
 
+    // New Discord endpoint format: c-{iata}{num}-{hash}  (e.g. c-gru18-075b)
+    // Extract just the IATA alpha code after the leading "c-"
     if (label.startsWith('c-')) {
       let end = 2
       while (end < label.length) {
         const code = label.charCodeAt(end)
-        if (code >= 97 && code <= 122) end++
+        if (code >= 97 && code <= 122)
+          end++ // a-z only
         else break
       }
       return end > 2 ? label.slice(2, end) : 'unknown'
     }
 
+    // Legacy format: {region}{num} (e.g. gru18, us-east5) -- strip trailing digits
     let i = label.length - 1
     while (i >= 0) {
       const c = label.charCodeAt(i)
@@ -175,7 +180,7 @@ class Connection {
     this._regionMigrationAttempted = false
     this._lastResumeSuccessAt = 0
     this._lastMigrationAt = 0
-    this._migrationInProgress = false  // true only while a migration is actively in flight
+    this._migrationInProgress = false // true only while a migration is actively in flight
     this._migrationDebounceTimer = null
     this._migrated = false
   }
@@ -197,11 +202,14 @@ class Connection {
 
   _canAttemptResumeCore() {
     if (this._destroyed) return false
-    if (this._migrationInProgress) return false   // block resume while migrating nodes
+    if (this._migrationInProgress) return false // block resume while migrating nodes
     if (this._reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) return false
     if (this._stateFlags & (STATE.ATTEMPTING_RESUME | STATE.DISCONNECTING))
       return false
-    if (this._lastResumeSuccessAt > 0 && Date.now() - this._lastResumeSuccessAt < POST_RESUME_COOLDOWN)
+    if (
+      this._lastResumeSuccessAt > 0 &&
+      Date.now() - this._lastResumeSuccessAt < POST_RESUME_COOLDOWN
+    )
       return false
     return true
   }
@@ -210,7 +218,7 @@ class Connection {
     if (this._destroyed) return
     this._clearReconnectTimer()
     this._reconnectTimer = setTimeout(() => this._handleReconnect(), delay)
-    _functions.safeUnref(this._reconnectTimer)
+    unrefTimer(this._reconnectTimer)
   }
 
   setServerUpdate(data) {
@@ -292,7 +300,6 @@ class Connection {
     } = data
     const p = this._player
 
-
     if (channelId) this._clearNullChannelTimer()
 
     if (data.txId && data.txId < this.txId) return
@@ -304,7 +311,7 @@ class Connection {
           this._nullChannelTimer = null
           this._handleDisconnect()
         }, NULL_CHANNEL_GRACE_MS)
-        _functions.safeUnref(this._nullChannelTimer)
+        unrefTimer(this._nullChannelTimer)
       }
       return
     }
@@ -339,7 +346,15 @@ class Connection {
       this._consecutiveFailures = 0
       needsUpdate = true
 
-      if (hadSession && this.voiceChannel === channelId && !this._migrationInProgress) {
+      // A new session on the same channel means Discord re-established the voice
+      // connection (e.g. manual region change, server region override change).
+      // Only re-arm migration if we're not currently migrating — the session change
+      // Discord sends as a consequence of a migration should not trigger another one.
+      if (
+        hadSession &&
+        this.voiceChannel === channelId &&
+        !this._migrationInProgress
+      ) {
         this._regionMigrationAttempted = false
         this._clearMigrationDebounce()
       }
@@ -566,7 +581,7 @@ class Connection {
       () => this._executeVoiceUpdate(),
       VOICE_FLUSH_DELAY
     )
-    _functions.safeUnref(this._voiceFlushTimer)
+    unrefTimer(this._voiceFlushTimer)
   }
 
   _executeVoiceUpdate() {
@@ -639,7 +654,7 @@ class Connection {
       this._migrationDebounceTimer = null
       this._checkRegionMigration()
     }, MIGRATION_DEBOUNCE_MS)
-    _functions.safeUnref(this._migrationDebounceTimer)
+    unrefTimer(this._migrationDebounceTimer)
   }
 
   _checkRegionMigration() {
@@ -650,23 +665,31 @@ class Connection {
     if (!this.region || this.region === 'unknown') return
 
     const player = this._player
-    if (!player || player._reconnecting || player._resuming || player.destroyed) return
+    if (!player || player._reconnecting || player._resuming || player.destroyed)
+      return
 
+    // Per-player cooldown — prevents thrashing after a migration completes
     const now = Date.now()
     if (now - this._lastMigrationAt < MIGRATION_COOLDOWN_MS) {
-      this._aqua.emit(AqualinkEvents.Debug,
-        `[Region] Cooldown active for guild ${this._guildId}, ${MIGRATION_COOLDOWN_MS - (now - this._lastMigrationAt)}ms remaining`)
+      this._aqua.emit(
+        AqualinkEvents.Debug,
+        `[Region] Cooldown active for guild ${this._guildId}, ${MIGRATION_COOLDOWN_MS - (now - this._lastMigrationAt)}ms remaining`
+      )
       return
     }
 
     const currentNode = player.nodes
+    // If the current node has regions, check if it already covers this region.
+    // A node with NO regions configured never "matches" — fall through to find a better one.
     if (currentNode?.regions?.length) {
-      const currentMatches = currentNode.regions.some(r =>
+      const currentMatches = currentNode.regions.some((r) =>
         this._aqua._regionMatches(r, this.region)
       )
       if (currentMatches) {
-        this._aqua.emit(AqualinkEvents.Debug,
-          `[Region] Skipped: current node ${currentNode.name} already covers region ${this.region}`)
+        this._aqua.emit(
+          AqualinkEvents.Debug,
+          `[Region] Skipped: current node ${currentNode.name} already covers region ${this.region}`
+        )
         this._regionMigrationAttempted = true
         return
       }
@@ -676,14 +699,19 @@ class Connection {
     // otherwise the feature is not meaningfully set up.
     let hasAnyRegionsConfigured = false
     for (const n of this._aqua.nodeMap.values()) {
-      if (n.connected && n.regions?.length) { hasAnyRegionsConfigured = true; break }
+      if (n.connected && n.regions?.length) {
+        hasAnyRegionsConfigured = true
+        break
+      }
     }
     if (!hasAnyRegionsConfigured) return
 
     const betterNode = this._aqua._findBestNodeForRegion(this.region)
     if (!betterNode || betterNode === currentNode) {
-      this._aqua.emit(AqualinkEvents.Debug,
-        `[Region] Skipped: no better node found for region ${this.region}`)
+      this._aqua.emit(
+        AqualinkEvents.Debug,
+        `[Region] Skipped: no better node found for region ${this.region}`
+      )
       this._regionMigrationAttempted = true
       return
     }
@@ -698,10 +726,13 @@ class Connection {
     this._migrationInProgress = true
     this._lastMigrationAt = now
 
-    this._aqua.emit(AqualinkEvents.Debug,
-      `[Region] Migrating: guild=${this._guildId} ${currentNode.name} -> ${betterNode.name} (region=${this.region})`)
+    this._aqua.emit(
+      AqualinkEvents.Debug,
+      `[Region] Migrating: guild=${this._guildId} ${currentNode.name} -> ${betterNode.name} (region=${this.region})`
+    )
 
-    this._aqua.movePlayerToNode(this._guildId, betterNode, 'region')
+    this._aqua
+      .movePlayerToNode(this._guildId, betterNode, 'region')
       .then(() => {
         this._migrationInProgress = false
       })
@@ -709,8 +740,10 @@ class Connection {
         this._migrationInProgress = false
         // Reset so a retry is possible on the next VOICE_SERVER_UPDATE
         this._regionMigrationAttempted = false
-        this._aqua?.emit?.(AqualinkEvents.Debug,
-          `[Region] Migration failed for guild ${this._guildId}: ${err?.message || err}`)
+        this._aqua?.emit?.(
+          AqualinkEvents.Debug,
+          `[Region] Migration failed for guild ${this._guildId}: ${err?.message || err}`
+        )
       })
   }
 

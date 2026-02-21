@@ -1,4 +1,4 @@
-const https = require('https')
+const https = require('node:https')
 
 const sourceHandlers = {
   spotify: fetchSpotifyThumbnail,
@@ -6,7 +6,6 @@ const sourceHandlers = {
 }
 
 const YOUTUBE_QUALITIES = ['maxresdefault', 'hqdefault', 'mqdefault', 'default']
-
 const YOUTUBE_ID_REGEX = /^[a-zA-Z0-9_-]{11}$/
 const SPOTIFY_URI_REGEX =
   /^https:\/\/open\.spotify\.com\/(track|album|playlist)\/[a-zA-Z0-9]+/
@@ -80,9 +79,7 @@ async function fetchYouTubeThumbnail(identifier) {
     try {
       const exists = await checkImageExists(url)
       if (exists) return url
-    } catch (error) {
-      continue
-    }
+    } catch (_error) {}
   }
 
   return null

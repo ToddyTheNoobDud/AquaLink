@@ -1,6 +1,5 @@
-const https = require('https')
+const https = require('node:https')
 
-// Default agent config (used only if shared agent not provided)
 const AGENT_CONFIG = {
   keepAlive: true,
   maxSockets: 64,
@@ -9,21 +8,23 @@ const AGENT_CONFIG = {
   freeSocketTimeout: 4000
 }
 
-// Shared agent reference - can be set from Rest module
 let sharedAgent = null
-const getAgent = () => sharedAgent || (sharedAgent = new https.Agent(AGENT_CONFIG))
+const getAgent = () => {
+  if (!sharedAgent) {
+    sharedAgent = new https.Agent(AGENT_CONFIG)
+  }
+  return sharedAgent
+}
 
-// Allow Rest module to inject its agent
 const setSharedAgent = (agent) => {
   if (agent && typeof agent.request === 'function') {
     sharedAgent = agent
   }
 }
 
-
 const SC_LINK_RE = /<a\s+itemprop="url"\s+href="(\/[^"]+)"/g
 const MAX_REDIRECTS = 3
-const MAX_RESPONSE_BYTES = 5 * 1024 * 1024 // 5 MB
+const MAX_RESPONSE_BYTES = 5 * 1024 * 1024
 const MAX_SC_LINKS = 50
 const MAX_SP_RESULTS = 5
 const DEFAULT_TIMEOUT_MS = 8000

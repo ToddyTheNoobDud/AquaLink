@@ -1,3 +1,5 @@
+const { EMPTY_ARRAY } = require('../utils')
+
 const FILTER_DEFAULTS = Object.freeze({
   karaoke: Object.freeze({
     level: 1,
@@ -37,11 +39,9 @@ const FILTER_KEYS = Object.freeze(
   )
 )
 
-const EMPTY_ARRAY = Object.freeze([])
-
 const FILTER_POOL_SIZE = 16
 const filterPool = {
-  pools: Object.fromEntries(Object.keys(FILTER_DEFAULTS).map(k => [k, []])),
+  pools: Object.fromEntries(Object.keys(FILTER_DEFAULTS).map((k) => [k, []])),
 
   acquire(type) {
     const pool = this.pools[type]

@@ -10,32 +10,16 @@ const {
   createZstdDecompress,
   zstdDecompressSync
 } = require('node:zlib')
+const { unrefTimer, isValidBase64: sharedIsValidBase64 } = require('../utils')
 
 let autoplayModule = null
 try {
   autoplayModule = require('../handlers/autoplay')
 } catch {}
 
-const unrefTimer = (t) => {
-  try {
-    t?.unref?.()
-  } catch {}
-}
-
 const HAS_ZSTD =
   typeof createZstdDecompress === 'function' &&
   typeof zstdDecompressSync === 'function'
-
-const BASE64_LOOKUP = new Uint8Array(256)
-for (let i = 65; i <= 90; i++) BASE64_LOOKUP[i] = 1
-for (let i = 97; i <= 122; i++) BASE64_LOOKUP[i] = 1
-for (let i = 48; i <= 57; i++) BASE64_LOOKUP[i] = 1
-BASE64_LOOKUP[43] =
-  BASE64_LOOKUP[47] =
-  BASE64_LOOKUP[61] =
-  BASE64_LOOKUP[95] =
-  BASE64_LOOKUP[45] =
-    1
 
 const ENCODING_NONE = 0,
   ENCODING_BR = 1,
@@ -60,15 +44,7 @@ const ERRORS = Object.freeze({
 })
 
 const _functions = {
-  isValidBase64(str) {
-    if (typeof str !== 'string' || !str) return false
-    const len = str.length
-    if (len % 4 === 1) return false
-    for (let i = 0; i < len; i++) {
-      if (!BASE64_LOOKUP[str.charCodeAt(i)]) return false
-    }
-    return true
-  },
+  isValidBase64: sharedIsValidBase64,
 
   getEncodingType(header) {
     if (!header) return ENCODING_NONE
@@ -439,11 +415,14 @@ class Rest {
 
   _getH2Session() {
     if (!this._h2 || this._h2.closed || this._h2.destroyed) {
-      this._clearH2()
+      this._closeH2()
+      console.log(
+        `[Aqua Debug] Connecting HTTP/2 to: ${this.baseUrl} (Type: ${typeof this.baseUrl})`
+      )
       this._h2 = http2.connect(this.baseUrl, this._tlsOptions || undefined)
       this._resetH2Timer()
 
-      const onEnd = () => this._clearH2()
+      const onEnd = () => this._closeH2()
       this._h2.once('error', onEnd)
       this._h2.once('close', onEnd)
       this._h2.socket?.unref?.()
@@ -451,30 +430,23 @@ class Rest {
     return this._h2
   }
 
-  _resetH2Timer() {
+  _clearH2Timer() {
     if (this._h2Timer) {
       clearTimeout(this._h2Timer)
       this._h2Timer = null
     }
+  }
+
+  _resetH2Timer() {
+    this._clearH2Timer()
     if (this._h2 && !this._h2.closed && !this._h2.destroyed) {
       this._h2Timer = setTimeout(() => this._closeH2(), H2_TIMEOUT)
       unrefTimer(this._h2Timer)
     }
   }
 
-  _clearH2() {
-    if (this._h2Timer) {
-      clearTimeout(this._h2Timer)
-      this._h2Timer = null
-    }
-    this._h2 = null
-  }
-
   _closeH2() {
-    if (this._h2Timer) {
-      clearTimeout(this._h2Timer)
-      this._h2Timer = null
-    }
+    this._clearH2Timer()
     if (this._h2) {
       try {
         this._h2.close()
@@ -778,8 +750,7 @@ class Rest {
   }
 
   async addMixer(guildId, options) {
-    if (!this.node.isNodelink)
-      throw new Error('Mixer endpoints are only available on Nodelink nodes')
+    this._requireNodelink()
     if (!options?.encoded && !options?.identifier)
       throw new Error('You must provide either encoded or identifier')
 
@@ -795,44 +766,46 @@ class Rest {
 
     return this.makeRequest(
       'POST',
-      `/v4/sessions/${this.sessionId}/players/${guildId}/mix`,
+      `${this._getSessionPath()}/players/${guildId}/mix`,
       payload
     )
   }
 
   async getActiveMixer(guildId) {
-    if (!this.node.isNodelink)
-      throw new Error('Mixer endpoints are only available on Nodelink nodes')
+    this._requireNodelink()
     const response = await this.makeRequest(
       'GET',
-      `/v4/sessions/${this.sessionId}/players/${guildId}/mix`
+      `${this._getSessionPath()}/players/${guildId}/mix`
     )
     return response?.mixes || []
   }
 
   async updateMixerVolume(guildId, mix, volume) {
-    if (!this.node.isNodelink)
-      throw new Error('Mixer endpoints are only available on Nodelink nodes')
+    this._requireNodelink()
     if (!guildId || !mix || typeof volume !== 'number')
       throw new Error('You forget to set the guild_id, mix or volume options')
 
     return this.makeRequest(
       'PATCH',
-      `/v4/sessions/${this.sessionId}/players/${guildId}/mix/${mix}`,
+      `${this._getSessionPath()}/players/${guildId}/mix/${mix}`,
       { volume }
     )
   }
 
   async removeMixer(guildId, mix) {
-    if (!this.node.isNodelink)
-      throw new Error('Mixer endpoints are only available on Nodelink nodes')
+    this._requireNodelink()
     if (!guildId || !mix)
       throw new Error('You forget to set the guild_id and/or mix options')
 
     return this.makeRequest(
       'DELETE',
-      `/v4/sessions/${this.sessionId}/players/${guildId}/mix/${mix}`
+      `${this._getSessionPath()}/players/${guildId}/mix/${mix}`
     )
+  }
+
+  _requireNodelink() {
+    if (!this.node.isNodelink)
+      throw new Error('Mixer endpoints are only available on Nodelink nodes')
   }
 
   destroy() {

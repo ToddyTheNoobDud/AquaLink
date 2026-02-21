@@ -28,7 +28,7 @@ class Track {
     this.nodes = data.nodes || null
     this.requester = requester || null
     this._infoCache = null
-    this._artworkCache = undefined  // undefined = not computed, null = computed but no artwork
+    this._artworkCache = undefined // undefined = not computed, null = computed but no artwork
   }
 
   get info() {

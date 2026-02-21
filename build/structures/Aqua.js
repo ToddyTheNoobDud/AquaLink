@@ -6,9 +6,15 @@ const Node = require('./Node')
 const Player = require('./Player')
 const Track = require('./Track')
 const { version: pkgVersion } = require('../../package.json')
+const {
+  noop,
+  EMPTY_ARRAY,
+  safeCall,
+  unrefTimeout,
+  computeAccuratePosition
+} = require('../utils')
 
 const SEARCH_PREFIX = ':'
-const EMPTY_ARRAY = Object.freeze([])
 const EMPTY_TRACKS_RESPONSE = Object.freeze({
   loadType: 'empty',
   exception: null,
@@ -39,7 +45,7 @@ const DEFAULT_OPTIONS = Object.freeze({
   infiniteReconnects: true,
   loadBalancer: 'leastLoad',
   useHttp2: false,
-  autoRegionMigrate: false,
+  autoRegionMigrate: true,
   failoverOptions: Object.freeze({
     enabled: true,
     maxRetries: 3,
@@ -59,7 +65,7 @@ const _functions = {
       const t = setTimeout(r, ms)
       t.unref?.()
     }),
-  noop: () => {},
+  noop: noop,
   isUrl: (query) => {
     if (typeof query !== 'string' || query.length <= 8) return false
     const q = query.trimStart()
@@ -69,12 +75,7 @@ const _functions = {
     return this.isUrl(query) ? query : `${source}${SEARCH_PREFIX}${query}`
   },
   makeTrack: (t, requester, node) => new Track(t, requester, node),
-  safeCall(fn) {
-    try {
-      const result = fn()
-      return result?.then ? result.catch(this.noop) : result
-    } catch {}
-  },
+  safeCall: safeCall,
   parseRequester(str) {
     if (!str || typeof str !== 'string') return null
     const i = str.indexOf(':')
@@ -82,11 +83,8 @@ const _functions = {
       ? { id: str.substring(0, i), username: str.substring(i + 1) }
       : null
   },
-  unrefTimeout: (fn, ms) => {
-    const t = setTimeout(fn, ms)
-    t.unref?.()
-    return t
-  }
+  unrefTimeout: unrefTimeout,
+  computeAccuratePosition: computeAccuratePosition
 }
 
 class Aqua extends EventEmitter {
@@ -428,16 +426,7 @@ class Aqua extends EventEmitter {
         player.queue.add(current)
         await player.play()
         if (state.position > 0) {
-          const seekOnce = (p) => {
-            if (p.guildId === guildId) {
-              this.off(AqualinkEvents.TrackStart, seekOnce)
-              _functions.unrefTimeout(() => player.seek?.(state.position), 50)
-            }
-          }
-          this.once(AqualinkEvents.TrackStart, seekOnce)
-          player.once('destroy', () =>
-            this.off(AqualinkEvents.TrackStart, seekOnce)
-          )
+          this._scheduleSeekOnStart(player, guildId, state.position, 50)
         }
         if (state.paused) player.pause(true)
       }
@@ -542,14 +531,7 @@ class Aqua extends EventEmitter {
 
   _capturePlayerState(player) {
     if (!player) return null
-    let position = player.position || 0
-    if (player.playing && !player.paused && player.timestamp) {
-      const elapsed = Date.now() - player.timestamp
-      position = Math.min(
-        position + elapsed,
-        player.current?.info?.length || position + elapsed
-      )
-    }
+    const position = computeAccuratePosition(player)
     return {
       guildId: player.guildId,
       textChannel: player.textChannel,
@@ -590,19 +572,11 @@ class Aqua extends EventEmitter {
       if (this.failoverOptions.resumePlayback) {
         ops.push(newPlayer.play())
         if (state.position > 0) {
-          const guildId = newPlayer.guildId
-          const seekOnce = (p) => {
-            if (p.guildId === guildId) {
-              this.off(AqualinkEvents.TrackStart, seekOnce)
-              _functions.unrefTimeout(
-                () => newPlayer.seek?.(state.position),
-                50
-              )
-            }
-          }
-          this.once(AqualinkEvents.TrackStart, seekOnce)
-          newPlayer.once('destroy', () =>
-            this.off(AqualinkEvents.TrackStart, seekOnce)
+          this._scheduleSeekOnStart(
+            newPlayer,
+            newPlayer.guildId,
+            state.position,
+            50
           )
         }
         if (state.paused) ops.push(newPlayer.pause(true))
@@ -611,6 +585,17 @@ class Aqua extends EventEmitter {
     newPlayer.loop = state.loop
     newPlayer.shuffle = state.shuffle
     await Promise.allSettled(ops)
+  }
+
+  _scheduleSeekOnStart(player, guildId, position, delay = 50) {
+    const seekOnce = (p) => {
+      if (p.guildId === guildId) {
+        this.off(AqualinkEvents.TrackStart, seekOnce)
+        unrefTimeout(() => player.seek?.(position), delay)
+      }
+    }
+    this.once(AqualinkEvents.TrackStart, seekOnce)
+    player.once('destroy', () => this.off(AqualinkEvents.TrackStart, seekOnce))
   }
 
   updateVoiceState({ d, t }) {
@@ -676,11 +661,17 @@ class Aqua extends EventEmitter {
       for (const r of regions) {
         const rl = r.toLowerCase()
         if (rl === lower) {
-          if (!exactMatch || this._getNodeLoad(n) < this._getNodeLoad(exactMatch)) {
+          if (
+            !exactMatch ||
+            this._getNodeLoad(n) < this._getNodeLoad(exactMatch)
+          ) {
             exactMatch = n
           }
         } else if (rl.split('-')[0] === regionPrefix) {
-          if (!prefixMatch || this._getNodeLoad(n) < this._getNodeLoad(prefixMatch)) {
+          if (
+            !prefixMatch ||
+            this._getNodeLoad(n) < this._getNodeLoad(prefixMatch)
+          ) {
             prefixMatch = n
           }
         }
@@ -706,13 +697,7 @@ class Aqua extends EventEmitter {
     player._resuming = true
 
     const wasPlaying = player.playing && !!player.current?.track
-    // Use an accurate position that accounts for playback elapsed since last update
-    let position = player.position || 0
-    if (wasPlaying && !player.paused && player.timestamp) {
-      const elapsed = Date.now() - player.timestamp
-      const maxDuration = player.current?.duration ?? Infinity
-      position = Math.min(position + elapsed, maxDuration)
-    }
+    const position = computeAccuratePosition(player)
     const wasPaused = player.paused
     const oldNode = player.nodes
     const oldNodeName = oldNode?.name || 'unknown'
@@ -733,13 +718,17 @@ class Aqua extends EventEmitter {
       if (targetNode?.rest?.sessionId) {
         const conn = player.connection
         const voiceData = conn
-          ? { token: conn.token, endpoint: conn.endpoint, sessionId: conn.sessionId }
+          ? {
+              token: conn.token,
+              endpoint: conn.endpoint,
+              sessionId: conn.sessionId
+            }
           : null
 
         if (voiceData?.token && voiceData?.endpoint && voiceData?.sessionId) {
           const updatePayload = {
             volume: player.volume,
-            voice: voiceData,
+            voice: voiceData
           }
           if (wasPlaying) {
             updatePayload.track = { encoded: player.current.track }
@@ -751,17 +740,21 @@ class Aqua extends EventEmitter {
             updatePayload.filters = player.filters.filters
           }
 
-          await targetNode.rest.updatePlayer({ guildId: player.guildId, data: updatePayload })
+          await targetNode.rest.updatePlayer({
+            guildId: player.guildId,
+            data: updatePayload
+          })
 
-          this.emit(AqualinkEvents.Debug,
-            `[Region] Node switched: guild=${player.guildId} ${oldNodeName} -> ${targetNode.name} position=${position}ms wasPlaying=${wasPlaying}`)
+          this.emit(
+            AqualinkEvents.Debug,
+            `[Region] Node switched: guild=${player.guildId} ${oldNodeName} -> ${targetNode.name} position=${position}ms wasPlaying=${wasPlaying}`
+          )
 
           // Sync the voice key so the connection doesn't immediately re-send a
           // redundant voice update on the next tick
           if (conn) {
             const vol = player.volume ?? 100
-            conn._lastSentVoiceKey =
-              `${conn.sessionId || ''}|${conn.token || ''}|${conn.endpoint || ''}|${player.voiceChannel || ''}|${vol}`
+            conn._lastSentVoiceKey = `${conn.sessionId || ''}|${conn.token || ''}|${conn.endpoint || ''}|${player.voiceChannel || ''}|${vol}`
           }
         }
       }
@@ -769,14 +762,19 @@ class Aqua extends EventEmitter {
       // 3. Tell the old Lavalink node to release the player (best-effort, non-blocking).
       //    This frees resources on the old server immediately rather than waiting for
       //    its session timeout to evict the stale player.
-      if (oldNode?.connected && oldNode?.rest?.sessionId && oldNode !== targetNode) {
+      if (
+        oldNode?.connected &&
+        oldNode?.rest?.sessionId &&
+        oldNode !== targetNode
+      ) {
         oldNode.rest.destroyPlayer(player.guildId).catch(() => {})
       }
 
       this.emit(AqualinkEvents.PlayerMigrated, player, player, targetNode)
-      this.emit(AqualinkEvents.Debug,
-        `[Region] Migrated guild=${guildId} to node ${targetNode?.name} (reason: ${reason})`)
-
+      this.emit(
+        AqualinkEvents.Debug,
+        `[Region] Migrated guild=${guildId} to node ${targetNode?.name} (reason: ${reason})`
+      )
     } finally {
       // Always unlock, even if the REST call failed
       player._resuming = false
@@ -1121,14 +1119,7 @@ class Aqua extends EventEmitter {
         }
 
         if (p.p > 0) {
-          const seekOnce = (pl) => {
-            if (pl.guildId === gId) {
-              this.off(AqualinkEvents.TrackStart, seekOnce)
-              _functions.unrefTimeout(() => player.seek?.(p.p), 100)
-            }
-          }
-          this.on(AqualinkEvents.TrackStart, seekOnce)
-          player.once('destroy', () => this.off(AqualinkEvents.TrackStart, seekOnce))
+          this._scheduleSeekOnStart(player, gId, p.p, 100)
         }
 
         await player.play(undefined, { startTime: p.p, paused: p.pa })
@@ -1219,8 +1210,7 @@ class Aqua extends EventEmitter {
             }
             break
           }
-        } catch {
-        }
+        } catch {}
       }
     } catch {
     } finally {

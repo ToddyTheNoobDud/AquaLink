@@ -5,6 +5,7 @@ const WebSocketImpl = process.isBun ? globalThis.WebSocket : require('ws')
 
 const Rest = require('./Rest')
 const { AqualinkEvents } = require('./AqualinkEvents')
+const { unrefTimer, errMsg } = require('../utils')
 
 const privateData = new WeakMap()
 
@@ -28,12 +29,6 @@ const OPS_STATS = 'stats'
 const OPS_READY = 'ready'
 const OPS_PLAYER_UPDATE = 'playerUpdate'
 const OPS_EVENT = 'event'
-
-const unrefTimer = (t) => {
-  try {
-    t?.unref?.()
-  } catch {}
-}
 
 const _functions = {
   buildWsUrl(host, port, ssl) {
@@ -76,10 +71,6 @@ const _functions = {
     if (typeof reason === 'object')
       return reason.message || reason.code || JSON.stringify(reason)
     return String(reason)
-  },
-
-  errMsg(err) {
-    return err?.message || String(err)
   }
 }
 
@@ -199,7 +190,7 @@ class Node {
         this.isNodelink = !!this.info?.isNodelink
       } catch (err) {
         this.info = null
-        this._emitError(`Failed to fetch node info: ${_functions.errMsg(err)}`)
+        this._emitError(`Failed to fetch node info: ${errMsg(err)}`)
       } finally {
         clearTimeout(timeoutId)
       }
@@ -241,7 +232,7 @@ class Node {
     try {
       player.emit(eventName, payload)
     } catch (err) {
-      this._emitError(`Player emit error: ${_functions.errMsg(err)}`)
+      this._emitError(`Player emit error: ${errMsg(err)}`)
     }
   }
 
@@ -339,8 +330,7 @@ class Node {
 
   _calcBackoff(attempt) {
     const baseBackoff =
-      this.reconnectTimeout *
-      Node.BACKOFF_MULTIPLIER ** Math.min(attempt, 10)
+      this.reconnectTimeout * Node.BACKOFF_MULTIPLIER ** Math.min(attempt, 10)
     const maxJitter = Math.min(
       Node.JITTER_MAX,
       baseBackoff * Node.JITTER_FACTOR
@@ -451,7 +441,7 @@ class Node {
       this.ws = ws
     } catch (err) {
       this._isConnecting = false
-      this._emitError(`Failed to create WebSocket: ${_functions.errMsg(err)}`)
+      this._emitError(`Failed to create WebSocket: ${errMsg(err)}`)
       this._scheduleReconnect()
     }
   }
@@ -477,7 +467,7 @@ class Node {
         ws.terminate?.()
       }
     } catch (err) {
-      this._emitError(`WebSocket cleanup error: ${_functions.errMsg(err)}`)
+      this._emitError(`WebSocket cleanup error: ${errMsg(err)}`)
     }
 
     this.ws = null
@@ -516,7 +506,7 @@ class Node {
       const newStats = await this.rest.getStats()
       if (newStats) this._updateStats(newStats)
     } catch (err) {
-      this._emitError(`Failed to fetch node stats: ${_functions.errMsg(err)}`)
+      this._emitError(`Failed to fetch node stats: ${errMsg(err)}`)
     }
 
     return this.stats
@@ -603,7 +593,7 @@ class Node {
     if (this.autoResume) {
       setImmediate(() => {
         this._resumePlayers().catch((err) => {
-          this._emitError(`_resumePlayers failed: ${_functions.errMsg(err)}`)
+          this._emitError(`_resumePlayers failed: ${errMsg(err)}`)
         })
       })
     }
@@ -644,7 +634,7 @@ class Node {
         await this.aqua.loadPlayers()
       }
     } catch (err) {
-      this._emitError(`Failed to resume session: ${_functions.errMsg(err)}`)
+      this._emitError(`Failed to resume session: ${errMsg(err)}`)
       throw err
     }
   }
