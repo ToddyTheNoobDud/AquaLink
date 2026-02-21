@@ -128,7 +128,6 @@ class Node {
       players: 0,
       playingPlayers: 0,
       uptime: 0,
-      ping: 0,
       memory: { free: 0, used: 0, allocated: 0, reservable: 0 },
       cpu: { cores: 0, systemLoad: 0, lavalinkLoad: 0 },
       frameStats: { sent: 0, nulled: 0, deficit: 0 }
@@ -520,7 +519,6 @@ class Node {
     if (payload.playingPlayers !== undefined)
       s.playingPlayers = payload.playingPlayers
     if (payload.uptime !== undefined) s.uptime = payload.uptime
-    if (payload.ping !== undefined) s.ping = payload.ping
 
     if (payload.memory) {
       const m = s.memory,

@@ -8,9 +8,9 @@ const noop = () => {}
 
 const EMPTY_ARRAY = Object.freeze([])
 
-const clamp = (v, min = 0, max = 200) => {
+const clamp = (v, min = 0, max = 1000) => {
   const n = +v
-  return Number.isNaN(n) ? max : n < min ? min : n > max ? max : n
+  return Number.isNaN(n) ? 100 : n < min ? min : n > max ? max : n
 }
 
 const isNum = (v) =>

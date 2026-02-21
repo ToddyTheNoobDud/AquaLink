@@ -349,7 +349,6 @@ class Player extends EventEmitter {
       if (this.destroyed || !this._updateBatcher) return this
 
       const updateData = {
-        guildId: this.guildId,
         track: { encoded: this.current.track },
         paused: this.paused
       }
@@ -555,7 +554,7 @@ class Player extends EventEmitter {
     if (this.destroyed || this.paused === !!paused) return this
     this.paused = !!paused
     this.batchUpdatePlayer(
-      { guildId: this.guildId, paused: this.paused },
+      { paused: this.paused },
       true
     ).catch(() => {})
     return this
@@ -570,7 +569,7 @@ class Player extends EventEmitter {
       : Math.max(position, 0)
     this.position = clamped
     this.batchUpdatePlayer(
-      { guildId: this.guildId, position: clamped },
+      { position: clamped },
       true
     ).catch(() => {})
     return this
@@ -625,7 +624,7 @@ class Player extends EventEmitter {
     this.position = 0
     this._stopPending = true
     this.batchUpdatePlayer(
-      { guildId: this.guildId, track: { encoded: null } },
+      { track: { encoded: null } },
       true
     ).catch(() => {})
     return this
@@ -635,9 +634,7 @@ class Player extends EventEmitter {
     const vol = _functions.clamp(volume)
     if (this.destroyed || this.volume === vol) return this
     this.volume = vol
-    this.batchUpdatePlayer({ guildId: this.guildId, volume: vol }).catch(
-      () => {}
-    )
+    this.batchUpdatePlayer({ volume: vol }).catch(() => {})
     return this
   }
 
@@ -654,9 +651,7 @@ class Player extends EventEmitter {
     const id = _functions.toId(channel)
     if (!id) throw new TypeError('Invalid text channel')
     this.textChannel = id
-    this.batchUpdatePlayer({ guildId: this.guildId, text_channel: id }).catch(
-      () => {}
-    )
+    this.batchUpdatePlayer({ text_channel: id }).catch(() => {})
     return this
   }
 
@@ -860,45 +855,35 @@ class Player extends EventEmitter {
     if (this.destroyed) return
 
     const reason = payload?.reason
-    const isFailure = reason === 'loadFailed' || reason === 'cleanup'
-    const isReplaced = reason === 'replaced'
+    const mayStartNext = reason === 'finished' || reason === 'loadFailed'
+    const shouldStop = reason === 'stopped' || reason === 'replaced' || reason === 'cleanup'
     const wasStopPending = this._stopPending
     this._stopPending = false
 
     if (track) this.previousTracks.push(track)
     if (this.shouldDeleteMessage && !this._reconnecting && !this._resuming)
       _functions.safeDel(this.nowPlayingMessage)
-    if (!isReplaced && !wasStopPending) this.current = null
+    
+    if (!shouldStop && !wasStopPending) this.current = null
 
-    if (isFailure && !wasStopPending) {
-      if (!this.queue.size) {
-        this.clearData({ preserveTracks: this._reconnecting || this._resuming })
-        this.aqua.emit(AqualinkEvents.QueueEnd, this)
-      } else {
-        this.aqua.emit(AqualinkEvents.TrackEnd, this, track, reason)
-        await this.play()
-      }
-      return
+    if (reason === 'loadFailed') {
+      this.aqua.emit(AqualinkEvents.TrackError, this, track, { reason, message: 'Track failed to load' })
     }
 
-    if (
-      track &&
-      reason === 'finished' &&
-      (this.loop === LOOP_MODES.TRACK || this.loop === LOOP_MODES.QUEUE)
-    ) {
+    if (reason === 'finished' && track && (this.loop === LOOP_MODES.TRACK || this.loop === LOOP_MODES.QUEUE)) {
       this.queue.add(track)
     }
 
-    if (this.queue.size && !isReplaced) {
+    if (mayStartNext && !wasStopPending && this.queue.size) {
       this.aqua.emit(AqualinkEvents.TrackEnd, this, track, reason)
       await this.play()
     } else if (wasStopPending && this.queue.size) {
       await this.play()
-    } else if (this.isAutoplayEnabled && !isReplaced) {
+    } else if (mayStartNext && this.isAutoplayEnabled && !this.queue.size) {
       await this.autoplay()
-    } else {
+    } else if (shouldStop || !this.queue.size) {
       this.playing = false
-      if (this.leaveOnEnd && !this.destroyed) {
+      if (this.leaveOnEnd && !this.destroyed && !shouldStop) {
         this.clearData({ preserveTracks: this._reconnecting || this._resuming })
         this.destroy()
       }
