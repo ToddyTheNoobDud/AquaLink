@@ -879,7 +879,17 @@ class Aqua extends EventEmitter {
         ws.end((err) => (err ? reject(err) : resolve()))
       )
       ws = null
-      await fs.promises.rename(tempFile, filePath)
+      await fs.promises.unlink(filePath).catch(() => {})
+      try {
+        await fs.promises.rename(tempFile, filePath)
+      } catch (renameErr) {
+        if (renameErr.code === 'EPERM' || renameErr.code === 'EACCES') {
+          await fs.promises.copyFile(tempFile, filePath)
+          await fs.promises.unlink(tempFile).catch(() => {})
+        } else {
+          throw renameErr
+        }
+      }
     } catch (error) {
       console.error(`[Aqua/Autoresume]Error saving players:`, error)
       this.emit(AqualinkEvents.Error, null, error)

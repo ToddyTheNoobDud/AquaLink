@@ -267,8 +267,7 @@ class Player extends EventEmitter {
             this.connected ||
             this.destroyed ||
             this._reconnecting ||
-            this._voiceRecovering ||
-            this.nodes?.info?.isNodelink
+            this._voiceRecovering
           )
             return
           this.connection.attemptResume()
@@ -387,7 +386,6 @@ class Player extends EventEmitter {
 
   _shouldAttemptVoiceRecovery() {
     if (
-      this.nodes?.info?.isNodelink ||
       this.destroyed ||
       !this.voiceChannel ||
       this.connected ||
@@ -620,6 +618,8 @@ class Player extends EventEmitter {
       { guildId: this.guildId, track: { encoded: null, paused: this.paused } },
       true
     ).catch(() => {})
+    // if we have a next track in the queue, start it immediately to prevent gaps in playback
+    if (this.queue?.size) this.play().catch(() => {})
     return this
   }
 
@@ -960,7 +960,7 @@ class Player extends EventEmitter {
     if (code === 4014 && this.connection?.isWaitingForDisconnect)
       isRecoverable = false
 
-    if (code === 4015 && !this.nodes?.info?.isNodelink) {
+    if (code === 4015) {
       this._reconnecting = true
       try {
         await this._attemptVoiceResume()
