@@ -190,6 +190,7 @@ class Player extends EventEmitter {
     this._voiceDownSince = 0
     this._voiceRecovering = this._reconnecting = false
     this._resuming = !!options.resuming
+    this._stopPending = false
     this._voiceWatchdogTimer = null
     this._pendingTimers = new Set()
     this._reconnectTimers = null
@@ -487,6 +488,7 @@ class Player extends EventEmitter {
     this.connected = this.playing = this.paused = this.isAutoplay = false
     this.state = PLAYER_STATE.DESTROYED
     this.autoplayRetries = this.reconnectionRetries = 0
+    this._stopPending = false
     if (!preserveReconnecting) this._reconnecting = false
     this._lastVoiceChannel = this.voiceChannel
     this._lastTextChannel = this.textChannel
@@ -621,12 +623,11 @@ class Player extends EventEmitter {
     if (this.destroyed || !this.playing) return this
     this.playing = this.paused = false
     this.position = 0
+    this._stopPending = true
     this.batchUpdatePlayer(
-      { guildId: this.guildId, track: { encoded: null, paused: this.paused } },
+      { guildId: this.guildId, track: { encoded: null } },
       true
     ).catch(() => {})
-    // if we have a next track in the queue, start it immediately to prevent gaps in playback
-    if (this.queue?.size) this.play().catch(() => {})
     return this
   }
 
@@ -861,13 +862,15 @@ class Player extends EventEmitter {
     const reason = payload?.reason
     const isFailure = reason === 'loadFailed' || reason === 'cleanup'
     const isReplaced = reason === 'replaced'
+    const wasStopPending = this._stopPending
+    this._stopPending = false
 
     if (track) this.previousTracks.push(track)
     if (this.shouldDeleteMessage && !this._reconnecting && !this._resuming)
       _functions.safeDel(this.nowPlayingMessage)
-    if (!isReplaced) this.current = null
+    if (!isReplaced && !wasStopPending) this.current = null
 
-    if (isFailure) {
+    if (isFailure && !wasStopPending) {
       if (!this.queue.size) {
         this.clearData({ preserveTracks: this._reconnecting || this._resuming })
         this.aqua.emit(AqualinkEvents.QueueEnd, this)
@@ -888,6 +891,8 @@ class Player extends EventEmitter {
 
     if (this.queue.size && !isReplaced) {
       this.aqua.emit(AqualinkEvents.TrackEnd, this, track, reason)
+      await this.play()
+    } else if (wasStopPending && this.queue.size) {
       await this.play()
     } else if (this.isAutoplayEnabled && !isReplaced) {
       await this.autoplay()
