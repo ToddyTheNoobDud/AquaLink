@@ -45,7 +45,7 @@ const SEEK_DELAY = 800
 const PAUSE_DELAY = 1200
 const RETRY_BACKOFF_BASE = 1500
 const RETRY_BACKOFF_MAX = 5000
-const PREVIOUS_TRACKS_SIZE = 50
+const PREVIOUS_TRACKS_SIZE = 15
 const PREVIOUS_IDS_MAX = 20
 const AUTOPLAY_MAX = 3
 const BATCHER_POOL_SIZE = 2
@@ -203,12 +203,11 @@ class Player extends EventEmitter {
     this.shouldDeleteMessage = !!aquaOpts.shouldDeleteMessage
     this.leaveOnEnd = !!aquaOpts.leaveOnEnd
 
-    this.connection = new Connection(this)
-    this.filters = new Filters(this)
+    this._connection = null
+    this._filters = null
     this.queue = new Queue()
     this.previousIdentifiers = new Set()
     this.previousTracks = new CircularBuffer(PREVIOUS_TRACKS_SIZE)
-    this._updateBatcher = batcherPool.acquire(this)
 
     this._voiceRequestAt = 0
     this._voiceRequestChannel = null
@@ -223,6 +222,21 @@ class Player extends EventEmitter {
       return idx >= 0 && idx <= 2 ? idx : 0
     }
     return loop >= 0 && loop <= 2 ? loop : 0
+  }
+
+  get connection() {
+    if (!this._connection) this._connection = new Connection(this)
+    return this._connection
+  }
+
+  get filters() {
+    if (!this._filters) this._filters = new Filters(this)
+    return this._filters
+  }
+
+  get _updateBatcher() {
+    if (!this.__updateBatcher) this.__updateBatcher = batcherPool.acquire(this)
+    return this.__updateBatcher
   }
 
   _bindEvents() {
@@ -346,7 +360,7 @@ class Player extends EventEmitter {
       this.paused = !!options.paused
       this.position = options.startTime || 0
 
-      if (this.destroyed || !this._updateBatcher) return this
+      if (this.destroyed) return this
 
       const updateData = {
         track: { encoded: this.current.track },
@@ -510,9 +524,9 @@ class Player extends EventEmitter {
     this._boundPlayerUpdate = this._boundEvent = this._boundPlayerMove = null
     this.removeAllListeners()
 
-    if (this._updateBatcher) {
-      batcherPool.release(this._updateBatcher)
-      this._updateBatcher = null
+    if (this.__updateBatcher) {
+      batcherPool.release(this.__updateBatcher)
+      this.__updateBatcher = null
     }
 
     this.previousTracks?.clear()
@@ -530,12 +544,12 @@ class Player extends EventEmitter {
       !preserveTracks
     )
       this.current.dispose()
-    if (this.connection) {
+    if (this._connection) {
       try {
-        this.connection.destroy()
+        this._connection.destroy()
       } catch {}
     }
-    this.connection = this.filters = this.current = this.autoplaySeed = null
+    this._connection = this._filters = this.current = this.autoplaySeed = null
 
     if (!skipRemote) {
       try {
