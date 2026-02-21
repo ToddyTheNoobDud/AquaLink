@@ -203,11 +203,12 @@ class Player extends EventEmitter {
     this.shouldDeleteMessage = !!aquaOpts.shouldDeleteMessage
     this.leaveOnEnd = !!aquaOpts.leaveOnEnd
 
-    this._connection = null
-    this._filters = null
+    this.connection = new Connection(this)
+    this.filters = new Filters(this)
     this.queue = new Queue()
     this.previousIdentifiers = new Set()
     this.previousTracks = new CircularBuffer(PREVIOUS_TRACKS_SIZE)
+    this._updateBatcher = batcherPool.acquire(this)
 
     this._voiceRequestAt = 0
     this._voiceRequestChannel = null
@@ -222,21 +223,6 @@ class Player extends EventEmitter {
       return idx >= 0 && idx <= 2 ? idx : 0
     }
     return loop >= 0 && loop <= 2 ? loop : 0
-  }
-
-  get connection() {
-    if (!this._connection) this._connection = new Connection(this)
-    return this._connection
-  }
-
-  get filters() {
-    if (!this._filters) this._filters = new Filters(this)
-    return this._filters
-  }
-
-  get _updateBatcher() {
-    if (!this.__updateBatcher) this.__updateBatcher = batcherPool.acquire(this)
-    return this.__updateBatcher
   }
 
   _bindEvents() {
@@ -524,9 +510,9 @@ class Player extends EventEmitter {
     this._boundPlayerUpdate = this._boundEvent = this._boundPlayerMove = null
     this.removeAllListeners()
 
-    if (this.__updateBatcher) {
-      batcherPool.release(this.__updateBatcher)
-      this.__updateBatcher = null
+    if (this._updateBatcher) {
+      batcherPool.release(this._updateBatcher)
+      this._updateBatcher = null
     }
 
     this.previousTracks?.clear()
@@ -544,12 +530,12 @@ class Player extends EventEmitter {
       !preserveTracks
     )
       this.current.dispose()
-    if (this._connection) {
+    if (this.connection) {
       try {
-        this._connection.destroy()
+        this.connection.destroy()
       } catch {}
     }
-    this._connection = this._filters = this.current = this.autoplaySeed = null
+    this.connection = this.filters = this.current = this.autoplaySeed = null
 
     if (!skipRemote) {
       try {
