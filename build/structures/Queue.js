@@ -40,14 +40,12 @@ class Queue {
 
   shuffle() {
     if (this._head > 0) {
-      if (this._head > 0) {
-        const len = this._items.length - this._head
-        for (let i = 0; i < len; i++) {
-          this._items[i] = this._items[this._head + i]
-        }
-        this._items.length = len
-        this._head = 0
+      const len = this._items.length - this._head
+      for (let i = 0; i < len; i++) {
+        this._items[i] = this._items[this._head + i]
       }
+      this._items.length = len
+      this._head = 0
     }
     for (let i = this._items.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1))

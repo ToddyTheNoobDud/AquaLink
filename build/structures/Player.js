@@ -270,7 +270,8 @@ class Player extends EventEmitter {
             this._voiceRecovering
           )
             return
-          this.connection.attemptResume()
+          // Use watchdog which has proper cooldown checks
+          this._voiceWatchdog()
         }, 1000)
       }
     } else {
@@ -420,7 +421,10 @@ class Player extends EventEmitter {
     this._voiceRecovering = true
     try {
       if (await this.connection.attemptResume()) {
-        this.reconnectionRetries = this._voiceDownSince = 0
+        // Don't reset _voiceDownSince here — wait for confirmed connected:true
+        // from playerUpdate before clearing it, to avoid re-triggering
+        // the resume cycle on the next incoming (still-disconnected) packet.
+        this.reconnectionRetries = 0
         return
       }
       const originalMute = this.mute
@@ -1090,7 +1094,7 @@ class Player extends EventEmitter {
     tryReconnect(1)
   }
 
-  _handleAquaPlayerMove(oldChannel, newChannel) {
+  _handleAquaPlayerMove(player, oldChannel, newChannel) {
     if (_functions.toId(oldChannel) !== _functions.toId(this.voiceChannel))
       return
     this.voiceChannel = _functions.toId(newChannel)

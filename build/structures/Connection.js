@@ -10,8 +10,12 @@ const RESUME_BACKOFF_MAX = 60000
 const VOICE_DATA_TIMEOUT = 90000
 
 const VOICE_FLUSH_DELAY = 50
+const POST_RESUME_COOLDOWN = 6000
 
 const NULL_CHANNEL_GRACE_MS = 15000
+
+const MIGRATION_COOLDOWN_MS = 10000   // minimum ms between migrations for the same player
+const MIGRATION_DEBOUNCE_MS = 1500    // debounce window after endpoint change before evaluating
 
 const STATE = {
   CONNECTED: 1,
@@ -47,6 +51,16 @@ const _functions = {
     const dot = endpoint.indexOf('.')
     const label = (dot === -1 ? endpoint : endpoint.slice(0, dot)).toLowerCase()
     if (!label) return 'unknown'
+
+    if (label.startsWith('c-')) {
+      let end = 2
+      while (end < label.length) {
+        const code = label.charCodeAt(end)
+        if (code >= 97 && code <= 122) end++
+        else break
+      }
+      return end > 2 ? label.slice(2, end) : 'unknown'
+    }
 
     let i = label.length - 1
     while (i >= 0) {
@@ -87,7 +101,10 @@ class PayloadPool {
           resume: undefined,
           sequence: undefined
         },
-        volume: null
+        volume: null,
+        track: undefined,
+        position: undefined,
+        paused: undefined
       }
     }
   }
@@ -103,6 +120,9 @@ class PayloadPool {
     v.token = v.endpoint = v.sessionId = null
     v.resume = v.sequence = undefined
     payload.data.volume = null
+    payload.data.track = undefined
+    payload.data.position = undefined
+    payload.data.paused = undefined
     this._pool[this._size++] = payload
   }
 
@@ -133,6 +153,7 @@ class Connection {
     this.region = null
     this.sequence = 0
     this.txId = 0
+    this.isNodelink = !!player.nodes.isNodelink
 
     this._lastEndpoint = null
     this._stateFlags = 0
@@ -151,6 +172,12 @@ class Connection {
 
     this._lastStateReqAt = 0
     this._stateGeneration = 0
+    this._regionMigrationAttempted = false
+    this._lastResumeSuccessAt = 0
+    this._lastMigrationAt = 0
+    this._migrationInProgress = false  // true only while a migration is actively in flight
+    this._migrationDebounceTimer = null
+    this._migrated = false
   }
 
   _hasValidVoiceData() {
@@ -170,8 +197,11 @@ class Connection {
 
   _canAttemptResumeCore() {
     if (this._destroyed) return false
+    if (this._migrationInProgress) return false   // block resume while migrating nodes
     if (this._reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) return false
     if (this._stateFlags & (STATE.ATTEMPTING_RESUME | STATE.DISCONNECTING))
+      return false
+    if (this._lastResumeSuccessAt > 0 && Date.now() - this._lastResumeSuccessAt < POST_RESUME_COOLDOWN)
       return false
     return true
   }
@@ -188,7 +218,27 @@ class Connection {
 
     const endpoint =
       typeof data.endpoint === 'string' ? data.endpoint.trim() : ''
-    if (!endpoint) return
+
+    // Empty endpoint = Discord signalling the current voice connection should
+    // be torn down (e.g. during a region change or bot kicked from voice).
+    // Reset migration state so the next real endpoint re-evaluates cleanly,
+    // and clear stale voice data so the watchdog doesn't attempt a dead resume.
+    if (!endpoint) {
+      if (this._lastEndpoint) {
+        // Only re-arm if we're not currently migrating — the empty endpoint
+        // Discord sends during a region switch is a consequence of the migration,
+        // not a reason to start another one.
+        if (!this._migrationInProgress) {
+          this._regionMigrationAttempted = false
+          this._clearMigrationDebounce()
+        }
+        this._lastEndpoint = null
+        this.endpoint = null
+        this.token = null
+        this._stateFlags |= STATE.VOICE_DATA_STALE
+      }
+      return
+    }
 
     if (this._lastEndpoint === endpoint && this.token === data.token) return
 
@@ -201,6 +251,12 @@ class Connection {
       this._lastEndpoint = endpoint
       this._reconnectAttempts = 0
       this._consecutiveFailures = 0
+      // Only re-arm migration on a new endpoint if we're not currently migrating.
+      // The VOICE_SERVER_UPDATE Discord fires after a migration completes carries
+      // the same new endpoint and should not trigger a second migration.
+      if (!this._migrationInProgress) {
+        this._regionMigrationAttempted = false
+      }
     }
 
     this.endpoint = endpoint
@@ -210,8 +266,12 @@ class Connection {
     this._lastVoiceDataUpdate = Date.now()
     this._stateFlags &= ~STATE.VOICE_DATA_STALE
 
+    // Voice update must fire immediately; migration check is debounced so that
+    // multiple rapid VOICE_SERVER_UPDATEs (common during a region switch) are
+    // collapsed into a single evaluation.
     if (this._player?.paused) this._player.pause(false)
     this._scheduleVoiceUpdate()
+    this._scheduleMigrationCheck()
   }
 
   resendVoiceUpdate(force = false) {
@@ -231,6 +291,7 @@ class Connection {
       self_mute: selfMute
     } = data
     const p = this._player
+
 
     if (channelId) this._clearNullChannelTimer()
 
@@ -255,6 +316,7 @@ class Connection {
     let needsUpdate = false
 
     if (this.voiceChannel !== channelId) {
+      // Actual channel move — player is reconnecting to a different channel
       p._reconnecting = true
       p._resuming = true
       this._aqua.emit(
@@ -269,12 +331,18 @@ class Connection {
     }
 
     if (this.sessionId !== sessionId) {
+      const hadSession = !!this.sessionId
       this.sessionId = sessionId
       this._lastVoiceDataUpdate = Date.now()
       this._stateFlags &= ~STATE.VOICE_DATA_STALE
       this._reconnectAttempts = 0
       this._consecutiveFailures = 0
       needsUpdate = true
+
+      if (hadSession && this.voiceChannel === channelId && !this._migrationInProgress) {
+        this._regionMigrationAttempted = false
+        this._clearMigrationDebounce()
+      }
     }
 
     p.self_deaf = p.selfDeaf = !!selfDeaf
@@ -373,6 +441,13 @@ class Connection {
         true
       )
 
+      const player = this._player
+      if (player?.playing && player?.current?.track) {
+        payload.data.track = { encoded: player.current.track }
+        payload.data.position = player.position || 0
+        if (player.paused) payload.data.paused = true
+      }
+
       if (this._stateGeneration !== currentGen) {
         this._aqua.emit(
           AqualinkEvents.Debug,
@@ -385,6 +460,7 @@ class Connection {
 
       this._reconnectAttempts = 0
       this._consecutiveFailures = 0
+      this._lastResumeSuccessAt = Date.now()
       if (this._player) this._player._resuming = false
 
       this._aqua.emit(
@@ -427,7 +503,7 @@ class Connection {
 
   _handleReconnect() {
     this._reconnectTimer = null
-    if (!this._destroyed) this.attemptResume()
+    if (!this._destroyed && this._canAttemptResumeCore()) this.attemptResume()
   }
 
   updateSequence(seq) {
@@ -550,6 +626,94 @@ class Connection {
     }
   }
 
+  _clearMigrationDebounce() {
+    if (!this._migrationDebounceTimer) return
+    clearTimeout(this._migrationDebounceTimer)
+    this._migrationDebounceTimer = null
+  }
+
+  _scheduleMigrationCheck() {
+    if (this._destroyed || !this._aqua?.autoRegionMigrate) return
+    this._clearMigrationDebounce()
+    this._migrationDebounceTimer = setTimeout(() => {
+      this._migrationDebounceTimer = null
+      this._checkRegionMigration()
+    }, MIGRATION_DEBOUNCE_MS)
+    _functions.safeUnref(this._migrationDebounceTimer)
+  }
+
+  _checkRegionMigration() {
+    if (this._destroyed) return
+    if (!this._aqua?.autoRegionMigrate) return
+    if (this._regionMigrationAttempted) return
+    if (this._migrationInProgress) return
+    if (!this.region || this.region === 'unknown') return
+
+    const player = this._player
+    if (!player || player._reconnecting || player._resuming || player.destroyed) return
+
+    const now = Date.now()
+    if (now - this._lastMigrationAt < MIGRATION_COOLDOWN_MS) {
+      this._aqua.emit(AqualinkEvents.Debug,
+        `[Region] Cooldown active for guild ${this._guildId}, ${MIGRATION_COOLDOWN_MS - (now - this._lastMigrationAt)}ms remaining`)
+      return
+    }
+
+    const currentNode = player.nodes
+    if (currentNode?.regions?.length) {
+      const currentMatches = currentNode.regions.some(r =>
+        this._aqua._regionMatches(r, this.region)
+      )
+      if (currentMatches) {
+        this._aqua.emit(AqualinkEvents.Debug,
+          `[Region] Skipped: current node ${currentNode.name} already covers region ${this.region}`)
+        this._regionMigrationAttempted = true
+        return
+      }
+    }
+
+    // Only proceed if at least one node actually has regions configured —
+    // otherwise the feature is not meaningfully set up.
+    let hasAnyRegionsConfigured = false
+    for (const n of this._aqua.nodeMap.values()) {
+      if (n.connected && n.regions?.length) { hasAnyRegionsConfigured = true; break }
+    }
+    if (!hasAnyRegionsConfigured) return
+
+    const betterNode = this._aqua._findBestNodeForRegion(this.region)
+    if (!betterNode || betterNode === currentNode) {
+      this._aqua.emit(AqualinkEvents.Debug,
+        `[Region] Skipped: no better node found for region ${this.region}`)
+      this._regionMigrationAttempted = true
+      return
+    }
+
+    // Only migrate while actively playing — if idle, the next track's
+    // VOICE_SERVER_UPDATE will re-evaluate with a fresh state.
+    const state = this._aqua._capturePlayerState(player)
+    if (!state?.current?.track) return
+
+    // Commit to migration
+    this._regionMigrationAttempted = true
+    this._migrationInProgress = true
+    this._lastMigrationAt = now
+
+    this._aqua.emit(AqualinkEvents.Debug,
+      `[Region] Migrating: guild=${this._guildId} ${currentNode.name} -> ${betterNode.name} (region=${this.region})`)
+
+    this._aqua.movePlayerToNode(this._guildId, betterNode, 'region')
+      .then(() => {
+        this._migrationInProgress = false
+      })
+      .catch((err) => {
+        this._migrationInProgress = false
+        // Reset so a retry is possible on the next VOICE_SERVER_UPDATE
+        this._regionMigrationAttempted = false
+        this._aqua?.emit?.(AqualinkEvents.Debug,
+          `[Region] Migration failed for guild ${this._guildId}: ${err?.message || err}`)
+      })
+  }
+
   destroy() {
     if (this._destroyed) return
     this._destroyed = true
@@ -557,6 +721,7 @@ class Connection {
     this._clearNullChannelTimer()
     this._clearPendingUpdate()
     this._clearReconnectTimer()
+    this._clearMigrationDebounce()
 
     this._player = this._aqua = this._rest = null
     this.voiceChannel =
@@ -571,6 +736,11 @@ class Connection {
     this._reconnectAttempts = 0
     this._consecutiveFailures = 0
     this._lastVoiceDataUpdate = 0
+    this._lastResumeSuccessAt = 0
+    this._regionMigrationAttempted = false
+    this._lastMigrationAt = 0
+    this._migrationInProgress = false
+    this._migrated = false
   }
 }
 

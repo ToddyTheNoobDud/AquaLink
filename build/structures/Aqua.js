@@ -39,6 +39,7 @@ const DEFAULT_OPTIONS = Object.freeze({
   infiniteReconnects: true,
   loadBalancer: 'leastLoad',
   useHttp2: false,
+  autoRegionMigrate: false,
   failoverOptions: Object.freeze({
     enabled: true,
     maxRetries: 3,
@@ -122,6 +123,7 @@ class Aqua extends EventEmitter {
     this.allowedDomains = merged.allowedDomains || []
     this.loadBalancer = merged.loadBalancer
     this.useHttp2 = merged.useHttp2
+    this.autoRegionMigrate = merged.autoRegionMigrate
     this.maxQueueSave = merged.maxQueueSave
     this.maxTracksRestore = merged.maxTracksRestore
     this.send = merged.send || this._createDefaultSend()
@@ -646,6 +648,141 @@ class Aqua extends EventEmitter {
     return Object.freeze(
       filtered.sort((a, b) => this._getNodeLoad(a) - this._getNodeLoad(b))
     )
+  }
+
+  _regionMatches(configuredRegion, extractedRegion) {
+    if (!configuredRegion || !extractedRegion) return false
+    const c = configuredRegion.toLowerCase()
+    const e = extractedRegion.toLowerCase()
+    if (c === e) return true
+    const cPrefix = c.split('-')[0]
+    const ePrefix = e.split('-')[0]
+    return cPrefix === ePrefix || c.startsWith(e) || e.startsWith(c)
+  }
+
+  _findBestNodeForRegion(region) {
+    if (!region) return null
+    const lower = region.toLowerCase()
+    const regionPrefix = lower.split('-')[0]
+
+    let exactMatch = null
+    let prefixMatch = null
+
+    for (const n of this.nodeMap.values()) {
+      if (!n.connected) continue
+      const regions = n.regions
+      if (!regions?.length) continue
+
+      for (const r of regions) {
+        const rl = r.toLowerCase()
+        if (rl === lower) {
+          if (!exactMatch || this._getNodeLoad(n) < this._getNodeLoad(exactMatch)) {
+            exactMatch = n
+          }
+        } else if (rl.split('-')[0] === regionPrefix) {
+          if (!prefixMatch || this._getNodeLoad(n) < this._getNodeLoad(prefixMatch)) {
+            prefixMatch = n
+          }
+        }
+      }
+    }
+
+    return exactMatch || prefixMatch
+  }
+
+  async movePlayerToNode(guildId, targetNode, reason = 'region') {
+    const player = this.players.get(String(guildId))
+    if (!player) throw new Error(`Player not found: ${guildId}`)
+    if (player.nodes === targetNode) return player
+    if (player._reconnecting || player._resuming) {
+      throw new Error('Player is currently reconnecting or resuming')
+    }
+
+    // Lock the player for the entire migration so that:
+    // - socketClosed can't destroy and recreate it on the wrong node mid-flight
+    // - the watchdog won't attempt a voice resume on the old node
+    // - _checkRegionMigration won't fire a second time from the VOICE events
+    //   Discord sends as a consequence of the migration itself
+    player._resuming = true
+
+    const wasPlaying = player.playing && !!player.current?.track
+    // Use an accurate position that accounts for playback elapsed since last update
+    let position = player.position || 0
+    if (wasPlaying && !player.paused && player.timestamp) {
+      const elapsed = Date.now() - player.timestamp
+      const maxDuration = player.current?.duration ?? Infinity
+      position = Math.min(position + elapsed, maxDuration)
+    }
+    const wasPaused = player.paused
+    const oldNode = player.nodes
+    const oldNodeName = oldNode?.name || 'unknown'
+
+    try {
+      // 1. Swap node references so all subsequent REST calls go to the new node
+      oldNode?.players?.delete?.(player)
+      player.nodes = targetNode
+      targetNode?.players?.add?.(player)
+
+      if (player.connection) {
+        player.connection._rest = targetNode?.rest
+      }
+
+      // 2. Hand the player off to the new Lavalink node via a single atomic PATCH.
+      //    This is the server-side transfer — voice data, track state, volume and
+      //    filters are all sent in one call. No client-side reconnect or re-play needed.
+      if (targetNode?.rest?.sessionId) {
+        const conn = player.connection
+        const voiceData = conn
+          ? { token: conn.token, endpoint: conn.endpoint, sessionId: conn.sessionId }
+          : null
+
+        if (voiceData?.token && voiceData?.endpoint && voiceData?.sessionId) {
+          const updatePayload = {
+            volume: player.volume,
+            voice: voiceData,
+          }
+          if (wasPlaying) {
+            updatePayload.track = { encoded: player.current.track }
+            updatePayload.position = position
+            if (wasPaused) updatePayload.paused = true
+          }
+          // Include current filter state so the new node matches exactly
+          if (player.filters?.filters) {
+            updatePayload.filters = player.filters.filters
+          }
+
+          await targetNode.rest.updatePlayer({ guildId: player.guildId, data: updatePayload })
+
+          this.emit(AqualinkEvents.Debug,
+            `[Region] Node switched: guild=${player.guildId} ${oldNodeName} -> ${targetNode.name} position=${position}ms wasPlaying=${wasPlaying}`)
+
+          // Sync the voice key so the connection doesn't immediately re-send a
+          // redundant voice update on the next tick
+          if (conn) {
+            const vol = player.volume ?? 100
+            conn._lastSentVoiceKey =
+              `${conn.sessionId || ''}|${conn.token || ''}|${conn.endpoint || ''}|${player.voiceChannel || ''}|${vol}`
+          }
+        }
+      }
+
+      // 3. Tell the old Lavalink node to release the player (best-effort, non-blocking).
+      //    This frees resources on the old server immediately rather than waiting for
+      //    its session timeout to evict the stale player.
+      if (oldNode?.connected && oldNode?.rest?.sessionId && oldNode !== targetNode) {
+        oldNode.rest.destroyPlayer(player.guildId).catch(() => {})
+      }
+
+      this.emit(AqualinkEvents.PlayerMigrated, player, player, targetNode)
+      this.emit(AqualinkEvents.Debug,
+        `[Region] Migrated guild=${guildId} to node ${targetNode?.name} (reason: ${reason})`)
+
+    } finally {
+      // Always unlock, even if the REST call failed
+      player._resuming = false
+    }
+
+    return player
   }
 
   createConnection(options) {

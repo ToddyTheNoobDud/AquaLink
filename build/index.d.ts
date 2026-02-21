@@ -29,6 +29,7 @@ declare module 'aqualink' {
     allowedDomains: string[]
     loadBalancer: LoadBalancerStrategy
     send: (payload: any) => void
+    autoRegionMigrate: boolean
 
     // Internal State Management
     _nodeStates: Map<
@@ -139,6 +140,14 @@ declare module 'aqualink' {
     // Failover and Migration Methods
     handleNodeFailover(failedNode: Node): Promise<void>
 
+    /**
+     * Moves a player to a different node
+     * @param guildId Guild ID of the player
+     * @param targetNode Target node to move to
+     * @param reason Reason for migration (default: 'region')
+     */
+    movePlayerToNode(guildId: string, targetNode: Node, reason?: string): Promise<Player>
+
     // Utility Methods
     /**
      * Destroys the Aqua instance and all players
@@ -191,6 +200,8 @@ declare module 'aqualink' {
     _bindEventHandlers(): void
     _startCleanupTimer(): void
     _onNodeReady(node: Node, data: { resumed: boolean }): void
+    _regionMatches(configuredRegion: string, extractedRegion: string): boolean
+    _findBestNodeForRegion(region: string): Node | null
 
     // Optional bypass checks
     bypassChecks?: { nodeFetchInfo?: boolean }
@@ -211,7 +222,7 @@ declare module 'aqualink' {
     auth: string
     ssl: boolean
     sessionId: string | null
-    regions: string[]
+    regions: DiscordVoiceRegion[]
     wsUrl: string
     rest: Rest
     resumeTimeout: number
@@ -746,6 +757,7 @@ declare module 'aqualink' {
     _lastSentVoiceKey: string
     _lastVoiceDataUpdate: number
     _stateFlags: number
+    _regionMigrationAttempted: boolean
 
     // Methods
     setServerUpdate(data: VoiceServerUpdate['d']): void
@@ -762,6 +774,7 @@ declare module 'aqualink' {
     _sendUpdate(payload: any): Promise<void>
     _handleDisconnect(): void
     _clearPendingUpdate(): void
+    _checkRegionMigration(): void
   }
 
   export class Plugin {
@@ -813,6 +826,7 @@ declare module 'aqualink' {
     loadBalancer?: LoadBalancerStrategy
     failoverOptions?: FailoverOptions
     useHttp2?: boolean
+    autoRegionMigrate?: boolean
   }
 
   export interface FailoverOptions {
@@ -832,7 +846,7 @@ declare module 'aqualink' {
     auth?: string
     ssl?: boolean
     sessionId?: string
-    regions?: string[]
+    regions?: DiscordVoiceRegion[]
   }
 
   export interface NodeAdditionalOptions {
@@ -863,7 +877,7 @@ declare module 'aqualink' {
     deaf?: boolean
     mute?: boolean
     defaultVolume?: number
-    region?: string
+    region?: DiscordVoiceRegion
   }
 
   export interface ResolveOptions {
@@ -1159,6 +1173,120 @@ declare module 'aqualink' {
     node?: Node
     toFront?: boolean
   }
+
+  /**
+   * A map of Discord voice region codes to their string values.
+   * Each entry shows the country and airport name in IntelliSense.
+   *
+   * Use `VoiceRegion.bom`, `VoiceRegion.gru`, etc. for full autocomplete descriptions,
+   * or pass raw strings like `'bom'` directly — both are accepted by `NodeOptions.regions`.
+   *
+   * @example
+   * ```ts
+   * // With descriptions in IntelliSense
+   * { host: '...', regions: [VoiceRegion.gru, VoiceRegion.eze] }
+   *
+   * // Raw strings also work
+   * { host: '...', regions: ['gru', 'eze'] }
+   * ```
+   */
+  export const VoiceRegion: {
+    // ─── Asia Pacific ─────────────────────────────────────────────────────────
+
+    /** 🇮🇳 Mumbai Chhatrapati Shivaji Maharaj International */
+    readonly India: 'bom'
+    /** 🇸🇬 Changi Airport */
+    readonly Singapore: 'sin'
+    /** 🇯🇵 Tokyo Narita International */
+    readonly Japan: 'nrt'
+    /** 🇰🇷 Seoul Incheon International */
+    readonly SouthKorea: 'icn'
+    /** 🇭🇰 Hong Kong International */
+    readonly HongKong: 'hkg'
+    /** 🇦🇺 Sydney Kingsford Smith */
+    readonly Australia: 'syd'
+    /** 🇮🇩 Jakarta Soekarno-Hatta International */
+    readonly Indonesia: 'cgk'
+
+    // ─── Europe ───────────────────────────────────────────────────────────────
+
+    /** 🇩🇪 Frankfurt Airport */
+    readonly Germany: 'fra'
+    /** 🇳🇱 Amsterdam Schiphol */
+    readonly Netherlands: 'ams'
+    /** 🇬🇧 London Heathrow */
+    readonly UnitedKingdom: 'lhr'
+    /** 🇫🇷 Paris Charles de Gaulle */
+    readonly France: 'cdg'
+    /** 🇪🇸 Madrid Barajas */
+    readonly Spain: 'mad'
+    /** 🇮🇹 Milan Malpensa */
+    readonly Italy: 'mxp'
+    /** 🇸🇪 Stockholm Arlanda */
+    readonly Sweden: 'arn'
+    /** 🇫🇮 Helsinki Vantaa */
+    readonly Finland: 'hel'
+    /** 🇵🇱 Warsaw Chopin */
+    readonly Poland: 'waw'
+    /** 🇷🇴 Bucharest Henri Coanda */
+    readonly Romania: 'buh'
+    /** 🇷🇺 St. Petersburg Pulkovo */
+    readonly RussiaSTP: 'led'
+    /** 🇷🇺 Moscow Sheremetyevo */
+    readonly RussiaMoscow: 'svo'
+
+    // ─── Middle East & Africa ─────────────────────────────────────────────────
+
+    /** 🇮🇱 Tel Aviv Ben Gurion */
+    readonly Israel: 'tlv'
+    /** 🇦🇪 Dubai International */
+    readonly UAE: 'dxb'
+    /** 🇸🇦 Dammam King Fahd International */
+    readonly SaudiArabia: 'dmm'
+    /** 🇿🇦 Johannesburg O.R. Tambo International */
+    readonly SouthAfrica: 'jnb'
+
+    // ─── North America ────────────────────────────────────────────────────────
+
+    /** 🇺🇸 Newark / New York */
+    readonly USANewark: 'ewr'
+    /** 🇺🇸 Washington D.C. Dulles */
+    readonly USAWashington: 'iad'
+    /** 🇺🇸 Atlanta Hartsfield-Jackson */
+    readonly USAAtlanta: 'atl'
+    /** 🇺🇸 Miami International */
+    readonly USAMiami: 'mia'
+    /** 🇺🇸 Chicago O'Hare */
+    readonly USAChicago: 'ord'
+    /** 🇺🇸 Dallas/Fort Worth */
+    readonly USADallas: 'dfw'
+    /** 🇺🇸 Seattle-Tacoma / Oregon */
+    readonly USASeattle: 'sea'
+    /** 🇺🇸 Los Angeles International */
+    readonly USALosAngeles: 'lax'
+    /** 🇨🇦 Toronto Pearson International */
+    readonly CanadaToronto: 'yyz'
+    /** 🇨🇦 Montreal Pierre Elliott Trudeau */
+    readonly CanadaMontreal: 'ymq'
+
+    // ─── South America ────────────────────────────────────────────────────────
+
+    /** 🇧🇷 Sao Paulo Guarulhos International */
+    readonly Brazil: 'gru'
+    /** 🇨🇱 Santiago Arturo Merino Benitez */
+    readonly Chile: 'scl'
+    /** 🇦🇷 Buenos Aires Ministro Pistarini */
+    readonly Argentina: 'eze'
+  }
+
+  /**
+   * Discord voice server region prefix (derived from IATA airport codes).
+   * Used in `NodeOptions.regions` to match players to the best Lavalink node
+   * based on Discord's voice endpoint (e.g. `c-bom06-xxxx.discord.media` -> `'bom'`).
+   *
+   * For descriptions on each value, use the `VoiceRegion` object in your IDE.
+   */
+  export type DiscordVoiceRegion = typeof VoiceRegion[keyof typeof VoiceRegion] | (string & {})
 
   // Type Unions and Enums
   export type SearchSource =
