@@ -48,6 +48,17 @@ const _functions = {
     const label = (dot === -1 ? endpoint : endpoint.slice(0, dot)).toLowerCase()
     if (!label) return 'unknown'
 
+    // Discord voice hosts commonly look like: c-gru20-<hash>.discord.media
+    const cPrefix = /^c-([a-z]{3})(?:\d+)?(?:-|$)/
+    const m1 = cPrefix.exec(label)
+    if (m1?.[1]) return m1[1]
+
+    // Fallback for labels that still contain an iata-like token.
+    const token = /(?:^|-)([a-z]{3})(?:\d+)?(?:-|$)/
+    const m2 = token.exec(label)
+    if (m2?.[1]) return m2[1]
+
+    // Last fallback: strip trailing digits from first label.
     let i = label.length - 1
     while (i >= 0) {
       const c = label.charCodeAt(i)
@@ -146,6 +157,7 @@ class Connection {
 
     this._lastStateReqAt = 0
     this._stateGeneration = 0
+    this._regionMigrationAttempted = false
   }
 
   _hasValidVoiceData() {
@@ -196,6 +208,7 @@ class Connection {
       this._lastEndpoint = endpoint
       this._reconnectAttempts = 0
       this._consecutiveFailures = 0
+      this._regionMigrationAttempted = false
     }
 
     this.endpoint = endpoint
@@ -203,10 +216,63 @@ class Connection {
     this.token = data.token
     this.channelId = data.channel_id || this.channelId || this.voiceChannel
     this._lastVoiceDataUpdate = Date.now()
+    this._aqua?._trace?.('connection.serverUpdate', {
+      guildId: this._guildId,
+      endpoint: this.endpoint,
+      region: this.region,
+      txId: data.txId || null
+    })
     this._stateFlags &= ~STATE.VOICE_DATA_STALE
 
     if (this._player?.paused) this._player.pause(false)
+    const migrated = this._checkRegionMigration()
+    if (migrated) return
     this._scheduleVoiceUpdate()
+    this._player?._flushDeferredPlay?.()
+  }
+
+  _checkRegionMigration() {
+    if (this._destroyed || this._regionMigrationAttempted) return false
+    if (!this._aqua?.autoRegionMigrate || !this.region || this.region === 'unknown') return false
+    const player = this._player
+    if (!player || player.destroyed || player._resuming || player._reconnecting) return false
+
+    const currentNode = player.nodes
+    if (!currentNode) return false
+
+    const currentRegions = Array.isArray(currentNode.regions) ? currentNode.regions : []
+    const alreadyMatching = currentRegions.some((r) =>
+      this._aqua._regionMatches?.(r, this.region)
+    )
+    if (alreadyMatching) {
+      this._regionMigrationAttempted = true
+      return false
+    }
+
+    const targetNode = this._aqua._findBestNodeForRegion?.(this.region)
+    if (!targetNode || targetNode === currentNode) return false
+
+    this._regionMigrationAttempted = true
+    this._aqua?._trace?.('connection.region.migrate', {
+      guildId: this._guildId,
+      region: this.region,
+      from: currentNode?.name || currentNode?.host,
+      to: targetNode?.name || targetNode?.host
+    })
+
+    queueMicrotask(() => {
+      this._aqua
+        .movePlayerToNode?.(this._guildId, targetNode, 'region')
+        .catch((err) => {
+          this._regionMigrationAttempted = false
+          this._aqua?._trace?.('connection.region.migrate.error', {
+            guildId: this._guildId,
+            region: this.region,
+            error: err?.message || String(err)
+          })
+        })
+    })
+    return true
   }
 
   resendVoiceUpdate(force = false) {
@@ -232,6 +298,10 @@ class Connection {
     if (data.txId && data.txId < this.txId) return
 
     if (!channelId) {
+      this._aqua?._trace?.('connection.stateUpdate.nullChannel', {
+        guildId: this._guildId,
+        txId: data.txId || null
+      })
       this.isWaitingForDisconnect = true
       if (!this._nullChannelTimer) {
         this._nullChannelTimer = setTimeout(() => {
@@ -244,6 +314,12 @@ class Connection {
     }
 
     this.isWaitingForDisconnect = false
+    this._aqua?._trace?.('connection.stateUpdate', {
+      guildId: this._guildId,
+      channelId,
+      sessionId,
+      txId: data.txId || null
+    })
 
     if (p && p.txId > this.txId) this.txId = p.txId
 
@@ -284,6 +360,9 @@ class Connection {
 
     this._stateFlags =
       (this._stateFlags | STATE.DISCONNECTING) & ~STATE.CONNECTED
+    this._aqua?._trace?.('connection.disconnect', {
+      guildId: this._guildId
+    })
     this._clearNullChannelTimer()
     this._clearPendingUpdate()
     this._clearReconnectTimer()
@@ -333,6 +412,13 @@ class Connection {
 
   async attemptResume() {
     if (!this._canAttemptResumeCore()) return false
+    this._aqua?._trace?.('connection.resume.attempt', {
+      guildId: this._guildId,
+      reconnectAttempts: this._reconnectAttempts,
+      hasSessionId: !!this.sessionId,
+      hasEndpoint: !!this.endpoint,
+      hasToken: !!this.token
+    })
 
     const currentGen = this._stateGeneration
 
@@ -377,6 +463,9 @@ class Connection {
       }
 
       await this._sendUpdate(payload)
+      this._aqua?._trace?.('connection.resume.success', {
+        guildId: this._guildId
+      })
 
       this._reconnectAttempts = 0
       this._consecutiveFailures = 0
@@ -394,6 +483,10 @@ class Connection {
         AqualinkEvents.Debug,
         `Resume failed for guild ${this._guildId}: ${e?.message || e}`
       )
+      this._aqua?._trace?.('connection.resume.error', {
+        guildId: this._guildId,
+        error: e?.message || String(e)
+      })
 
       if (
         this._reconnectAttempts < MAX_RECONNECT_ATTEMPTS &&
@@ -454,8 +547,23 @@ class Connection {
   }
 
   _scheduleVoiceUpdate() {
-    if (this._destroyed) return
-    if (!this._hasValidVoiceData()) return
+    if (this._destroyed) {
+      this._aqua?._trace?.('connection.update.skip', {
+        guildId: this._guildId,
+        reason: 'destroyed'
+      })
+      return
+    }
+    if (!this._hasValidVoiceData()) {
+      this._aqua?._trace?.('connection.update.skip', {
+        guildId: this._guildId,
+        reason: 'invalid_voice_data',
+        hasSessionId: !!this.sessionId,
+        hasEndpoint: !!this.endpoint,
+        hasToken: !!this.token
+      })
+      return
+    }
 
     if (!this._pendingUpdate) {
       const payload = sharedPool.acquire()
@@ -480,6 +588,9 @@ class Connection {
 
     if (this._stateFlags & STATE.UPDATE_SCHEDULED) return
     this._stateFlags |= STATE.UPDATE_SCHEDULED
+    this._aqua?._trace?.('connection.update.scheduled', {
+      guildId: this._guildId
+    })
 
     this._voiceFlushTimer = setTimeout(
       () => this._executeVoiceUpdate(),
@@ -519,8 +630,21 @@ class Connection {
     if (!this._rest) throw new Error('REST interface unavailable')
 
     try {
+      this._aqua?._trace?.('connection.update.send', {
+        guildId: this._guildId,
+        hasSessionId: !!this._rest?.sessionId,
+        hasVoice: !!payload?.data?.voice?.sessionId && !!payload?.data?.voice?.endpoint
+      })
       await this._rest.updatePlayer(payload)
+      this._aqua?._trace?.('connection.update.ok', {
+        guildId: this._guildId
+      })
     } catch (e) {
+      this._aqua?._trace?.('connection.update.error', {
+        guildId: this._guildId,
+        statusCode: e?.statusCode || e?.response?.statusCode || null,
+        error: e?.message || String(e)
+      })
       if (e.statusCode === 404 || e.response?.statusCode === 404) {
         const isSessionError = e.body?.message?.includes('sessionId') || false
         if (this._aqua) {

@@ -213,6 +213,7 @@ class Player extends EventEmitter {
     this._voiceRequestAt = 0
     this._voiceRequestChannel = null
     this._suppressResumeUntil = 0
+    this._deferredStart = false
     this._bindEvents()
     this._startWatchdog()
   }
@@ -260,6 +261,11 @@ class Player extends EventEmitter {
     this.timestamp = _functions.isNum(s.time) ? s.time : Date.now()
 
     if (!this.connected) {
+      this.aqua?._trace?.('player.voice.down', {
+        guildId: this.guildId,
+        reconnecting: !!this._reconnecting,
+        recovering: !!this._voiceRecovering
+      })
       if (!this._voiceDownSince && !this._reconnecting && !this._voiceRecovering) {
         this._voiceDownSince = Date.now()
         this._createTimer(() => {
@@ -277,6 +283,10 @@ class Player extends EventEmitter {
     } else {
       this._voiceDownSince = 0
       this.state = PLAYER_STATE.READY
+      this.aqua?._trace?.('player.voice.up', {
+        guildId: this.guildId,
+        ping: this.ping
+      })
     }
 
     this.aqua.emit(AqualinkEvents.PlayerUpdate, this, packet)
@@ -341,8 +351,27 @@ class Player extends EventEmitter {
       this.playing = true
       this.paused = !!options.paused
       this.position = options.startTime || 0
+      this.aqua?._trace?.('player.play', {
+        guildId: this.guildId,
+        paused: this.paused,
+        startTime: this.position,
+        hasTrack: !!this.current?.track
+      })
 
       if (this.destroyed || !this._updateBatcher) return this
+
+      if (
+        this.aqua?.autoRegionMigrate &&
+        !this._resuming &&
+        !this.connection?.endpoint
+      ) {
+        this._deferredStart = true
+        this.aqua?._trace?.('player.play.deferred', {
+          guildId: this.guildId,
+          reason: 'awaiting_voice_server_update'
+        })
+        return this
+      }
 
       const updateData = {
         track: { encoded: this.current.track },
@@ -350,6 +379,7 @@ class Player extends EventEmitter {
       }
       if (this.position > 0) updateData.position = this.position
 
+      this._deferredStart = false
       await this.batchUpdatePlayer(updateData, true)
     } catch (error) {
       if (!this.destroyed) this.aqua?.emit(AqualinkEvents.Error, error)
@@ -380,6 +410,13 @@ class Player extends EventEmitter {
       channel_id: voiceChannel,
       self_deaf: this.deaf,
       self_mute: this.mute
+    })
+    this.aqua?._trace?.('player.connect.request', {
+      guildId: this.guildId,
+      txId: this.txId,
+      voiceChannel,
+      deaf: this.deaf,
+      mute: this.mute
     })
     return this
   }
@@ -461,6 +498,12 @@ class Player extends EventEmitter {
 
     if (!this.destroyed) {
       this.destroyed = true
+      this.aqua?._trace?.('player.destroy', {
+        guildId: this.guildId,
+        skipRemote: !!skipRemote,
+        preserveTracks: !!preserveTracks,
+        preserveReconnecting: !!preserveReconnecting
+      })
       this.emit('destroy')
     }
 
@@ -479,6 +522,7 @@ class Player extends EventEmitter {
     }
 
     this.connected = this.playing = this.paused = this.isAutoplay = false
+    this._deferredStart = false
     this.state = PLAYER_STATE.DESTROYED
     this.autoplayRetries = this.reconnectionRetries = 0
     if (!preserveReconnecting) this._reconnecting = false
@@ -954,8 +998,21 @@ class Player extends EventEmitter {
 
   async socketClosed(_player, _track, payload) {
     if (this.destroyed || this._reconnecting) return
+    this.aqua?._trace?.('player.socketClosed', {
+      guildId: this.guildId,
+      code: payload?.code
+    })
 
     const code = payload?.code
+    if (code === 4006 && this._resuming) {
+      this.aqua?._trace?.('player.socketClosed.ignored', {
+        guildId: this.guildId,
+        code,
+        reason: 'transient_while_resuming'
+      })
+      return
+    }
+
     let isRecoverable = [4015, 4009, 4006, 4014, 4022].includes(code)
     if (code === 4014 && this.connection?.isWaitingForDisconnect)
       isRecoverable = false
@@ -1133,6 +1190,27 @@ class Player extends EventEmitter {
 
   updatePlayer(data) {
     return this.nodes.rest.updatePlayer({ guildId: this.guildId, data })
+  }
+
+  _flushDeferredPlay() {
+    if (
+      !this._deferredStart ||
+      this.destroyed ||
+      !this.current?.track ||
+      !this._updateBatcher
+    )
+      return
+    this._deferredStart = false
+    const updateData = {
+      track: { encoded: this.current.track },
+      paused: this.paused
+    }
+    if (this.position > 0) updateData.position = this.position
+    this.aqua?._trace?.('player.play.deferred.flush', {
+      guildId: this.guildId,
+      hasEndpoint: !!this.connection?.endpoint
+    })
+    this.batchUpdatePlayer(updateData, true).catch(() => {})
   }
 
   cleanup() {

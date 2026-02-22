@@ -28,6 +28,7 @@ const MAX_CACHE_SIZE = 20
 const MAX_FAILOVER_QUEUE = 50
 const MAX_REBUILD_LOCKS = 100
 const WRITE_BUFFER_SIZE = 100
+const TRACE_BUFFER_SIZE = 3000
 
 const DEFAULT_OPTIONS = Object.freeze({
   shouldDeleteMessage: false,
@@ -39,6 +40,10 @@ const DEFAULT_OPTIONS = Object.freeze({
   infiniteReconnects: true,
   loadBalancer: 'leastLoad',
   useHttp2: false,
+  debugTrace: false,
+  traceMaxEntries: TRACE_BUFFER_SIZE,
+  traceSink: null,
+  autoRegionMigrate: false,
   failoverOptions: Object.freeze({
     enabled: true,
     maxRetries: 3,
@@ -121,10 +126,16 @@ class Aqua extends EventEmitter {
     this.restrictedDomains = merged.restrictedDomains || []
     this.allowedDomains = merged.allowedDomains || []
     this.loadBalancer = merged.loadBalancer
+    this.autoRegionMigrate = merged.autoRegionMigrate
     this.useHttp2 = merged.useHttp2
     this.maxQueueSave = merged.maxQueueSave
     this.maxTracksRestore = merged.maxTracksRestore
     this.send = merged.send || this._createDefaultSend()
+    this.debugTrace = !!merged.debugTrace
+    this.traceMaxEntries = Math.max(100, Number(merged.traceMaxEntries) || TRACE_BUFFER_SIZE)
+    this.traceSink = typeof merged.traceSink === 'function' ? merged.traceSink : null
+    this._traceBuffer = []
+    this._traceSeq = 0
 
     this._nodeStates = new Map()
     this._failoverQueue = new Map()
@@ -138,6 +149,32 @@ class Aqua extends EventEmitter {
     this._loading = false
 
     if (this.autoResume) this._bindEventHandlers()
+  }
+
+  _trace(event, data = null) {
+    if (!this.debugTrace) return
+    const entry = {
+      seq: ++this._traceSeq,
+      at: Date.now(),
+      event,
+      data
+    }
+    this._traceBuffer.push(entry)
+    if (this._traceBuffer.length > this.traceMaxEntries) {
+      this._traceBuffer.splice(0, this._traceBuffer.length - this.traceMaxEntries)
+    }
+    if (this.traceSink) _functions.safeCall(() => this.traceSink(entry))
+    this.emit(AqualinkEvents.Debug, 'trace', JSON.stringify(entry))
+  }
+
+  getTrace(limit = 300) {
+    const max = Math.max(1, Number(limit) || 300)
+    const start = Math.max(0, this._traceBuffer.length - max)
+    return this._traceBuffer.slice(start)
+  }
+
+  clearTrace() {
+    this._traceBuffer.length = 0
   }
 
   _createDefaultSend() {
@@ -156,12 +193,13 @@ class Aqua extends EventEmitter {
 
   _bindEventHandlers() {
     this._eventHandlers = {
-      onNodeConnect: async (node) => {
+      onNodeConnect: (node) => {
+        this._trace('node.connect', { node: node?.name || node?.host })
         this._invalidateCache()
-        await this._rebuildBrokenPlayers(node)
         this._performCleanup()
       },
       onNodeDisconnect: (node) => {
+        this._trace('node.disconnect', { node: node?.name || node?.host })
         this._invalidateCache()
         queueMicrotask(() => {
           this._storeBrokenPlayers(node)
@@ -169,17 +207,27 @@ class Aqua extends EventEmitter {
         })
       },
       onNodeReady: (node, { resumed }) => {
-        if (!resumed) return
-        const batch = []
-        for (const player of this.players.values()) {
-          if (player.nodes === node && player.connection) batch.push(player)
+        this._trace('node.ready', {
+          node: node?.name || node?.host,
+          resumed: !!resumed,
+          players: this.players.size
+        })
+        if (resumed) {
+          const batch = []
+          for (const player of this.players.values()) {
+            if (player.nodes === node && player.connection) batch.push(player)
+          }
+          if (batch.length)
+            queueMicrotask(() =>
+              batch.forEach((p) => {
+                p.connection.resendVoiceUpdate()
+              })
+            )
+          return
         }
-        if (batch.length)
-          queueMicrotask(() =>
-            batch.forEach((p) => {
-              p.connection.resendVoiceUpdate()
-            })
-          )
+        queueMicrotask(() => {
+          this._rebuildBrokenPlayers(node).catch(_functions.noop)
+        })
       }
     }
     this.on(AqualinkEvents.NodeConnect, this._eventHandlers.onNodeConnect)
@@ -538,6 +586,105 @@ class Aqua extends EventEmitter {
     }
   }
 
+  _regionMatches(configuredRegion, extractedRegion) {
+    if (!configuredRegion || !extractedRegion) return false
+    const configured = String(configuredRegion).trim().toLowerCase()
+    const extracted = String(extractedRegion).trim().toLowerCase()
+    if (!configured || !extracted) return false
+    return configured === extracted
+  }
+
+  _findBestNodeForRegion(region) {
+    if (!region) return null
+    const candidates = []
+    for (const node of this.nodeMap.values()) {
+      if (!node?.connected) continue
+      const regions = Array.isArray(node.regions) ? node.regions : []
+      if (regions.some((r) => this._regionMatches(r, region))) {
+        candidates.push(node)
+      }
+    }
+    if (!candidates.length) return null
+    return this._chooseLeastBusyNode(candidates)
+  }
+
+  async movePlayerToNode(guildId, targetNode, reason = 'region') {
+    const id = String(guildId)
+    const player = this.players.get(id)
+    if (!player || player.destroyed) throw new Error(`Player not found: ${id}`)
+    if (!targetNode?.connected) throw new Error('Target node is not connected')
+    if (player.nodes === targetNode || player.nodes?.name === targetNode.name)
+      return player
+
+    const state = this._capturePlayerState(player)
+    if (!state) throw new Error(`Failed to capture state for ${id}`)
+    const oldPlayer = player
+    const oldNode = oldPlayer.nodes
+    const oldMessage = oldPlayer.nowPlayingMessage || null
+    const oldConn = oldPlayer.connection
+    const oldVoice = oldConn
+      ? {
+          sessionId: oldConn.sessionId || null,
+          endpoint: oldConn.endpoint || null,
+          token: oldConn.token || null,
+          region: oldConn.region || null,
+          channelId: oldConn.channelId || null
+        }
+      : null
+
+    oldPlayer.destroy({
+      preserveClient: true,
+      skipRemote: true,
+      preserveMessage: true,
+      preserveTracks: true,
+      preserveReconnecting: true
+    })
+
+    const newPlayer = this.createPlayer(targetNode, {
+      guildId: state.guildId,
+      textChannel: state.textChannel,
+      voiceChannel: state.voiceChannel,
+      defaultVolume: state.volume || 100,
+      deaf: state.deaf || false,
+      mute: oldPlayer.mute || false,
+      resuming: true,
+      preserveMessage: true
+    })
+
+    // Bootstrap voice on the new node using last known voice state to avoid
+    // "track queued, waiting for voice state" after region migration.
+    if (oldVoice && newPlayer.connection) {
+      if (oldVoice.sessionId) newPlayer.connection.sessionId = oldVoice.sessionId
+      if (oldVoice.endpoint) newPlayer.connection.endpoint = oldVoice.endpoint
+      if (oldVoice.token) newPlayer.connection.token = oldVoice.token
+      if (oldVoice.region) newPlayer.connection.region = oldVoice.region
+      if (oldVoice.channelId) newPlayer.connection.channelId = oldVoice.channelId
+      newPlayer.connection._lastVoiceDataUpdate = Date.now()
+      newPlayer.connection.resendVoiceUpdate(true)
+      this._trace('player.migrate.voiceBootstrap', {
+        guildId: id,
+        from: oldNode?.name || oldNode?.host,
+        to: targetNode?.name || targetNode?.host,
+        hasSessionId: !!newPlayer.connection.sessionId,
+        hasEndpoint: !!newPlayer.connection.endpoint,
+        hasToken: !!newPlayer.connection.token
+      })
+    }
+
+    await this._restorePlayerState(newPlayer, state)
+    if (oldMessage) newPlayer.nowPlayingMessage = oldMessage
+
+    this._trace('player.migrated', {
+      guildId: id,
+      reason,
+      from: oldNode?.name || oldNode?.host,
+      to: targetNode?.name || targetNode?.host,
+      region: newPlayer?.connection?.region || oldPlayer?.connection?.region || null
+    })
+    this.emit(AqualinkEvents.PlayerMigrated, oldPlayer, newPlayer, targetNode)
+    return newPlayer
+  }
+
   _capturePlayerState(player) {
     if (!player) return null
     let position = player.position || 0
@@ -619,6 +766,13 @@ class Aqua extends EventEmitter {
       return
     const player = this.players.get(String(d.guild_id))
     if (!player) return
+    this._trace('voice.gateway', {
+      guildId: String(d.guild_id),
+      type: t,
+      hasSessionId: !!d.session_id,
+      hasEndpoint: !!d.endpoint,
+      hasChannelId: d.channel_id !== undefined
+    })
 
     d.txId = player.txId
     if (t === 'VOICE_STATE_UPDATE') {
@@ -681,6 +835,13 @@ class Aqua extends EventEmitter {
     const player = new Player(this, node, options)
     const guildId = String(options.guildId)
     this.players.set(guildId, player)
+    this._trace('player.create', {
+      guildId,
+      node: node?.name || node?.host,
+      voiceChannel: options.voiceChannel,
+      textChannel: options.textChannel,
+      resuming: !!options.resuming
+    })
     node?.players?.add?.(player)
     player.once('destroy', () => this._handlePlayerDestroy(player))
     player.connect(options)
@@ -692,6 +853,10 @@ class Aqua extends EventEmitter {
     player.nodes?.players?.delete?.(player)
     const guildId = String(player.guildId)
     if (this.players.get(guildId) === player) this.players.delete(guildId)
+    this._trace('player.destroyed', {
+      guildId,
+      node: player?.nodes?.name || player?.nodes?.host
+    })
     this.emit(AqualinkEvents.PlayerDestroyed, player)
   }
 
@@ -986,11 +1151,21 @@ class Aqua extends EventEmitter {
         await player.play(undefined, { startTime: p.p, paused: p.pa })
       }
       if (p.nw && p.t) {
-        const channel = this.client.channels?.cache?.get(p.t)
-        if (channel?.messages)
+        const channel = this.client.channels?.cache?.get?.(p.t)
+        if (channel?.messages?.fetch) {
           player.nowPlayingMessage = await channel.messages
             .fetch(p.nw)
             .catch(() => null)
+        } else if (this.client.messages?.fetch) {
+          player.nowPlayingMessage = await this.client.messages
+            .fetch(p.nw, p.t)
+            .catch(() => null)
+        }
+        this._trace('player.nowPlaying.restore', {
+          guildId: gId,
+          messageId: p.nw,
+          restored: !!player.nowPlayingMessage
+        })
       }
     } catch (e) {
       console.error(
