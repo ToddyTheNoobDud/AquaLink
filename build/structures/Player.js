@@ -42,6 +42,7 @@ const RECONNECT_MAX = 15
 const MUTE_TOGGLE_DELAY = 300
 const SEEK_DELAY = 800
 const PAUSE_DELAY = 1200
+const VOICE_TRACE_INTERVAL = 15000
 const RETRY_BACKOFF_BASE = 1500
 const RETRY_BACKOFF_MAX = 5000
 const PREVIOUS_TRACKS_SIZE = 50
@@ -214,6 +215,7 @@ class Player extends EventEmitter {
     this._voiceRequestChannel = null
     this._suppressResumeUntil = 0
     this._deferredStart = false
+    this._lastVoiceUpTraceAt = 0
     this._bindEvents()
     this._startWatchdog()
   }
@@ -255,17 +257,20 @@ class Player extends EventEmitter {
   _handlePlayerUpdate(packet) {
     if (this.destroyed || !packet?.state) return
     const s = packet.state
+    const wasConnected = this.connected
     this.position = _functions.isNum(s.position) ? s.position : 0
     this.connected = !!s.connected
     this.ping = _functions.isNum(s.ping) ? s.ping : 0
     this.timestamp = _functions.isNum(s.time) ? s.time : Date.now()
 
     if (!this.connected) {
-      this.aqua?._trace?.('player.voice.down', {
-        guildId: this.guildId,
-        reconnecting: !!this._reconnecting,
-        recovering: !!this._voiceRecovering
-      })
+      if (wasConnected || !this._voiceDownSince) {
+        this.aqua?._trace?.('player.voice.down', {
+          guildId: this.guildId,
+          reconnecting: !!this._reconnecting,
+          recovering: !!this._voiceRecovering
+        })
+      }
       if (
         !this._voiceDownSince &&
         !this._reconnecting &&
@@ -287,10 +292,17 @@ class Player extends EventEmitter {
     } else {
       this._voiceDownSince = 0
       this.state = PLAYER_STATE.READY
-      this.aqua?._trace?.('player.voice.up', {
-        guildId: this.guildId,
-        ping: this.ping
-      })
+      const now = Date.now()
+      if (
+        !wasConnected ||
+        now - this._lastVoiceUpTraceAt >= VOICE_TRACE_INTERVAL
+      ) {
+        this._lastVoiceUpTraceAt = now
+        this.aqua?._trace?.('player.voice.up', {
+          guildId: this.guildId,
+          ping: this.ping
+        })
+      }
     }
 
     this.aqua.emit(AqualinkEvents.PlayerUpdate, this, packet)

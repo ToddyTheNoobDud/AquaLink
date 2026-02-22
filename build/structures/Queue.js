@@ -38,17 +38,19 @@ class Queue {
     this._head = 0
   }
 
-  shuffle() {
-    if (this._head > 0) {
-      if (this._head > 0) {
-        const len = this._items.length - this._head
-        for (let i = 0; i < len; i++) {
-          this._items[i] = this._items[this._head + i]
-        }
-        this._items.length = len
-        this._head = 0
-      }
+  _compact(force = false) {
+    if (this._head <= 0) return
+    if (!force && this._head <= this._items.length / 2) return
+    const len = this._items.length - this._head
+    for (let i = 0; i < len; i++) {
+      this._items[i] = this._items[this._head + i]
     }
+    this._items.length = len
+    this._head = 0
+  }
+
+  shuffle() {
+    this._compact(true)
     for (let i = this._items.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1))
       const temp = this._items[i]
@@ -106,14 +108,7 @@ class Queue {
     const item = this._items[this._head]
     this._items[this._head] = undefined // Allow GC
     this._head++
-    if (this._head > 0 && this._head > this._items.length / 2) {
-      const len = this._items.length - this._head
-      for (let i = 0; i < len; i++) {
-        this._items[i] = this._items[this._head + i]
-      }
-      this._items.length = len
-      this._head = 0
-    }
+    this._compact(false)
     return item
   }
 

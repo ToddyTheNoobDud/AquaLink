@@ -138,7 +138,9 @@ class Aqua extends EventEmitter {
     )
     this.traceSink =
       typeof merged.traceSink === 'function' ? merged.traceSink : null
-    this._traceBuffer = []
+    this._traceBuffer = new Array(this.traceMaxEntries)
+    this._traceBufferCount = 0
+    this._traceBufferIndex = 0
     this._traceSeq = 0
 
     this._nodeStates = new Map()
@@ -163,25 +165,40 @@ class Aqua extends EventEmitter {
       event,
       data
     }
-    this._traceBuffer.push(entry)
-    if (this._traceBuffer.length > this.traceMaxEntries) {
-      this._traceBuffer.splice(
-        0,
-        this._traceBuffer.length - this.traceMaxEntries
-      )
+    if (this._traceBuffer.length !== this.traceMaxEntries) {
+      this._traceBuffer = new Array(this.traceMaxEntries)
+      this._traceBufferCount = 0
+      this._traceBufferIndex = 0
     }
+    this._traceBuffer[this._traceBufferIndex] = entry
+    this._traceBufferIndex =
+      (this._traceBufferIndex + 1) % this.traceMaxEntries
+    if (this._traceBufferCount < this.traceMaxEntries) this._traceBufferCount++
     if (this.traceSink) _functions.safeCall(() => this.traceSink(entry))
-    this.emit(AqualinkEvents.Debug, 'trace', JSON.stringify(entry))
+    if (this.listenerCount(AqualinkEvents.Debug) > 0) {
+      this.emit(AqualinkEvents.Debug, 'trace', JSON.stringify(entry))
+    }
   }
 
   getTrace(limit = 300) {
     const max = Math.max(1, Number(limit) || 300)
-    const start = Math.max(0, this._traceBuffer.length - max)
-    return this._traceBuffer.slice(start)
+    const count = Math.min(max, this._traceBufferCount)
+    if (!count) return []
+    const out = new Array(count)
+    let start =
+      (this._traceBufferIndex - count + this.traceMaxEntries) %
+      this.traceMaxEntries
+    for (let i = 0; i < count; i++) {
+      out[i] = this._traceBuffer[start]
+      start = (start + 1) % this.traceMaxEntries
+    }
+    return out
   }
 
   clearTrace() {
-    this._traceBuffer.length = 0
+    this._traceBuffer.fill(undefined)
+    this._traceBufferCount = 0
+    this._traceBufferIndex = 0
   }
 
   _createDefaultSend() {
@@ -389,9 +406,8 @@ class Aqua extends EventEmitter {
   _destroyNode(id) {
     const node = this.nodeMap.get(id)
     if (!node) return
-    _functions.safeCall(() => node.destroy())
+    _functions.safeCall(() => node.destroy(true))
     this._cleanupNode(id)
-    this.emit(AqualinkEvents.NodeDestroy, node)
   }
 
   _cleanupNode(id) {
@@ -480,18 +496,7 @@ class Aqua extends EventEmitter {
       if (current && player?.queue?.add) {
         player.queue.add(current)
         await player.play()
-        if (state.position > 0) {
-          const seekOnce = (p) => {
-            if (p.guildId === guildId) {
-              this.off(AqualinkEvents.TrackStart, seekOnce)
-              _functions.unrefTimeout(() => player.seek?.(state.position), 50)
-            }
-          }
-          this.once(AqualinkEvents.TrackStart, seekOnce)
-          player.once('destroy', () =>
-            this.off(AqualinkEvents.TrackStart, seekOnce)
-          )
-        }
+        this._seekAfterTrackStart(player, guildId, state.position, 50)
         if (state.paused) player.pause(true)
       }
       return player
@@ -731,6 +736,17 @@ class Aqua extends EventEmitter {
     })
   }
 
+  _seekAfterTrackStart(player, guildId, position, delay = 50) {
+    if (!player || !guildId || !(position > 0)) return
+    const seekOnce = (p) => {
+      if (p.guildId !== guildId) return
+      this.off(AqualinkEvents.TrackStart, seekOnce)
+      _functions.unrefTimeout(() => player.seek?.(position), delay)
+    }
+    this.once(AqualinkEvents.TrackStart, seekOnce)
+    player.once('destroy', () => this.off(AqualinkEvents.TrackStart, seekOnce))
+  }
+
   async _restorePlayerState(newPlayer, state) {
     const ops = []
     if (typeof state.volume === 'number') {
@@ -744,22 +760,7 @@ class Aqua extends EventEmitter {
       newPlayer.queue?.add?.(state.current, { toFront: true })
       if (this.failoverOptions.resumePlayback) {
         ops.push(newPlayer.play())
-        if (state.position > 0) {
-          const guildId = newPlayer.guildId
-          const seekOnce = (p) => {
-            if (p.guildId === guildId) {
-              this.off(AqualinkEvents.TrackStart, seekOnce)
-              _functions.unrefTimeout(
-                () => newPlayer.seek?.(state.position),
-                50
-              )
-            }
-          }
-          this.once(AqualinkEvents.TrackStart, seekOnce)
-          newPlayer.once('destroy', () =>
-            this.off(AqualinkEvents.TrackStart, seekOnce)
-          )
-        }
+        this._seekAfterTrackStart(newPlayer, newPlayer.guildId, state.position, 50)
         if (state.paused) ops.push(newPlayer.pause(true))
       }
     }
@@ -874,9 +875,13 @@ class Aqua extends EventEmitter {
     const id = String(guildId)
     const player = this.players.get(id)
     if (!player) return
+
+    // Guard against recursive destroy calls triggered by Player.destroy().
     this.players.delete(id)
-    _functions.safeCall(() => player.removeAllListeners())
     await _functions.safeCall(() => player.destroy())
+
+    // Fallback cleanup in case the player "destroy" listener was not attached.
+    if (player?.nodes?.players?.has?.(player)) this._handlePlayerDestroy(player)
   }
 
   async resolve({ query, source, requester, nodes }) {
@@ -1151,18 +1156,7 @@ class Aqua extends EventEmitter {
           else player.volume = p.vol
         }
 
-        if (p.p > 0) {
-          const seekOnce = (pl) => {
-            if (pl.guildId === gId) {
-              this.off(AqualinkEvents.TrackStart, seekOnce)
-              _functions.unrefTimeout(() => player.seek?.(p.p), 100)
-            }
-          }
-          this.on(AqualinkEvents.TrackStart, seekOnce)
-          player.once('destroy', () =>
-            this.off(AqualinkEvents.TrackStart, seekOnce)
-          )
-        }
+        this._seekAfterTrackStart(player, gId, p.p, 100)
 
         await player.play(undefined, { startTime: p.p, paused: p.pa })
       }

@@ -176,6 +176,7 @@ class Rest {
     this.useHttp2 = !!aqua?.options?.useHttp2
     this._h2 = null
     this._h2Timer = null
+    this.calls = 0
   }
 
   _setupAgent(node) {
@@ -256,6 +257,88 @@ class Rest {
     }
   }
 
+  _collectBody(stream, preallocSize = 0) {
+    return new Promise((resolve, reject) => {
+      let done = false
+      let size = 0
+      let prealloc =
+        preallocSize > 0 && preallocSize <= MAX_RESPONSE_SIZE
+          ? Buffer.allocUnsafe(preallocSize)
+          : null
+      let chunks = prealloc ? null : []
+
+      const finish = (ok, val) => {
+        if (done) return
+        done = true
+        prealloc = null
+        chunks = null
+        ok ? resolve(val) : reject(val)
+      }
+
+      stream.on('data', (chunk) => {
+        if (done) return
+        if (prealloc) {
+          if (size + chunk.length <= prealloc.length) {
+            chunk.copy(prealloc, size)
+            size += chunk.length
+          } else {
+            chunks = [prealloc.slice(0, size), chunk]
+            size += chunk.length
+            prealloc = null
+          }
+        } else {
+          size += chunk.length
+          chunks.push(chunk)
+        }
+        if (size > MAX_RESPONSE_SIZE) finish(false, ERRORS.RESPONSE_TOO_LARGE)
+      })
+
+      stream.once('error', (e) => finish(false, e))
+      stream.once('end', () => {
+        if (done) return
+        if (size === 0) return finish(true, null)
+        finish(
+          true,
+          prealloc
+            ? prealloc.slice(0, size)
+            : chunks.length === 1
+              ? chunks[0]
+              : Buffer.concat(chunks, size)
+        )
+      })
+    })
+  }
+
+  _parseResponseBuffer(
+    buffer,
+    status,
+    method,
+    url,
+    headers,
+    contentType,
+    statusMessage
+  ) {
+    if (!buffer) return null
+    if (buffer.length > MAX_RESPONSE_SIZE) throw ERRORS.RESPONSE_TOO_LARGE
+    let result
+    try {
+      result = _functions.parseBody(buffer, contentType, false)
+    } catch (e) {
+      throw new Error(`JSON parse error: ${e.message}`)
+    }
+    if (status >= 400) {
+      throw _functions.createHttpError(
+        status,
+        method,
+        url,
+        headers,
+        result,
+        statusMessage
+      )
+    }
+    return result
+  }
+
   async makeRequest(method, endpoint, body) {
     const url = `${this.baseUrl}${endpoint}`
     const payload =
@@ -266,6 +349,7 @@ class Rest {
           : JSON.stringify(body)
     const payloadLen = payload ? Buffer.byteLength(payload, UTF8) : 0
     const headers = this._buildHeaders(!!payload, payloadLen)
+    this.calls++
 
     try {
       const resp =
@@ -274,6 +358,7 @@ class Rest {
           : await this._h1Request(method, url, headers, payload)
       return resp
     } finally {
+      if (this.calls > 0) this.calls--
       this._returnHeaders(headers)
     }
   }
@@ -283,9 +368,6 @@ class Rest {
       let req,
         timer,
         done = false
-      let chunks = null,
-        size = 0,
-        prealloc = null
 
       const finish = (ok, val) => {
         if (done) return
@@ -294,7 +376,6 @@ class Rest {
           clearTimeout(timer)
           timer = null
         }
-        chunks = prealloc = null
         if (req && !ok) req.destroy()
         ok ? resolve(val) : reject(val)
       }
@@ -326,104 +407,60 @@ class Rest {
           const encoding = _functions.getEncodingType(
             res.headers['content-encoding']
           )
-
-          const handleResponse = (buffer) => {
-            if (buffer.length > MAX_RESPONSE_SIZE)
-              return finish(false, ERRORS.RESPONSE_TOO_LARGE)
-
+          const finalize = (buffer) => {
             try {
-              const result = _functions.parseBody(buffer, contentType, false)
-              if (status >= 400) {
-                finish(
-                  false,
-                  _functions.createHttpError(
-                    status,
-                    method,
-                    url,
-                    res.headers,
-                    result,
-                    res.statusMessage
-                  )
-                )
-              } else {
-                finish(true, result)
-              }
+              const result = this._parseResponseBuffer(
+                buffer,
+                status,
+                method,
+                url,
+                res.headers,
+                contentType,
+                res.statusMessage
+              )
+              finish(true, result)
             } catch (e) {
-              finish(false, new Error(`JSON parse error: ${e.message}`))
+              finish(false, e)
             }
           }
+
+          res.once('aborted', () => finish(false, ERRORS.RESPONSE_ABORTED))
+          res.once('error', (e) => finish(false, e))
 
           if (
             encoding !== ENCODING_NONE &&
             clInt > 0 &&
             clInt < COMPRESSION_MIN_SIZE
           ) {
-            const compressed = []
-            let csize = 0
-
-            res.on('data', (c) => {
-              csize += c.length
-              if (csize > MAX_RESPONSE_SIZE)
-                return finish(false, ERRORS.RESPONSE_TOO_LARGE)
-              compressed.push(c)
-            })
-            res.once('end', () => {
-              try {
-                handleResponse(
-                  _functions.decompressSync(Buffer.concat(compressed), encoding)
-                )
-              } catch (e) {
+            this._collectBody(res)
+              .then((compressed) => {
+                if (!compressed) return finish(true, null)
+                const decompressed = _functions.decompressSync(compressed, encoding)
+                finalize(decompressed)
+              })
+              .catch((e) => {
                 finish(false, e)
-              }
-            })
-            res.once('aborted', () => finish(false, ERRORS.RESPONSE_ABORTED))
-            res.once('error', (e) => finish(false, e))
+              })
             return
           }
 
-          if (
-            encoding === ENCODING_NONE &&
-            clInt > 0 &&
-            clInt <= MAX_RESPONSE_SIZE
-          ) {
-            prealloc = Buffer.allocUnsafe(clInt)
-          } else {
-            chunks = []
-          }
-
           let stream = res
+          let preallocSize = 0
           if (encoding !== ENCODING_NONE) {
             const decomp = _functions.createDecompressor(encoding)
             decomp.once('error', (e) => finish(false, e))
             res.pipe(decomp)
             stream = decomp
+          } else if (clInt > 0 && clInt <= MAX_RESPONSE_SIZE) {
+            preallocSize = clInt
           }
 
-          res.once('aborted', () => finish(false, ERRORS.RESPONSE_ABORTED))
-          res.once('error', (e) => finish(false, e))
-
-          stream.on('data', (chunk) => {
-            if (prealloc) {
-              chunk.copy(prealloc, size)
-              size += chunk.length
-            } else {
-              size += chunk.length
-              if (size > MAX_RESPONSE_SIZE)
-                return finish(false, ERRORS.RESPONSE_TOO_LARGE)
-              chunks.push(chunk)
-            }
-          })
-
-          stream.once('end', () => {
-            if (size === 0) return finish(true, null)
-            handleResponse(
-              prealloc
-                ? prealloc.slice(0, size)
-                : chunks.length === 1
-                  ? chunks[0]
-                  : Buffer.concat(chunks, size)
-            )
-          })
+          this._collectBody(stream, preallocSize)
+            .then((buffer) => {
+              if (!buffer) return finish(true, null)
+              finalize(buffer)
+            })
+            .catch((e) => finish(false, e))
         }
       )
 
@@ -490,9 +527,6 @@ class Rest {
       let req,
         timer,
         done = false
-      let chunks = null,
-        size = 0,
-        prealloc = null
 
       const finish = (ok, val) => {
         if (done) return
@@ -501,7 +535,6 @@ class Rest {
           clearTimeout(timer)
           timer = null
         }
-        chunks = prealloc = null
         if (req && !ok) req.close(http2.constants.NGHTTP2_CANCEL)
         ok ? resolve(val) : reject(val)
       }
@@ -543,15 +576,20 @@ class Rest {
         }
 
         const encoding = _functions.getEncodingType(rh['content-encoding'])
-
-        if (
-          encoding === ENCODING_NONE &&
-          clInt > 0 &&
-          clInt <= MAX_RESPONSE_SIZE
-        ) {
-          prealloc = Buffer.allocUnsafe(clInt)
-        } else {
-          chunks = []
+        const finalize = (buffer) => {
+          try {
+            const result = this._parseResponseBuffer(
+              buffer,
+              status,
+              method,
+              this.baseUrl + path,
+              rh,
+              contentType
+            )
+            finish(true, result)
+          } catch (e) {
+            finish(false, e)
+          }
         }
 
         const decomp =
@@ -559,51 +597,19 @@ class Rest {
             ? _functions.createDecompressor(encoding)
             : null
         const stream = decomp ? req.pipe(decomp) : req
+        const preallocSize =
+          encoding === ENCODING_NONE && clInt > 0 && clInt <= MAX_RESPONSE_SIZE
+            ? clInt
+            : 0
 
         if (decomp) decomp.once('error', (e) => finish(false, e))
         req.once('error', (e) => finish(false, e))
-
-        stream.on('data', (chunk) => {
-          if (prealloc) {
-            chunk.copy(prealloc, size)
-            size += chunk.length
-          } else {
-            size += chunk.length
-            if (size > MAX_RESPONSE_SIZE)
-              return finish(false, ERRORS.RESPONSE_TOO_LARGE)
-            chunks.push(chunk)
-          }
-        })
-
-        stream.once('end', () => {
-          if (size === 0) return finish(true, null)
-
-          const buffer = prealloc
-            ? prealloc.slice(0, size)
-            : chunks.length === 1
-              ? chunks[0]
-              : Buffer.concat(chunks, size)
-
-          try {
-            const result = _functions.parseBody(buffer, contentType, false)
-            if (status >= 400) {
-              finish(
-                false,
-                _functions.createHttpError(
-                  status,
-                  method,
-                  this.baseUrl + path,
-                  rh,
-                  result
-                )
-              )
-            } else {
-              finish(true, result)
-            }
-          } catch (e) {
-            finish(false, new Error(`JSON parse error: ${e.message}`))
-          }
-        })
+        this._collectBody(stream, preallocSize)
+          .then((buffer) => {
+            if (!buffer) return finish(true, null)
+            finalize(buffer)
+          })
+          .catch((e) => finish(false, e))
       })
 
       timer = setTimeout(
@@ -851,6 +857,7 @@ class Rest {
       this.defaultHeaders =
       this._endpoints =
         null
+    this.calls = 0
   }
 }
 
