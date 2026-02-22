@@ -1,4 +1,4 @@
-const https = require('https')
+const https = require('node:https')
 
 const sourceHandlers = {
   spotify: fetchSpotifyThumbnail,
@@ -80,9 +80,7 @@ async function fetchYouTubeThumbnail(identifier) {
     try {
       const exists = await checkImageExists(url)
       if (exists) return url
-    } catch (error) {
-      continue
-    }
+    } catch (_error) {}
   }
 
   return null

@@ -266,7 +266,11 @@ class Player extends EventEmitter {
         reconnecting: !!this._reconnecting,
         recovering: !!this._voiceRecovering
       })
-      if (!this._voiceDownSince && !this._reconnecting && !this._voiceRecovering) {
+      if (
+        !this._voiceDownSince &&
+        !this._reconnecting &&
+        !this._voiceRecovering
+      ) {
         this._voiceDownSince = Date.now()
         this._createTimer(() => {
           if (
@@ -375,7 +379,7 @@ class Player extends EventEmitter {
 
       const updateData = {
         track: { encoded: this.current.track },
-        paused: this.paused,
+        paused: this.paused
       }
       if (this.position > 0) updateData.position = this.position
 
@@ -590,10 +594,7 @@ class Player extends EventEmitter {
   pause(paused) {
     if (this.destroyed || this.paused === !!paused) return this
     this.paused = !!paused
-    this.batchUpdatePlayer(
-      { paused: this.paused },
-      true
-    ).catch(() => {})
+    this.batchUpdatePlayer({ paused: this.paused }, true).catch(() => {})
     return this
   }
 
@@ -605,10 +606,7 @@ class Player extends EventEmitter {
       ? Math.min(Math.max(position, 0), len)
       : Math.max(position, 0)
     this.position = clamped
-    this.batchUpdatePlayer(
-      { position: clamped },
-      true
-    ).catch(() => {})
+    this.batchUpdatePlayer({ position: clamped }, true).catch(() => {})
     return this
   }
 
@@ -670,9 +668,7 @@ class Player extends EventEmitter {
     const vol = _functions.clamp(volume)
     if (this.destroyed || this.volume === vol) return this
     this.volume = vol
-    this.batchUpdatePlayer({ volume: vol }).catch(
-      () => {}
-    )
+    this.batchUpdatePlayer({ volume: vol }).catch(() => {})
     return this
   }
 
@@ -689,9 +685,7 @@ class Player extends EventEmitter {
     const id = _functions.toId(channel)
     if (!id) throw new TypeError('Invalid text channel')
     this.textChannel = id
-    this.batchUpdatePlayer({ text_channel: id }).catch(
-      () => {}
-    )
+    this.batchUpdatePlayer({ text_channel: id }).catch(() => {})
     return this
   }
 
@@ -777,7 +771,7 @@ class Player extends EventEmitter {
       this.destroyed ||
       !this.isAutoplayEnabled ||
       !this.previous ||
-      (this.queue?.size)
+      this.queue?.size
     )
       return this
     const prev = this.previous

@@ -146,7 +146,11 @@ declare module 'aqualink' {
      * @param targetNode Target node to move to
      * @param reason Reason for migration (default: 'region')
      */
-    movePlayerToNode(guildId: string, targetNode: Node, reason?: string): Promise<Player>
+    movePlayerToNode(
+      guildId: string,
+      targetNode: Node,
+      reason?: string
+    ): Promise<Player>
 
     // Utility Methods
     /**
@@ -347,7 +351,10 @@ declare module 'aqualink' {
      * await player.play(track);
      * ```
      */
-    play(track?: Track | null, options?: { paused?: boolean; startTime?: number; noReplace?: boolean }): Promise<Player>
+    play(
+      track?: Track | null,
+      options?: { paused?: boolean; startTime?: number; noReplace?: boolean }
+    ): Promise<Player>
 
     /**
      * Connects the player to a voice channel
@@ -1290,7 +1297,9 @@ declare module 'aqualink' {
    *
    * For descriptions on each value, use the `VoiceRegion` object in your IDE.
    */
-  export type DiscordVoiceRegion = typeof VoiceRegion[keyof typeof VoiceRegion] | (string & {})
+  export type DiscordVoiceRegion =
+    | (typeof VoiceRegion)[keyof typeof VoiceRegion]
+    | (string & {})
 
   // Type Unions and Enums
   export type SearchSource =

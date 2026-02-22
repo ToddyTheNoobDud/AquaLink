@@ -1,4 +1,4 @@
-const https = require('https')
+const https = require('node:https')
 
 // Default agent config (used only if shared agent not provided)
 const AGENT_CONFIG = {
@@ -11,7 +11,12 @@ const AGENT_CONFIG = {
 
 // Shared agent reference - can be set from Rest module
 let sharedAgent = null
-const getAgent = () => sharedAgent || (sharedAgent = new https.Agent(AGENT_CONFIG))
+const getAgent = () => {
+  if (!sharedAgent) {
+    sharedAgent = new https.Agent(AGENT_CONFIG)
+  }
+  return sharedAgent
+}
 
 // Allow Rest module to inject its agent
 const setSharedAgent = (agent) => {
@@ -19,7 +24,6 @@ const setSharedAgent = (agent) => {
     sharedAgent = agent
   }
 }
-
 
 const SC_LINK_RE = /<a\s+itemprop="url"\s+href="(\/[^"]+)"/g
 const MAX_REDIRECTS = 3

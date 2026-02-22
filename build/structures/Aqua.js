@@ -132,8 +132,12 @@ class Aqua extends EventEmitter {
     this.maxTracksRestore = merged.maxTracksRestore
     this.send = merged.send || this._createDefaultSend()
     this.debugTrace = !!merged.debugTrace
-    this.traceMaxEntries = Math.max(100, Number(merged.traceMaxEntries) || TRACE_BUFFER_SIZE)
-    this.traceSink = typeof merged.traceSink === 'function' ? merged.traceSink : null
+    this.traceMaxEntries = Math.max(
+      100,
+      Number(merged.traceMaxEntries) || TRACE_BUFFER_SIZE
+    )
+    this.traceSink =
+      typeof merged.traceSink === 'function' ? merged.traceSink : null
     this._traceBuffer = []
     this._traceSeq = 0
 
@@ -161,7 +165,10 @@ class Aqua extends EventEmitter {
     }
     this._traceBuffer.push(entry)
     if (this._traceBuffer.length > this.traceMaxEntries) {
-      this._traceBuffer.splice(0, this._traceBuffer.length - this.traceMaxEntries)
+      this._traceBuffer.splice(
+        0,
+        this._traceBuffer.length - this.traceMaxEntries
+      )
     }
     if (this.traceSink) _functions.safeCall(() => this.traceSink(entry))
     this.emit(AqualinkEvents.Debug, 'trace', JSON.stringify(entry))
@@ -654,11 +661,13 @@ class Aqua extends EventEmitter {
     // Bootstrap voice on the new node using last known voice state to avoid
     // "track queued, waiting for voice state" after region migration.
     if (oldVoice && newPlayer.connection) {
-      if (oldVoice.sessionId) newPlayer.connection.sessionId = oldVoice.sessionId
+      if (oldVoice.sessionId)
+        newPlayer.connection.sessionId = oldVoice.sessionId
       if (oldVoice.endpoint) newPlayer.connection.endpoint = oldVoice.endpoint
       if (oldVoice.token) newPlayer.connection.token = oldVoice.token
       if (oldVoice.region) newPlayer.connection.region = oldVoice.region
-      if (oldVoice.channelId) newPlayer.connection.channelId = oldVoice.channelId
+      if (oldVoice.channelId)
+        newPlayer.connection.channelId = oldVoice.channelId
       newPlayer.connection._lastVoiceDataUpdate = Date.now()
       newPlayer.connection.resendVoiceUpdate(true)
       this._trace('player.migrate.voiceBootstrap', {
@@ -679,7 +688,8 @@ class Aqua extends EventEmitter {
       reason,
       from: oldNode?.name || oldNode?.host,
       to: targetNode?.name || targetNode?.host,
-      region: newPlayer?.connection?.region || oldPlayer?.connection?.region || null
+      region:
+        newPlayer?.connection?.region || oldPlayer?.connection?.region || null
     })
     this.emit(AqualinkEvents.PlayerMigrated, oldPlayer, newPlayer, targetNode)
     return newPlayer
@@ -943,7 +953,11 @@ class Aqua extends EventEmitter {
       return base
     }
     if (loadType === 'track' && data) {
-      base.pluginInfo = data.pluginInfo || data.info?.pluginInfo || rootPlugin || base.pluginInfo
+      base.pluginInfo =
+        data.pluginInfo ||
+        data.info?.pluginInfo ||
+        rootPlugin ||
+        base.pluginInfo
       base.tracks.push(_functions.makeTrack(data, requester, node))
     } else if (loadType === 'playlist' && data) {
       const info = data.info
@@ -1145,7 +1159,9 @@ class Aqua extends EventEmitter {
             }
           }
           this.on(AqualinkEvents.TrackStart, seekOnce)
-          player.once('destroy', () => this.off(AqualinkEvents.TrackStart, seekOnce))
+          player.once('destroy', () =>
+            this.off(AqualinkEvents.TrackStart, seekOnce)
+          )
         }
 
         await player.play(undefined, { startTime: p.p, paused: p.pa })
@@ -1246,8 +1262,7 @@ class Aqua extends EventEmitter {
             }
             break
           }
-        } catch {
-        }
+        } catch {}
       }
     } catch {
     } finally {

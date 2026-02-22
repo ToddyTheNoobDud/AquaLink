@@ -354,8 +354,7 @@ class Node {
 
   _calcBackoff(attempt) {
     const baseBackoff =
-      this.reconnectTimeout *
-      Node.BACKOFF_MULTIPLIER ** Math.min(attempt, 10)
+      this.reconnectTimeout * Node.BACKOFF_MULTIPLIER ** Math.min(attempt, 10)
     const maxJitter = Math.min(
       Node.JITTER_MAX,
       baseBackoff * Node.JITTER_FACTOR

@@ -41,7 +41,7 @@ const EMPTY_ARRAY = Object.freeze([])
 
 const FILTER_POOL_SIZE = 16
 const filterPool = {
-  pools: Object.fromEntries(Object.keys(FILTER_DEFAULTS).map(k => [k, []])),
+  pools: Object.fromEntries(Object.keys(FILTER_DEFAULTS).map((k) => [k, []])),
 
   acquire(type) {
     const pool = this.pools[type]

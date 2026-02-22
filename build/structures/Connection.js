@@ -67,7 +67,7 @@ const _functions = {
     }
     return label.slice(0, i + 1) || 'unknown'
   },
-  fillVoicePayload: (payload, guildId, conn, player, resume) => {
+  fillVoicePayload: (payload, guildId, conn, player) => {
     payload.guildId = guildId
     const v = payload.data.voice
     v.token = conn.token
@@ -233,14 +233,22 @@ class Connection {
 
   _checkRegionMigration() {
     if (this._destroyed || this._regionMigrationAttempted) return false
-    if (!this._aqua?.autoRegionMigrate || !this.region || this.region === 'unknown') return false
+    if (
+      !this._aqua?.autoRegionMigrate ||
+      !this.region ||
+      this.region === 'unknown'
+    )
+      return false
     const player = this._player
-    if (!player || player.destroyed || player._resuming || player._reconnecting) return false
+    if (!player || player.destroyed || player._resuming || player._reconnecting)
+      return false
 
     const currentNode = player.nodes
     if (!currentNode) return false
 
-    const currentRegions = Array.isArray(currentNode.regions) ? currentNode.regions : []
+    const currentRegions = Array.isArray(currentNode.regions)
+      ? currentNode.regions
+      : []
     const alreadyMatching = currentRegions.some((r) =>
       this._aqua._regionMatches?.(r, this.region)
     )
@@ -633,7 +641,8 @@ class Connection {
       this._aqua?._trace?.('connection.update.send', {
         guildId: this._guildId,
         hasSessionId: !!this._rest?.sessionId,
-        hasVoice: !!payload?.data?.voice?.sessionId && !!payload?.data?.voice?.endpoint
+        hasVoice:
+          !!payload?.data?.voice?.sessionId && !!payload?.data?.voice?.endpoint
       })
       await this._rest.updatePlayer(payload)
       this._aqua?._trace?.('connection.update.ok', {
