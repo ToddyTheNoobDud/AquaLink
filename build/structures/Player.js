@@ -1,4 +1,4 @@
-const { EventEmitter } = require('tseep')
+const { EventEmitter } = require('node:events')
 const { AqualinkEvents } = require('./AqualinkEvents')
 const Connection = require('./Connection')
 const Filters = require('./Filters')
@@ -929,8 +929,8 @@ class Player extends EventEmitter {
       this.queue.add(track)
     }
 
-    if (this.queue.size && !isReplaced) {
-      this.aqua.emit(AqualinkEvents.TrackEnd, this, track, reason)
+    if (this.queue.size) {
+      if (!isReplaced) this.aqua.emit(AqualinkEvents.TrackEnd, this, track, reason)
       await this.play()
     } else if (this.isAutoplayEnabled && !isReplaced) {
       await this.autoplay()

@@ -1,6 +1,6 @@
 const fs = require('node:fs')
 const readline = require('node:readline')
-const { EventEmitter } = require('tseep')
+const { EventEmitter } = require('node:events')
 const { AqualinkEvents } = require('./AqualinkEvents')
 const Node = require('./Node')
 const Player = require('./Player')
@@ -740,7 +740,6 @@ class Aqua extends EventEmitter {
     if (!player || !guildId || !(position > 0)) return
     const seekOnce = (p) => {
       if (p.guildId !== guildId) return
-      this.off(AqualinkEvents.TrackStart, seekOnce)
       _functions.unrefTimeout(() => player.seek?.(position), delay)
     }
     this.once(AqualinkEvents.TrackStart, seekOnce)
