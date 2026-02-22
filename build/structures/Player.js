@@ -320,7 +320,11 @@ class Player extends EventEmitter {
       return
     }
     try {
-      await this[handler](this, this.current, payload)
+      const trackArg =
+        payload.type === 'TrackStartEvent'
+          ? payload.track || this.current
+          : this.current
+      await this[handler](this, trackArg, payload)
     } catch (error) {
       this.aqua.emit(AqualinkEvents.Error, error)
     }
@@ -360,7 +364,13 @@ class Player extends EventEmitter {
     if (!item) return this
 
     try {
-      this.current = item.track ? item : await item.resolve(this.aqua)
+      let resolvedItem = null
+      if (item?.track) {
+        resolvedItem = item
+      } else if (typeof item?.resolve === 'function') {
+        resolvedItem = await item.resolve(this.aqua)
+      }
+      this.current = resolvedItem
       if (this.destroyed) return this
       if (!this.current?.track) throw new Error('Failed to resolve track')
 
@@ -888,9 +898,12 @@ class Player extends EventEmitter {
 
   trackStart(_player, _track, payload = {}) {
     if (this.destroyed) return
+    const startedTrack = this.current || _track
+    if (!startedTrack) return
+    if (!this.current) this.current = startedTrack
     this.playing = true
     this.paused = false
-    this.aqua.emit(AqualinkEvents.TrackStart, this, this.current, {
+    this.aqua.emit(AqualinkEvents.TrackStart, this, startedTrack, {
       ...payload,
       resumed: this._resuming
     })
@@ -930,7 +943,8 @@ class Player extends EventEmitter {
     }
 
     if (this.queue.size) {
-      if (!isReplaced) this.aqua.emit(AqualinkEvents.TrackEnd, this, track, reason)
+      if (!isReplaced)
+        this.aqua.emit(AqualinkEvents.TrackEnd, this, track, reason)
       await this.play()
     } else if (this.isAutoplayEnabled && !isReplaced) {
       await this.autoplay()

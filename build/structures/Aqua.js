@@ -171,8 +171,7 @@ class Aqua extends EventEmitter {
       this._traceBufferIndex = 0
     }
     this._traceBuffer[this._traceBufferIndex] = entry
-    this._traceBufferIndex =
-      (this._traceBufferIndex + 1) % this.traceMaxEntries
+    this._traceBufferIndex = (this._traceBufferIndex + 1) % this.traceMaxEntries
     if (this._traceBufferCount < this.traceMaxEntries) this._traceBufferCount++
     if (this.traceSink) _functions.safeCall(() => this.traceSink(entry))
     if (this.listenerCount(AqualinkEvents.Debug) > 0) {
@@ -756,11 +755,17 @@ class Aqua extends EventEmitter {
     if (state.queue?.length && newPlayer.queue?.add)
       newPlayer.queue.add(...state.queue)
     if (state.current && this.failoverOptions.preservePosition) {
-      newPlayer.queue?.add?.(state.current, { toFront: true })
       if (this.failoverOptions.resumePlayback) {
-        ops.push(newPlayer.play())
-        this._seekAfterTrackStart(newPlayer, newPlayer.guildId, state.position, 50)
+        ops.push(newPlayer.play(state.current))
+        this._seekAfterTrackStart(
+          newPlayer,
+          newPlayer.guildId,
+          state.position,
+          50
+        )
         if (state.paused) ops.push(newPlayer.pause(true))
+      } else if (newPlayer.queue?.add) {
+        newPlayer.queue.add(state.current)
       }
     }
     newPlayer.loop = state.loop

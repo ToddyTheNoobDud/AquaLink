@@ -435,7 +435,10 @@ class Rest {
             this._collectBody(res)
               .then((compressed) => {
                 if (!compressed) return finish(true, null)
-                const decompressed = _functions.decompressSync(compressed, encoding)
+                const decompressed = _functions.decompressSync(
+                  compressed,
+                  encoding
+                )
                 finalize(decompressed)
               })
               .catch((e) => {
