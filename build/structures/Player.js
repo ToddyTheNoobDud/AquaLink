@@ -53,7 +53,7 @@ const INVALID_LOADS = new Set(['error', 'empty', 'LOAD_FAILED', 'NO_MATCHES'])
 const _functions = {
   clamp(v) {
     const n = +v
-    return Number.isNaN(n) ? 100 : n < 0 ? 0 : n > 200 ? 200 : n
+    return Number.isNaN(n) ? 100 : n < 0 ? 0 : n > 1000 ? 1000 : n
   },
   randIdx: (len) => (Math.random() * len) | 0,
   toId: (v) => v?.id || v || null,
@@ -345,7 +345,6 @@ class Player extends EventEmitter {
       if (this.destroyed || !this._updateBatcher) return this
 
       const updateData = {
-        guildId: this.guildId,
         track: { encoded: this.current.track },
         paused: this.paused,
       }
@@ -548,7 +547,7 @@ class Player extends EventEmitter {
     if (this.destroyed || this.paused === !!paused) return this
     this.paused = !!paused
     this.batchUpdatePlayer(
-      { guildId: this.guildId, paused: this.paused },
+      { paused: this.paused },
       true
     ).catch(() => {})
     return this
@@ -563,7 +562,7 @@ class Player extends EventEmitter {
       : Math.max(position, 0)
     this.position = clamped
     this.batchUpdatePlayer(
-      { guildId: this.guildId, position: clamped },
+      { position: clamped },
       true
     ).catch(() => {})
     return this
@@ -617,7 +616,7 @@ class Player extends EventEmitter {
     this.playing = this.paused = false
     this.position = 0
     this.batchUpdatePlayer(
-      { guildId: this.guildId, track: { encoded: null, paused: this.paused } },
+      { track: { encoded: null }, paused: this.paused },
       true
     ).catch(() => {})
     return this
@@ -627,7 +626,7 @@ class Player extends EventEmitter {
     const vol = _functions.clamp(volume)
     if (this.destroyed || this.volume === vol) return this
     this.volume = vol
-    this.batchUpdatePlayer({ guildId: this.guildId, volume: vol }).catch(
+    this.batchUpdatePlayer({ volume: vol }).catch(
       () => {}
     )
     return this
@@ -646,7 +645,7 @@ class Player extends EventEmitter {
     const id = _functions.toId(channel)
     if (!id) throw new TypeError('Invalid text channel')
     this.textChannel = id
-    this.batchUpdatePlayer({ guildId: this.guildId, text_channel: id }).catch(
+    this.batchUpdatePlayer({ text_channel: id }).catch(
       () => {}
     )
     return this
@@ -837,7 +836,7 @@ class Player extends EventEmitter {
     return null
   }
 
-  trackStart(player, track, payload = {}) {
+  trackStart(_player, _track, payload = {}) {
     if (this.destroyed) return
     this.playing = true
     this.paused = false
@@ -848,11 +847,12 @@ class Player extends EventEmitter {
     this._resuming = false
   }
 
-  async trackEnd(player, track, payload) {
+  async trackEnd(_player, track, payload) {
     if (this.destroyed) return
 
     const reason = payload?.reason
-    const isFailure = reason === 'loadFailed' || reason === 'cleanup'
+    const isFailure = reason === 'loadFailed'
+    const isCleanup = reason === 'cleanup'
     const isReplaced = reason === 'replaced'
 
     if (track) this.previousTracks.push(track)
@@ -860,8 +860,8 @@ class Player extends EventEmitter {
       _functions.safeDel(this.nowPlayingMessage)
     if (!isReplaced) this.current = null
 
-    if (isFailure) {
-      if (!this.queue.size) {
+    if (isFailure || isCleanup) {
+      if (!this.queue.size || isCleanup) {
         this.clearData({ preserveTracks: this._reconnecting || this._resuming })
         this.aqua.emit(AqualinkEvents.QueueEnd, this)
       } else {
@@ -894,55 +894,55 @@ class Player extends EventEmitter {
     }
   }
 
-  trackError(player, track, payload) {
+  trackError(_player, track, payload) {
     if (this.destroyed) return
     this.aqua.emit(AqualinkEvents.TrackError, this, track, payload)
     this.stop()
   }
 
-  trackStuck(player, track, payload) {
+  trackStuck(_player, track, payload) {
     if (this.destroyed) return
     this.aqua.emit(AqualinkEvents.TrackStuck, this, track, payload)
     this.stop()
   }
 
-  trackChange(p, t, payload) {
+  trackChange(_p, t, payload) {
     _functions.emitIfActive(this, AqualinkEvents.TrackChange, t, payload)
   }
-  lyricsLine(p, t, payload) {
+  lyricsLine(_p, t, payload) {
     _functions.emitIfActive(this, AqualinkEvents.LyricsLine, t, payload)
   }
-  volumeChanged(p, t, payload) {
+  volumeChanged(_p, t, payload) {
     _functions.emitIfActive(this, AqualinkEvents.VolumeChanged, t, payload)
   }
-  filtersChanged(p, t, payload) {
+  filtersChanged(_p, t, payload) {
     _functions.emitIfActive(this, AqualinkEvents.FiltersChanged, t, payload)
   }
-  seekEvent(p, t, payload) {
+  seekEvent(_p, t, payload) {
     _functions.emitIfActive(this, AqualinkEvents.Seek, t, payload)
   }
-  lyricsFound(p, t, payload) {
+  lyricsFound(_p, t, payload) {
     _functions.emitIfActive(this, AqualinkEvents.LyricsFound, t, payload)
   }
-  lyricsNotFound(p, t, payload) {
+  lyricsNotFound(_p, t, payload) {
     _functions.emitIfActive(this, AqualinkEvents.LyricsNotFound, t, payload)
   }
-  playerCreated(p, t, payload) {
+  playerCreated(_p, _t, payload) {
     _functions.emitIfActive(this, AqualinkEvents.PlayerCreated, payload)
   }
-  playerConnected(p, t, payload) {
+  playerConnected(_p, _t, payload) {
     _functions.emitIfActive(this, AqualinkEvents.PlayerConnected, payload)
   }
-  playerDestroyed(p, t, payload) {
+  playerDestroyed(_p, _t, payload) {
     _functions.emitIfActive(this, AqualinkEvents.PlayerDestroyed, payload)
   }
-  pauseEvent(p, t, payload) {
+  pauseEvent(_p, _t, payload) {
     _functions.emitIfActive(this, AqualinkEvents.PauseEvent, payload)
   }
-  mixStarted(p, t, payload) {
+  mixStarted(_p, t, payload) {
     _functions.emitIfActive(this, AqualinkEvents.MixStarted, t, payload)
   }
-  mixEnded(p, t, payload) {
+  mixEnded(_p, t, payload) {
     _functions.emitIfActive(this, AqualinkEvents.MixEnded, t, payload)
   }
 
@@ -952,7 +952,7 @@ class Player extends EventEmitter {
       throw new Error('Resume failed')
   }
 
-  async socketClosed(player, track, payload) {
+  async socketClosed(_player, _track, payload) {
     if (this.destroyed || this._reconnecting) return
 
     const code = payload?.code

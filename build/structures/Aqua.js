@@ -778,8 +778,7 @@ class Aqua extends EventEmitter {
       return base
     }
     if (loadType === 'track' && data) {
-      base.pluginInfo =
-        data.info?.pluginInfo || data.pluginInfo || base.pluginInfo
+      base.pluginInfo = data.pluginInfo || data.info?.pluginInfo || rootPlugin || base.pluginInfo
       base.tracks.push(_functions.makeTrack(data, requester, node))
     } else if (loadType === 'playlist' && data) {
       const info = data.info

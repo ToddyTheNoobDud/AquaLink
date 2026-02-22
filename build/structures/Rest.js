@@ -150,7 +150,7 @@ class Rest {
       decodetracks: `${this._apiBase}/decodetracks`,
       stats: `${this._apiBase}/stats`,
       info: `${this._apiBase}/info`,
-      version: `${this._apiBase}/version`,
+      version: `/version`,
       routeplanner: Object.freeze({
         status: `${this._apiBase}/routeplanner/status`,
         freeAddress: `${this._apiBase}/routeplanner/free/address`,

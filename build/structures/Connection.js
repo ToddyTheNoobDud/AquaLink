@@ -63,8 +63,6 @@ const _functions = {
     v.endpoint = conn.endpoint
     v.sessionId = conn.sessionId
     v.channelId = player.voiceChannel
-    v.resume = resume ? true : undefined
-    v.sequence = resume ? conn.sequence : undefined
     payload.data.volume = player?.volume ?? 100
     return payload
   }
@@ -83,9 +81,7 @@ class PayloadPool {
         voice: {
           token: null,
           endpoint: null,
-          sessionId: null,
-          resume: undefined,
-          sequence: undefined
+          sessionId: null
         },
         volume: null
       }
@@ -101,7 +97,6 @@ class PayloadPool {
     payload.guildId = null
     const v = payload.data.voice
     v.token = v.endpoint = v.sessionId = null
-    v.resume = v.sequence = undefined
     payload.data.volume = null
     this._pool[this._size++] = payload
   }
