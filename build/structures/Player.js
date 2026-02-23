@@ -231,11 +231,9 @@ class Player extends EventEmitter {
   _bindEvents() {
     this._boundPlayerUpdate = this._handlePlayerUpdate.bind(this)
     this._boundEvent = this._handleEvent.bind(this)
-    this._boundPlayerMove = this._handleAquaPlayerMove.bind(this)
 
     this.on('playerUpdate', this._boundPlayerUpdate)
     this.on('event', this._boundEvent)
-    this.aqua.on('playerMove', this._boundPlayerMove)
   }
 
   _startWatchdog() {
@@ -568,9 +566,7 @@ class Player extends EventEmitter {
     if (this._boundPlayerUpdate)
       this.removeListener('playerUpdate', this._boundPlayerUpdate)
     if (this._boundEvent) this.removeListener('event', this._boundEvent)
-    if (this.aqua && this._boundPlayerMove)
-      this.aqua.removeListener('playerMove', this._boundPlayerMove)
-    this._boundPlayerUpdate = this._boundEvent = this._boundPlayerMove = null
+    this._boundPlayerUpdate = this._boundEvent = null
     this.removeAllListeners()
 
     if (this._updateBatcher) {
@@ -1165,12 +1161,6 @@ class Player extends EventEmitter {
     }
 
     tryReconnect(1)
-  }
-
-  _handleAquaPlayerMove(oldChannel, newChannel) {
-    if (_functions.toId(oldChannel) !== _functions.toId(this.voiceChannel))
-      return
-    this.voiceChannel = _functions.toId(newChannel)
   }
 
   send(data) {
