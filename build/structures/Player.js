@@ -75,6 +75,14 @@ const _functions = {
     for (const t of set) clearTimeout(t)
     set.clear()
   },
+  emitAquaError(aqua, error) {
+    if (!aqua?.listenerCount) return
+    try {
+      if (aqua.listenerCount(AqualinkEvents.Error) > 0) {
+        aqua.emit(AqualinkEvents.Error, error)
+      }
+    } catch {}
+  },
   emitIfActive(player, event, ...args) {
     if (!player.destroyed) player.aqua.emit(event, player, ...args)
   }
@@ -105,10 +113,7 @@ class MicrotaskUpdateBatcher {
     this.scheduled = false
     if (!u || !p) return Promise.resolve()
     return p.updatePlayer(u).catch((err) => {
-      p.aqua?.emit?.(
-        AqualinkEvents.Error,
-        new Error(`Update error: ${err.message}`)
-      )
+      _functions.emitAquaError(p.aqua, new Error(`Update error: ${err.message}`))
       throw err
     })
   }
@@ -324,7 +329,7 @@ class Player extends EventEmitter {
           : this.current
       await this[handler](this, trackArg, payload)
     } catch (error) {
-      this.aqua.emit(AqualinkEvents.Error, error)
+      _functions.emitAquaError(this.aqua, error)
     }
   }
 
@@ -406,7 +411,7 @@ class Player extends EventEmitter {
       this._deferredStart = false
       await this.batchUpdatePlayer(updateData, true)
     } catch (error) {
-      if (!this.destroyed) this.aqua?.emit(AqualinkEvents.Error, error)
+      if (!this.destroyed) _functions.emitAquaError(this.aqua, error)
       if (this.queue?.size && !track) return this.play()
     }
     return this
@@ -835,8 +840,8 @@ class Player extends EventEmitter {
         }
       } catch (err) {
         if (this.destroyed) return this
-        this.aqua?.emit(
-          AqualinkEvents.Error,
+        _functions.emitAquaError(
+          this.aqua,
           new Error(`Autoplay ${i + 1} fail: ${err.message}`)
         )
       }
@@ -1167,10 +1172,7 @@ class Player extends EventEmitter {
     try {
       this.aqua.send({ op: 4, d: data })
     } catch (err) {
-      this.aqua.emit(
-        AqualinkEvents.Error,
-        new Error(`Send fail: ${err.message}`)
-      )
+      _functions.emitAquaError(this.aqua, new Error(`Send fail: ${err.message}`))
     }
   }
 

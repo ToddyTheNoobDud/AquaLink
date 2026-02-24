@@ -83,7 +83,7 @@ class Track {
     if (!query) return null
 
     const payload = { query, source: platform, requester: this.requester }
-    if (node) payload.node = node
+    if (node) payload.nodes = node
 
     let result
     try {

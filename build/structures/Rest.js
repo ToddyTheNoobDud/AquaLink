@@ -752,6 +752,14 @@ class Rest {
     return null
   }
 
+  async getLoadLyrics(encodedTrack) {
+    if (!_functions.isValidBase64(encodedTrack)) throw ERRORS.INVALID_TRACK
+    return this.makeRequest(
+      'GET',
+      `${this._endpoints.lyrics}?track=${encodeURIComponent(encodedTrack)}`
+    )
+  }
+
   _validLyrics(r) {
     if (!r) return false
     if (typeof r === 'string') return r.length > 0

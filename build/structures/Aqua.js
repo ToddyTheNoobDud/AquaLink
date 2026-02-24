@@ -106,6 +106,7 @@ class Aqua extends EventEmitter {
     this.players = new Map()
     this.clientId = null
     this.initiated = false
+    this.destroyed = false
     this.version = pkgVersion
 
     const merged = { ...DEFAULT_OPTIONS, ...options }
@@ -259,6 +260,9 @@ class Aqua extends EventEmitter {
   }
 
   destroy() {
+    if (this.destroyed) return
+    this.destroyed = true
+
     if (this._eventHandlers) {
       this.off(AqualinkEvents.NodeConnect, this._eventHandlers.onNodeConnect)
       this.off(
@@ -282,6 +286,7 @@ class Aqua extends EventEmitter {
     this._rebuildLocks.clear()
     this._nodeLoadCache.clear()
     this._invalidateCache()
+    this.initiated = false
   }
 
   get leastUsedNodes() {
@@ -391,15 +396,61 @@ class Aqua extends EventEmitter {
     this.nodeMap.set(id, node)
     this._nodeStates.set(id, { connected: false, failoverInProgress: false })
     try {
-      await node.connect()
+      node.connect()
+      await this._awaitNodeConnect(node)
       this._nodeStates.set(id, { connected: true, failoverInProgress: false })
       this._invalidateCache()
       this.emit(AqualinkEvents.NodeCreate, node)
       return node
     } catch (error) {
-      this._cleanupNode(id)
+      this._destroyNode(id)
       throw error
     }
+  }
+
+  _awaitNodeConnect(node, timeout = NODE_TIMEOUT) {
+    if (node?.connected) return Promise.resolve(node)
+    return new Promise((resolve, reject) => {
+      let done = false
+      const finish = (ok, value) => {
+        if (done) return
+        done = true
+        clearTimeout(timer)
+        this.off(AqualinkEvents.NodeConnect, onConnect)
+        this.off(AqualinkEvents.NodeError, onError)
+        ok ? resolve(value) : reject(value)
+      }
+      const onConnect = (connectedNode) => {
+        if (connectedNode !== node) return
+        finish(true, connectedNode)
+      }
+      const onError = (errorNode, error) => {
+        if (errorNode !== node) return
+        finish(
+          false,
+          error instanceof Error
+            ? error
+            : new Error(`Node connect failed: ${error?.message || error}`)
+        )
+      }
+      const timer = setTimeout(
+        () =>
+          finish(
+            false,
+            new Error(
+              `Node connect timeout (${timeout}ms): ${node?.name || node?.host}`
+            )
+          ),
+        timeout
+      )
+      timer.unref?.()
+      this.on(AqualinkEvents.NodeConnect, onConnect)
+      this.on(AqualinkEvents.NodeError, onError)
+    })
+  }
+
+  destroyNode(id) {
+    this._destroyNode(id)
   }
 
   _destroyNode(id) {
