@@ -113,7 +113,10 @@ class MicrotaskUpdateBatcher {
     this.scheduled = false
     if (!u || !p) return Promise.resolve()
     return p.updatePlayer(u).catch((err) => {
-      _functions.emitAquaError(p.aqua, new Error(`Update error: ${err.message}`))
+      _functions.emitAquaError(
+        p.aqua,
+        new Error(`Update error: ${err.message}`)
+      )
       throw err
     })
   }
@@ -416,7 +419,7 @@ class Player extends EventEmitter {
 
       this._deferredStart = false
       await this.batchUpdatePlayer(updateData, true).catch((err) => {
-       if (!this.destroyed) _functions.emitAquaError(this.aqua, err)
+        if (!this.destroyed) _functions.emitAquaError(this.aqua, err)
       })
     } catch (error) {
       if (!this.destroyed) _functions.emitAquaError(this.aqua, error)
@@ -1186,7 +1189,10 @@ class Player extends EventEmitter {
     try {
       this.aqua.send({ op: 4, d: data })
     } catch (err) {
-      _functions.emitAquaError(this.aqua, new Error(`Send fail: ${err.message}`))
+      _functions.emitAquaError(
+        this.aqua,
+        new Error(`Send fail: ${err.message}`)
+      )
     }
   }
 

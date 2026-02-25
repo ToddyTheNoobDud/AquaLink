@@ -892,7 +892,8 @@ class Aqua extends EventEmitter {
     if (existing) {
       try {
         existing.destroy({
-          preserveMessage: options.preserveMessage || !!options.resuming || false,
+          preserveMessage:
+            options.preserveMessage || !!options.resuming || false,
           preserveTracks: !!options.resuming || false
         })
       } catch (err) {

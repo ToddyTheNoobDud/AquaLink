@@ -16,7 +16,9 @@ class Queue {
     return this._items[this._items.length - 1] || null
   }
 
-  get length() { return this.size }
+  get length() {
+    return this.size
+  }
 
   add(...tracks) {
     this._items.push(...tracks)

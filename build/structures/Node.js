@@ -102,10 +102,10 @@ class Node {
     this.host = connOptions.host || 'localhost'
     this.name = connOptions.name || this.host
     this.port = connOptions.port || 2333
-    this.auth = connOptions.auth || 'youshallnotpass'
+    this.auth = connOptions.auth || connOptions.password || 'youshallnotpass'
     this.sessionId = connOptions.sessionId || null
     this.regions = connOptions.regions || []
-    this.ssl = !!connOptions.ssl
+    this.ssl = !!connOptions.ssl || !!connOptions.secure || false
     this.wsUrl = _functions.buildWsUrl(this.host, this.port, this.ssl)
 
     this.rest = new Rest(aqua, this)
