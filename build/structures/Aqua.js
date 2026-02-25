@@ -890,13 +890,14 @@ class Aqua extends EventEmitter {
   createPlayer(node, options) {
     const existing = this.players.get(options.guildId)
     if (existing) {
-      _functions.safeCall(() =>
+      try {
         existing.destroy({
-          preserveMessage:
-            options.preserveMessage || !!options.resuming || false,
+          preserveMessage: options.preserveMessage || !!options.resuming || false,
           preserveTracks: !!options.resuming || false
         })
-      )
+      } catch (err) {
+        this._trace?.('player.destroy.error', { guildId: options.guildId, err })
+      }
     }
     const player = new Player(this, node, options)
     const guildId = String(options.guildId)

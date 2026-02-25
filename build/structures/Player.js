@@ -196,6 +196,7 @@ class Player extends EventEmitter {
     this.autoplayRetries = this.reconnectionRetries = 0
     this._voiceDownSince = 0
     this._voiceRecovering = this._reconnecting = false
+    this._isActivelyReconnecting = false
     this._resuming = !!options.resuming
     this._voiceWatchdogTimer = null
     this._pendingTimers = new Set()
@@ -286,7 +287,8 @@ class Player extends EventEmitter {
             this.destroyed ||
             this._reconnecting ||
             this._voiceRecovering ||
-            this.nodes?.info?.isNodelink
+            this.nodes?.info?.isNodelink ||
+            !this.voiceChannel
           )
             return
           this.connection.attemptResume()
@@ -295,6 +297,14 @@ class Player extends EventEmitter {
     } else {
       this._voiceDownSince = 0
       this.state = PLAYER_STATE.READY
+
+      if (this._reconnecting && !this._isActivelyReconnecting) {
+        this._reconnecting = false
+      }
+      if (this._resuming) {
+        this._resuming = false
+      }
+
       const now = Date.now()
       if (
         !wasConnected ||
@@ -323,11 +333,7 @@ class Player extends EventEmitter {
       return
     }
     try {
-      const trackArg =
-        payload.type === 'TrackStartEvent'
-          ? payload.track || this.current
-          : this.current
-      await this[handler](this, trackArg, payload)
+      await this[handler](this, this.current, payload)
     } catch (error) {
       _functions.emitAquaError(this.aqua, error)
     }
@@ -409,7 +415,9 @@ class Player extends EventEmitter {
       if (this.position > 0) updateData.position = this.position
 
       this._deferredStart = false
-      await this.batchUpdatePlayer(updateData, true)
+      await this.batchUpdatePlayer(updateData, true).catch((err) => {
+       if (!this.destroyed) _functions.emitAquaError(this.aqua, err)
+      })
     } catch (error) {
       if (!this.destroyed) _functions.emitAquaError(this.aqua, error)
       if (this.queue?.size && !track) return this.play()
@@ -434,6 +442,7 @@ class Player extends EventEmitter {
     this._voiceRequestChannel = voiceChannel
 
     this.voiceChannel = voiceChannel
+    this._voiceDownSince = 0
     this.send({
       guild_id: this.guildId,
       channel_id: voiceChannel,
@@ -558,6 +567,7 @@ class Player extends EventEmitter {
     this._lastVoiceChannel = this.voiceChannel
     this._lastTextChannel = this.textChannel
     this.voiceChannel = null
+    this._isActivelyReconnecting = false
 
     if (
       this.shouldDeleteMessage &&
@@ -1040,9 +1050,11 @@ class Player extends EventEmitter {
 
     if (code === 4015 && !this.nodes?.info?.isNodelink) {
       this._reconnecting = true
+      this._isActivelyReconnecting = true
       try {
         await this._attemptVoiceResume()
         this._reconnecting = false
+        this._isActivelyReconnecting = false
         return
       } catch {
         this._reconnecting = false
@@ -1085,6 +1097,7 @@ class Player extends EventEmitter {
     }
 
     this._reconnecting = true
+    this._isActivelyReconnecting = true
     this.destroy({
       preserveClient: true,
       skipRemote: true,
@@ -1160,6 +1173,7 @@ class Player extends EventEmitter {
         } else {
           _functions.clearTimers(reconnectTimers)
           this._reconnecting = false
+          this._isActivelyReconnecting = false
           aqua.emit(AqualinkEvents.SocketClosed, this, payload)
         }
       }
