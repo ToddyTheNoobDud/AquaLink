@@ -117,7 +117,6 @@ class MicrotaskUpdateBatcher {
         p.aqua,
         new Error(`Update error: ${err.message}`)
       )
-      throw err
     })
   }
 
