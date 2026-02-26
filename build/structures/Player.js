@@ -756,7 +756,31 @@ class Player extends EventEmitter {
   replay() {
     return this.seek(0)
   }
-  skip() {
+  skip(target) {
+    if (this.destroyed || !this.playing) return this
+
+    if (target === undefined || target === null) return this.stop()
+
+    if (typeof target === 'number') {
+      const idx = target | 0
+      if (idx <= 0) return this.stop()
+      if (!this.queue?.size || idx >= this.queue.size) return this.stop()
+      for (let i = 0; i < idx; i++) this.queue.dequeue()
+      return this.stop()
+    }
+
+    const targetId = _functions.toId(target)
+    if (targetId && this.queue?.size) {
+      const arr = this.queue.toArray()
+      const idx = arr.findIndex(
+        (t) =>
+          _functions.toId(t) === targetId ||
+          _functions.toId(t?.info?.identifier) === targetId
+      )
+      if (idx > 0) {
+        for (let i = 0; i < idx; i++) this.queue.dequeue()
+      }
+    }
     return this.stop()
   }
 
