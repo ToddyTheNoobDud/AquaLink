@@ -327,6 +327,7 @@ declare module 'aqualink' {
     _voiceDownSince: number
     _voiceRecovering: boolean
     _voiceWatchdogTimer: NodeJS.Timer | null
+    _lastPlayerUpdateAt: number
     _boundPlayerUpdate: (packet: any) => void
     _boundEvent: (payload: any) => void
     _boundAquaPlayerMove: (oldChannel: string, newChannel: string) => void
@@ -767,6 +768,8 @@ declare module 'aqualink' {
     _lastVoiceDataUpdate: number
     _stateFlags: number
     _regionMigrationAttempted: boolean
+    _missingPlayerRecovering: boolean
+    _lastMissingPlayerRecoverAt: number
 
     // Methods
     setServerUpdate(data: VoiceServerUpdate['d']): void
@@ -781,6 +784,7 @@ declare module 'aqualink' {
     _scheduleVoiceUpdate(isResume?: boolean): void
     _executeVoiceUpdate(): void
     _sendUpdate(payload: any): Promise<void>
+    _recoverMissingPlayer(isSessionError: boolean): Promise<boolean>
     _handleDisconnect(): void
     _clearPendingUpdate(): void
     _checkRegionMigration(): void

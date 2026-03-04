@@ -43,6 +43,8 @@ const MUTE_TOGGLE_DELAY = 300
 const SEEK_DELAY = 800
 const PAUSE_DELAY = 1200
 const VOICE_TRACE_INTERVAL = 15000
+const PLAYER_UPDATE_SILENCE_THRESHOLD = 45000
+const VOICE_FORCE_DESTROY_MS = 15 * 60 * 1000
 const RETRY_BACKOFF_BASE = 1500
 const RETRY_BACKOFF_MAX = 5000
 const PREVIOUS_TRACKS_SIZE = 50
@@ -224,6 +226,7 @@ class Player extends EventEmitter {
     this._suppressResumeUntil = 0
     this._deferredStart = false
     this._lastVoiceUpTraceAt = 0
+    this._lastPlayerUpdateAt = Date.now()
     this._bindEvents()
     this._startWatchdog()
   }
@@ -263,6 +266,7 @@ class Player extends EventEmitter {
   _handlePlayerUpdate(packet) {
     if (this.destroyed || !packet?.state) return
     const s = packet.state
+    this._lastPlayerUpdateAt = Date.now()
     const wasConnected = this.connected
     this.position = _functions.isNum(s.position) ? s.position : 0
     this.connected = !!s.connected
@@ -480,6 +484,28 @@ class Player extends EventEmitter {
   }
 
   async _voiceWatchdog() {
+    const now = Date.now()
+    const silentPlayer =
+      this.playing &&
+      !this.paused &&
+      !!this.voiceChannel &&
+      !this._reconnecting &&
+      !this._voiceRecovering &&
+      now - (this._lastPlayerUpdateAt || 0) >= PLAYER_UPDATE_SILENCE_THRESHOLD
+
+    if (silentPlayer) {
+      const silenceMs = now - (this._lastPlayerUpdateAt || now)
+      if (!this._voiceDownSince)
+        this._voiceDownSince = now - VOICE_DOWN_THRESHOLD - 1
+      this._lastPlayerUpdateAt = now
+      this.aqua?._trace?.('player.voice.silence', {
+        guildId: this.guildId,
+        silenceMs,
+        playing: !!this.playing,
+        paused: !!this.paused
+      })
+    }
+
     if (!this._shouldAttemptVoiceRecovery()) return
 
     const hasVoiceData =
@@ -487,11 +513,18 @@ class Player extends EventEmitter {
       this.connection?.endpoint &&
       this.connection?.token
     if (!hasVoiceData) {
-      if (
-        Date.now() - this._voiceDownSince >
-        VOICE_DOWN_THRESHOLD * VOICE_ABANDON_MULTIPLIER
-      )
-        this.destroy()
+      const downFor = Date.now() - this._voiceDownSince
+      if (downFor > VOICE_DOWN_THRESHOLD * VOICE_ABANDON_MULTIPLIER) {
+        this.connection?._requestVoiceState?.()
+        this.connection?.resendVoiceUpdate(true)
+        this.reconnectionRetries = Math.min(this.reconnectionRetries + 1, 30)
+        if (
+          downFor > VOICE_FORCE_DESTROY_MS &&
+          this.reconnectionRetries >= RECONNECT_MAX * 2
+        ) {
+          this.destroy()
+        }
+      }
       return
     }
 
@@ -520,7 +553,12 @@ class Player extends EventEmitter {
       this.connection.resendVoiceUpdate()
       this.reconnectionRetries++
     } catch {
-      if (++this.reconnectionRetries >= RECONNECT_MAX) this.destroy()
+      this.reconnectionRetries++
+      if (this.reconnectionRetries >= RECONNECT_MAX) {
+        this.connection?._requestVoiceState?.()
+        this.connection?.resendVoiceUpdate(true)
+        this.reconnectionRetries = RECONNECT_MAX - 2
+      }
     } finally {
       this._voiceRecovering = false
     }
