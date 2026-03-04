@@ -15,6 +15,9 @@ declare module 'aqualink' {
     version: string
     options: AquaOptions
     failoverOptions: FailoverOptions
+    voiceStateOptions: VoiceStateOptions
+    voiceMonitorOptions: VoiceMonitorOptions
+    connectionRecoveryOptions: ConnectionRecoveryOptions
 
     // Configuration Properties
     shouldDeleteMessage: boolean
@@ -327,6 +330,7 @@ declare module 'aqualink' {
     _voiceDownSince: number
     _voiceRecovering: boolean
     _voiceWatchdogTimer: NodeJS.Timer | null
+    _voiceMonitor: VoiceMonitorOptions
     _boundPlayerUpdate: (packet: any) => void
     _boundEvent: (payload: any) => void
     _boundAquaPlayerMove: (oldChannel: string, newChannel: string) => void
@@ -767,6 +771,8 @@ declare module 'aqualink' {
     _lastVoiceDataUpdate: number
     _stateFlags: number
     _regionMigrationAttempted: boolean
+    _recoveringMissingPlayer: boolean
+    _missingPlayerRecoveries: number
 
     // Methods
     setServerUpdate(data: VoiceServerUpdate['d']): void
@@ -838,6 +844,9 @@ declare module 'aqualink' {
     autoRegionMigrate?: boolean
     debugTrace?: boolean
     traceMaxEntries?: number
+    voiceState?: VoiceStateOptions
+    voiceMonitor?: VoiceMonitorOptions
+    connectionRecovery?: ConnectionRecoveryOptions
   }
 
   export interface FailoverOptions {
@@ -848,6 +857,31 @@ declare module 'aqualink' {
     resumePlayback?: boolean
     cooldownTime?: number
     maxFailoverAttempts?: number
+  }
+
+  export interface VoiceStateOptions {
+    enabled?: boolean
+    shouldHandle?: (
+      packet: VoiceStateUpdate | VoiceServerUpdate,
+      player: Player
+    ) => boolean | void
+  }
+
+  export interface VoiceMonitorOptions {
+    enabled?: boolean
+    intervalMs?: number
+    downThresholdMs?: number
+    abandonAfterMs?: number
+    maxRecoveryAttempts?: number
+    onAbandon?: 'destroy' | 'disconnect' | 'none'
+  }
+
+  export interface ConnectionRecoveryOptions {
+    enabled?: boolean
+    recoverOn404?: boolean
+    max404RecoverAttempts?: number
+    retryDelay?: number
+    destroyOnFailure?: boolean
   }
 
   export interface NodeOptions {

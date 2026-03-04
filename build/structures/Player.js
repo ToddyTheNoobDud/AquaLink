@@ -209,6 +209,25 @@ class Player extends EventEmitter {
     this.loop = this._parseLoop(options.loop)
 
     const aquaOpts = aqua.options || {}
+    const monitorOpts = aqua.voiceMonitorOptions || {}
+    const computedAbandonMs =
+      Number(monitorOpts.abandonAfterMs) ||
+      VOICE_DOWN_THRESHOLD * VOICE_ABANDON_MULTIPLIER
+    this._voiceMonitor = {
+      enabled: monitorOpts.enabled !== false,
+      intervalMs: Math.max(1000, Number(monitorOpts.intervalMs) || WATCHDOG_INTERVAL),
+      downThresholdMs: Math.max(
+        1000,
+        Number(monitorOpts.downThresholdMs) || VOICE_DOWN_THRESHOLD
+      ),
+      abandonAfterMs: Math.max(5000, computedAbandonMs),
+      maxRecoveryAttempts: Math.max(
+        1,
+        Number(monitorOpts.maxRecoveryAttempts) || RECONNECT_MAX
+      ),
+      onAbandon: monitorOpts.onAbandon || 'destroy'
+    }
+
     this.shouldDeleteMessage = !!aquaOpts.shouldDeleteMessage
     this.leaveOnEnd = !!aquaOpts.leaveOnEnd
 
@@ -245,9 +264,10 @@ class Player extends EventEmitter {
   }
 
   _startWatchdog() {
+    if (!this._voiceMonitor?.enabled) return
     this._voiceWatchdogTimer = setInterval(
       () => this._voiceWatchdog(),
-      WATCHDOG_INTERVAL
+      this._voiceMonitor.intervalMs
     )
     this._voiceWatchdogTimer.unref?.()
   }
@@ -462,6 +482,7 @@ class Player extends EventEmitter {
   }
 
   _shouldAttemptVoiceRecovery() {
+    if (!this._voiceMonitor?.enabled) return false
     if (
       this.nodes?.info?.isNodelink ||
       this.destroyed ||
@@ -473,10 +494,25 @@ class Player extends EventEmitter {
       return false
     if (
       !this._voiceDownSince ||
-      Date.now() - this._voiceDownSince < VOICE_DOWN_THRESHOLD
+      Date.now() - this._voiceDownSince < this._voiceMonitor.downThresholdMs
     )
       return false
-    return this.reconnectionRetries < RECONNECT_MAX
+    return this.reconnectionRetries < this._voiceMonitor.maxRecoveryAttempts
+  }
+
+  _handleVoiceAbandon(reason) {
+    const mode = this._voiceMonitor?.onAbandon || 'destroy'
+    this.aqua?.emit?.(AqualinkEvents.ReconnectionFailed, this, {
+      reason,
+      mode,
+      retries: this.reconnectionRetries
+    })
+    if (mode === 'none') return
+    if (mode === 'disconnect') {
+      this.disconnect()
+      return
+    }
+    this.destroy()
   }
 
   async _voiceWatchdog() {
@@ -487,11 +523,8 @@ class Player extends EventEmitter {
       this.connection?.endpoint &&
       this.connection?.token
     if (!hasVoiceData) {
-      if (
-        Date.now() - this._voiceDownSince >
-        VOICE_DOWN_THRESHOLD * VOICE_ABANDON_MULTIPLIER
-      )
-        this.destroy()
+      if (Date.now() - this._voiceDownSince > this._voiceMonitor.abandonAfterMs)
+        this._handleVoiceAbandon('missing_voice_data')
       return
     }
 
@@ -520,7 +553,8 @@ class Player extends EventEmitter {
       this.connection.resendVoiceUpdate()
       this.reconnectionRetries++
     } catch {
-      if (++this.reconnectionRetries >= RECONNECT_MAX) this.destroy()
+      if (++this.reconnectionRetries >= this._voiceMonitor.maxRecoveryAttempts)
+        this._handleVoiceAbandon('max_retries_reached')
     } finally {
       this._voiceRecovering = false
     }

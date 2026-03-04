@@ -53,6 +53,25 @@ const DEFAULT_OPTIONS = Object.freeze({
     cooldownTime: 5000,
     maxFailoverAttempts: 5
   }),
+  voiceState: Object.freeze({
+    enabled: true,
+    shouldHandle: null
+  }),
+  voiceMonitor: Object.freeze({
+    enabled: true,
+    intervalMs: 15000,
+    downThresholdMs: 10000,
+    abandonAfterMs: 120000,
+    maxRecoveryAttempts: 15,
+    onAbandon: 'destroy'
+  }),
+  connectionRecovery: Object.freeze({
+    enabled: true,
+    recoverOn404: true,
+    max404RecoverAttempts: 2,
+    retryDelay: 800,
+    destroyOnFailure: true
+  }),
   maxQueueSave: 10,
   maxTracksRestore: 20
 })
@@ -114,6 +133,18 @@ class Aqua extends EventEmitter {
     this.failoverOptions = {
       ...DEFAULT_OPTIONS.failoverOptions,
       ...options.failoverOptions
+    }
+    this.voiceStateOptions = {
+      ...DEFAULT_OPTIONS.voiceState,
+      ...options.voiceState
+    }
+    this.voiceMonitorOptions = {
+      ...DEFAULT_OPTIONS.voiceMonitor,
+      ...options.voiceMonitor
+    }
+    this.connectionRecoveryOptions = {
+      ...DEFAULT_OPTIONS.connectionRecovery,
+      ...options.connectionRecovery
     }
 
     this.shouldDeleteMessage = merged.shouldDeleteMessage
@@ -825,6 +856,7 @@ class Aqua extends EventEmitter {
   }
 
   updateVoiceState({ d, t }) {
+    if (!this.voiceStateOptions?.enabled) return
     if (
       !d?.guild_id ||
       (t !== 'VOICE_STATE_UPDATE' && t !== 'VOICE_SERVER_UPDATE')
@@ -832,6 +864,11 @@ class Aqua extends EventEmitter {
       return
     const player = this.players.get(String(d.guild_id))
     if (!player) return
+    const shouldHandle = this.voiceStateOptions?.shouldHandle
+    if (typeof shouldHandle === 'function') {
+      const allowed = shouldHandle({ d, t }, player)
+      if (allowed === false) return
+    }
     this._trace('voice.gateway', {
       guildId: String(d.guild_id),
       type: t,
