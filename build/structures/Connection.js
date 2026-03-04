@@ -158,6 +158,58 @@ class Connection {
     this._lastStateReqAt = 0
     this._stateGeneration = 0
     this._regionMigrationAttempted = false
+    this._recoveringMissingPlayer = false
+    this._missingPlayerRecoveries = 0
+  }
+
+  async _recoverMissingPlayer(isSessionError = false) {
+    if (this._recoveringMissingPlayer || this._destroyed || !this._aqua)
+      return false
+    const options = this._aqua.connectionRecoveryOptions || {}
+    if (options.enabled === false || options.recoverOn404 === false) return false
+    if (
+      this._missingPlayerRecoveries >=
+      Math.max(1, Number(options.max404RecoverAttempts) || 2)
+    )
+      return false
+
+    this._recoveringMissingPlayer = true
+    this._missingPlayerRecoveries++
+    try {
+      if (isSessionError && this._player?.nodes?._clearSession) {
+        this._player.nodes._clearSession()
+      }
+      this._requestVoiceState()
+      const candidates = []
+      for (const node of this._aqua.nodeMap.values()) {
+        if (node?.connected && node !== this._player?.nodes) candidates.push(node)
+      }
+      const targetNode =
+        this._aqua._chooseLeastBusyNode?.(candidates) || this._player?.nodes
+      if (!targetNode) return false
+
+      const delay = Math.max(0, Number(options.retryDelay) || 0)
+      if (delay) await new Promise((r) => setTimeout(r, delay))
+      if (this._destroyed || this._player?.destroyed) return false
+
+      await this._aqua.movePlayerToNode(this._guildId, targetNode, 'missing-player')
+      this._aqua?._trace?.('connection.404.recovered', {
+        guildId: this._guildId,
+        attempts: this._missingPlayerRecoveries,
+        targetNode: targetNode?.name || targetNode?.host,
+        sessionError: !!isSessionError
+      })
+      return true
+    } catch (error) {
+      this._aqua?._trace?.('connection.404.recover.error', {
+        guildId: this._guildId,
+        attempts: this._missingPlayerRecoveries,
+        error: error?.message || String(error)
+      })
+      return false
+    } finally {
+      this._recoveringMissingPlayer = false
+    }
   }
 
   _hasValidVoiceData() {
@@ -208,6 +260,7 @@ class Connection {
       this._lastEndpoint = endpoint
       this._reconnectAttempts = 0
       this._consecutiveFailures = 0
+      this._missingPlayerRecoveries = 0
       this._regionMigrationAttempted = false
     }
 
@@ -656,15 +709,16 @@ class Connection {
       })
       if (e.statusCode === 404 || e.response?.statusCode === 404) {
         const isSessionError = e.body?.message?.includes('sessionId') || false
+        const recovered = await this._recoverMissingPlayer(isSessionError)
+        if (recovered) return
         if (this._aqua) {
           this._aqua.emit(
             AqualinkEvents.Debug,
             `[Aqua/Connection] Player ${this._guildId} not found (404)${isSessionError ? ' - Session invalid' : ''}. Destroying.`
           )
-          if (isSessionError && this._player?.nodes?._clearSession) {
-            this._player.nodes._clearSession()
+          if (this._aqua.connectionRecoveryOptions?.destroyOnFailure !== false) {
+            await this._aqua.destroyPlayer(this._guildId)
           }
-          await this._aqua.destroyPlayer(this._guildId)
         }
         throw e
       }
