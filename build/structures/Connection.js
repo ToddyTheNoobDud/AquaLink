@@ -158,6 +158,8 @@ class Connection {
     this._lastStateReqAt = 0
     this._stateGeneration = 0
     this._regionMigrationAttempted = false
+    this._missingPlayerRecovering = false
+    this._lastMissingPlayerRecoverAt = 0
   }
 
   _hasValidVoiceData() {
@@ -633,6 +635,60 @@ class Connection {
       .finally(() => sharedPool.release(pending.payload))
   }
 
+
+  async _recoverMissingPlayer(isSessionError) {
+    if (this._destroyed || !this._player || this._missingPlayerRecovering)
+      return false
+
+    const now = Date.now()
+    if (now - this._lastMissingPlayerRecoverAt < 5000) return false
+
+    this._missingPlayerRecovering = true
+    this._lastMissingPlayerRecoverAt = now
+    this._aqua?._trace?.('connection.playerMissing.recover.start', {
+      guildId: this._guildId,
+      isSessionError: !!isSessionError
+    })
+
+    try {
+      if (isSessionError && this._player?.nodes?._clearSession) {
+        this._player.nodes._clearSession()
+      }
+
+      this._requestVoiceState()
+      const resumed = await this.attemptResume().catch(() => false)
+      if (!resumed) this.resendVoiceUpdate(true)
+
+      if (this._player.playing && this._player.current?.track) {
+        const data = {
+          track: { encoded: this._player.current.track },
+          paused: !!this._player.paused
+        }
+        if (this._player.position > 0) data.position = this._player.position
+        await this._rest.updatePlayer({
+          guildId: this._guildId,
+          data,
+          noReplace: false
+        })
+      }
+
+      this._aqua?._trace?.('connection.playerMissing.recover.ok', {
+        guildId: this._guildId,
+        resumed: !!resumed,
+        playing: !!this._player.playing
+      })
+      return true
+    } catch (error) {
+      this._aqua?._trace?.('connection.playerMissing.recover.error', {
+        guildId: this._guildId,
+        error: error?.message || String(error)
+      })
+      return false
+    } finally {
+      this._missingPlayerRecovering = false
+    }
+  }
+
   async _sendUpdate(payload) {
     if (this._destroyed) throw new Error('Connection destroyed')
     if (!this._rest) throw new Error('REST interface unavailable')
@@ -656,14 +712,14 @@ class Connection {
       })
       if (e.statusCode === 404 || e.response?.statusCode === 404) {
         const isSessionError = e.body?.message?.includes('sessionId') || false
+        const recovered = await this._recoverMissingPlayer(isSessionError)
+        if (recovered) return
+
         if (this._aqua) {
           this._aqua.emit(
             AqualinkEvents.Debug,
-            `[Aqua/Connection] Player ${this._guildId} not found (404)${isSessionError ? ' - Session invalid' : ''}. Destroying.`
+            `[Aqua/Connection] Player ${this._guildId} not found (404)${isSessionError ? ' - Session invalid' : ''}. Recovery failed, destroying.`
           )
-          if (isSessionError && this._player?.nodes?._clearSession) {
-            this._player.nodes._clearSession()
-          }
           await this._aqua.destroyPlayer(this._guildId)
         }
         throw e

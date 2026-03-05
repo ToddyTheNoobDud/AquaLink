@@ -43,6 +43,8 @@ const MUTE_TOGGLE_DELAY = 300
 const SEEK_DELAY = 800
 const PAUSE_DELAY = 1200
 const VOICE_TRACE_INTERVAL = 15000
+const PLAYER_UPDATE_SILENCE_THRESHOLD = 45000
+const VOICE_FORCE_DESTROY_MS = 15 * 60 * 1000
 const RETRY_BACKOFF_BASE = 1500
 const RETRY_BACKOFF_MAX = 5000
 const PREVIOUS_TRACKS_SIZE = 50
@@ -74,6 +76,12 @@ const _functions = {
     if (!set) return
     for (const t of set) clearTimeout(t)
     set.clear()
+  },
+  safeCall(fn) {
+    try {
+      return fn?.()
+    } catch {}
+    return null
   },
   emitAquaError(aqua, error) {
     if (!aqua?.listenerCount) return
@@ -224,6 +232,7 @@ class Player extends EventEmitter {
     this._suppressResumeUntil = 0
     this._deferredStart = false
     this._lastVoiceUpTraceAt = 0
+    this._lastPlayerUpdateAt = Date.now()
     this._bindEvents()
     this._startWatchdog()
   }
@@ -263,6 +272,7 @@ class Player extends EventEmitter {
   _handlePlayerUpdate(packet) {
     if (this.destroyed || !packet?.state) return
     const s = packet.state
+    this._lastPlayerUpdateAt = Date.now()
     const wasConnected = this.connected
     this.position = _functions.isNum(s.position) ? s.position : 0
     this.connected = !!s.connected
@@ -318,6 +328,7 @@ class Player extends EventEmitter {
           ping: this.ping
         })
       }
+      this._flushDeferredPlay?.()
     }
 
     this.aqua.emit(AqualinkEvents.PlayerUpdate, this, packet)
@@ -396,6 +407,34 @@ class Player extends EventEmitter {
       })
 
       if (this.destroyed || !this._updateBatcher) return this
+
+      if (
+        this.voiceChannel &&
+        !this.connected &&
+        !this._reconnecting &&
+        !this._voiceRecovering
+      ) {
+        this._deferredStart = true
+        this.aqua?._trace?.('player.play.deferred', {
+          guildId: this.guildId,
+          reason: 'voice_not_connected'
+        })
+        const now = Date.now()
+        if (now - (this._voiceRequestAt || 0) >= 1200) {
+          this._voiceRequestAt = now
+          this.connection?._requestVoiceState?.()
+          this.connection?.resendVoiceUpdate?.(true)
+          _functions.safeCall(() =>
+            this.connect({
+              guildId: this.guildId,
+              voiceChannel: this.voiceChannel,
+              deaf: this.deaf,
+              mute: this.mute
+            })
+          )
+        }
+        return this
+      }
 
       if (
         this.aqua?.autoRegionMigrate &&
@@ -480,6 +519,38 @@ class Player extends EventEmitter {
   }
 
   async _voiceWatchdog() {
+    const now = Date.now()
+    const silentPlayer =
+      this.playing &&
+      !this.paused &&
+      !!this.voiceChannel &&
+      !this._reconnecting &&
+      !this._voiceRecovering &&
+      now - (this._lastPlayerUpdateAt || 0) >= PLAYER_UPDATE_SILENCE_THRESHOLD
+
+    if (silentPlayer) {
+      const silenceMs = now - (this._lastPlayerUpdateAt || now)
+      if (!this._voiceDownSince)
+        this._voiceDownSince = now - VOICE_DOWN_THRESHOLD - 1
+      this._lastPlayerUpdateAt = now
+      this.connected = false
+      this.aqua?._trace?.('player.voice.silence', {
+        guildId: this.guildId,
+        silenceMs,
+        playing: !!this.playing,
+        paused: !!this.paused
+      })
+    }
+
+  if (this._voiceDownSince && !this.connected) {
+    const downFor = Date.now() - this._voiceDownSince
+    if (downFor > VOICE_FORCE_DESTROY_MS && this.reconnectionRetries >= RECONNECT_MAX) {
+      this.aqua?._trace?.('player.forceDestroy', { guildId: this.guildId })
+      this.destroy()
+      return
+    }
+  }
+
     if (!this._shouldAttemptVoiceRecovery()) return
 
     const hasVoiceData =
@@ -487,11 +558,18 @@ class Player extends EventEmitter {
       this.connection?.endpoint &&
       this.connection?.token
     if (!hasVoiceData) {
-      if (
-        Date.now() - this._voiceDownSince >
-        VOICE_DOWN_THRESHOLD * VOICE_ABANDON_MULTIPLIER
-      )
-        this.destroy()
+      const downFor = Date.now() - this._voiceDownSince
+      if (downFor > VOICE_DOWN_THRESHOLD * VOICE_ABANDON_MULTIPLIER) {
+        this.connection?._requestVoiceState?.()
+        this.connection?.resendVoiceUpdate(true)
+        this.reconnectionRetries = Math.min(this.reconnectionRetries + 1, 30)
+        if (
+          downFor > VOICE_FORCE_DESTROY_MS &&
+          this.reconnectionRetries >= RECONNECT_MAX * 2
+        ) {
+          this.destroy()
+        }
+      }
       return
     }
 
@@ -520,7 +598,12 @@ class Player extends EventEmitter {
       this.connection.resendVoiceUpdate()
       this.reconnectionRetries++
     } catch {
-      if (++this.reconnectionRetries >= RECONNECT_MAX) this.destroy()
+      this.reconnectionRetries++
+      if (this.reconnectionRetries >= RECONNECT_MAX) {
+        this.connection?._requestVoiceState?.()
+        this.connection?.resendVoiceUpdate(true)
+        this.reconnectionRetries = RECONNECT_MAX - 2
+      }
     } finally {
       this._voiceRecovering = false
     }
@@ -1106,6 +1189,47 @@ class Player extends EventEmitter {
     if (!vcId) {
       aqua?.emit?.(AqualinkEvents.SocketClosed, this, payload)
       return
+    }
+
+    if (code === 4022) {
+      const now = Date.now()
+      if (now - (this._voiceRequestAt || 0) >= 1200) {
+        this._voiceRequestAt = now
+        this.connection?._requestVoiceState?.()
+        this.connection?.resendVoiceUpdate?.(true)
+        _functions.safeCall(() =>
+          this.connect({
+            guildId,
+            voiceChannel: vcId,
+            deaf,
+            mute
+          })
+        )
+      }
+
+      this.aqua?._trace?.('player.socketClosed.softRecover', {
+        guildId: this.guildId,
+        code
+      })
+      const waitMs = Math.max(0, this._suppressResumeUntil - Date.now())
+      if (waitMs > 0) await this._delay(waitMs)
+
+      let resumed = false
+      if (!this.destroyed && !this.connected) {
+        resumed = await this.connection?.attemptResume?.().catch(() => false)
+      }
+      if (resumed || this.connected || this.destroyed || this._reconnecting) {
+        this.aqua?._trace?.('player.socketClosed.softRecover.ok', {
+          guildId: this.guildId,
+          code,
+          resumed: !!resumed
+        })
+        return
+      }
+      this.aqua?._trace?.('player.socketClosed.softRecover.failed', {
+        guildId: this.guildId,
+        code
+      })
     }
 
     const state = {
