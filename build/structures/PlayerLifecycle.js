@@ -375,6 +375,17 @@ class PlayerLifecycle {
           player._isActivelyReconnecting = false
           return
         }
+        const latestActivePlayer = aqua?.players?.get?.(String(guildId))
+        if (latestActivePlayer && latestActivePlayer !== player && !latestActivePlayer.destroyed) {
+          try {
+            np.destroy?.()
+          } catch {}
+          this._functions.clearTimers(reconnectTimers)
+          player._reconnectTimers = null
+          player._reconnecting = false
+          player._isActivelyReconnecting = false
+          return
+        }
 
         np.reconnectionRetries = 0
         np.loop = state.loop
