@@ -755,12 +755,6 @@ class Player extends EventEmitter {
     const id = _functions.toId(channel)
     if (!id) throw new TypeError('Invalid text channel')
     this.textChannel = id
-    this.batchUpdatePlayer({ text_channel: id }).catch((error) =>
-      reportSuppressedError(this, 'player.setTextChannel', error, {
-        guildId: this.guildId,
-        textChannel: id
-      })
-    )
     return this
   }
 
