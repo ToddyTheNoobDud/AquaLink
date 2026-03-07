@@ -461,7 +461,7 @@ class Node {
 
       const ws = new WebSocketImpl(this.wsUrl, {
         headers: this._headers,
-        perMessageDeflate: true,
+        perMessageDeflate: false,
         handshakeTimeout: this.timeout,
         maxPayload: this.maxPayload,
         skipUTF8Validation: this.skipUTF8Validation
