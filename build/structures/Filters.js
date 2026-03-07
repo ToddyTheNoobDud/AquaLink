@@ -27,6 +27,7 @@ const FILTER_DEFAULTS = Object.freeze({
   }),
   lowPass: Object.freeze({ smoothing: 20 })
 })
+const { reportSuppressedError } = require('./Reporting')
 
 const FILTER_KEYS = Object.freeze(
   Object.fromEntries(
@@ -182,7 +183,11 @@ class Filters {
     queueMicrotask(() => {
       this._pendingUpdate = false
       if (this.player) {
-        this.updateFilters().catch(() => {})
+        this.updateFilters().catch((error) =>
+          reportSuppressedError(this.player, 'filters.update', error, {
+            guildId: this.player.guildId
+          })
+        )
       }
     })
     return this
@@ -317,6 +322,7 @@ class Filters {
     for (let i = 0; i < filterNames.length; i++) {
       const key = filterNames[i]
       if (f[key] !== null) {
+        filterPool.release(key, f[key])
         f[key] = null
         this._dirty.add(key)
         changed = true
@@ -333,17 +339,23 @@ class Filters {
   async updateFilters() {
     if (!this.player || !this._dirty.size) return this
 
+    const dirtyKeys = [...this._dirty]
     const payload = {}
-    for (const key of this._dirty) {
+    for (const key of dirtyKeys) {
       payload[key] = this.filters[key]
     }
 
-    this._dirty.clear()
+    for (const key of dirtyKeys) this._dirty.delete(key)
 
-    await this.player.nodes.rest.updatePlayer({
-      guildId: this.player.guildId,
-      data: { filters: payload }
-    })
+    try {
+      await this.player.nodes.rest.updatePlayer({
+        guildId: this.player.guildId,
+        data: { filters: payload }
+      })
+    } catch (error) {
+      for (const key of dirtyKeys) this._dirty.add(key)
+      throw error
+    }
     return this
   }
 }

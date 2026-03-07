@@ -1,6 +1,6 @@
 {
   "name": "aqualink",
-  "version": "2.20.0",
+  "version": "3.0.0-beta",
   "description": "An Lavalink/Nodelink client, focused in pure performance and features",
   "main": "./build/index.js",
   "types": "./build/index.d.ts",

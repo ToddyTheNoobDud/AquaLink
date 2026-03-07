@@ -65,7 +65,7 @@ class Track {
 
     const platform =
       opts.platform || aqua?.options?.defaultSearchPlatform || 'ytsearch'
-    const node = opts.node || this.node || this.nodes
+    const node = opts.nodes || opts.node || this.node || this.nodes
 
     let query = this.uri
     if (!query) {
