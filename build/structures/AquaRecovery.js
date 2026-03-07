@@ -42,11 +42,15 @@ class AquaRecovery {
     const run = previous
       .catch(() => {})
       .then(async () => {
-        this.aqua._trace?.('guild.lock.acquire', { guildId: id, scope })
+        if (this.aqua?.debugTrace) {
+          this.aqua._trace('guild.lock.acquire', { guildId: id, scope })
+        }
         try {
           return await fn()
         } finally {
-          this.aqua._trace?.('guild.lock.release', { guildId: id, scope })
+          if (this.aqua?.debugTrace) {
+            this.aqua._trace('guild.lock.release', { guildId: id, scope })
+          }
         }
       })
 
@@ -328,27 +332,33 @@ class AquaRecovery {
           newPlayer.connection.channelId = oldVoice.channelId
         newPlayer.connection._lastVoiceDataUpdate = Date.now()
         newPlayer.connection.resendVoiceUpdate(true)
-        this.aqua._trace('player.migrate.voiceBootstrap', {
-          guildId: id,
-          from: oldNode?.name || oldNode?.host,
-          to: targetNode?.name || targetNode?.host,
-          hasSessionId: !!newPlayer.connection.sessionId,
-          hasEndpoint: !!newPlayer.connection.endpoint,
-          hasToken: !!newPlayer.connection.token
-        })
+        if (this.aqua.debugTrace) {
+          this.aqua._trace('player.migrate.voiceBootstrap', {
+            guildId: id,
+            from: oldNode?.name || oldNode?.host,
+            to: targetNode?.name || targetNode?.host,
+            hasSessionId: !!newPlayer.connection.sessionId,
+            hasEndpoint: !!newPlayer.connection.endpoint,
+            hasToken: !!newPlayer.connection.token
+          })
+        }
       }
 
       await this.restorePlayerState(newPlayer, state)
       if (oldMessage) newPlayer.nowPlayingMessage = oldMessage
 
-      this.aqua._trace('player.migrated', {
-        guildId: id,
-        reason,
-        from: oldNode?.name || oldNode?.host,
-        to: targetNode?.name || targetNode?.host,
-        region:
-          newPlayer?.connection?.region || oldPlayer?.connection?.region || null
-      })
+      if (this.aqua.debugTrace) {
+        this.aqua._trace('player.migrated', {
+          guildId: id,
+          reason,
+          from: oldNode?.name || oldNode?.host,
+          to: targetNode?.name || targetNode?.host,
+          region:
+            newPlayer?.connection?.region ||
+            oldPlayer?.connection?.region ||
+            null
+        })
+      }
       this.aqua.emit(
         AqualinkEvents.PlayerMigrated,
         oldPlayer,
@@ -553,11 +563,13 @@ class AquaRecovery {
               .fetch(p.nw, p.t)
               .catch(() => null)
           }
-          this.aqua._trace('player.nowPlaying.restore', {
-            guildId: gId,
-            messageId: p.nw,
-            restored: !!player.nowPlayingMessage
-          })
+          if (this.aqua.debugTrace) {
+            this.aqua._trace('player.nowPlaying.restore', {
+              guildId: gId,
+              messageId: p.nw,
+              restored: !!player.nowPlayingMessage
+            })
+          }
         }
         return true
       } catch (error) {

@@ -37,12 +37,14 @@ class ConnectionRecovery {
     conn.token = data.token
     conn.channelId = data.channel_id || conn.channelId || conn.voiceChannel
     conn._lastVoiceDataUpdate = Date.now()
-    conn._aqua?._trace?.('connection.serverUpdate', {
-      guildId: conn._guildId,
-      endpoint: conn.endpoint,
-      region: conn.region,
-      txId: data.txId || null
-    })
+    if (conn._aqua?.debugTrace) {
+      conn._aqua._trace('connection.serverUpdate', {
+        guildId: conn._guildId,
+        endpoint: conn.endpoint,
+        region: conn.region,
+        txId: data.txId || null
+      })
+    }
     conn._stateFlags &= ~this.STATE.VOICE_DATA_STALE
 
     const migrated = this.checkRegionMigration()
@@ -83,12 +85,14 @@ class ConnectionRecovery {
     if (!targetNode || targetNode === currentNode) return false
 
     conn._regionMigrationAttempted = true
-    conn._aqua?._trace?.('connection.region.migrate', {
-      guildId: conn._guildId,
-      region: conn.region,
-      from: currentNode?.name || currentNode?.host,
-      to: targetNode?.name || targetNode?.host
-    })
+    if (conn._aqua?.debugTrace) {
+      conn._aqua._trace('connection.region.migrate', {
+        guildId: conn._guildId,
+        region: conn.region,
+        from: currentNode?.name || currentNode?.host,
+        to: targetNode?.name || targetNode?.host
+      })
+    }
 
     queueMicrotask(() => {
       conn._aqua
@@ -112,13 +116,15 @@ class ConnectionRecovery {
   async attemptResume() {
     const conn = this.connection
     if (!conn._canAttemptResumeCore()) return false
-    conn._aqua?._trace?.('connection.resume.attempt', {
-      guildId: conn._guildId,
-      reconnectAttempts: conn._reconnectAttempts,
-      hasSessionId: !!conn.sessionId,
-      hasEndpoint: !!conn.endpoint,
-      hasToken: !!conn.token
-    })
+    if (conn._aqua?.debugTrace) {
+      conn._aqua._trace('connection.resume.attempt', {
+        guildId: conn._guildId,
+        reconnectAttempts: conn._reconnectAttempts,
+        hasSessionId: !!conn.sessionId,
+        hasEndpoint: !!conn.endpoint,
+        hasToken: !!conn.token
+      })
+    }
 
     const currentGen = conn._stateGeneration
     if (
@@ -166,9 +172,11 @@ class ConnectionRecovery {
       }
 
       await this.sendUpdate(payload)
-      conn._aqua?._trace?.('connection.resume.success', {
-        guildId: conn._guildId
-      })
+      if (conn._aqua?.debugTrace) {
+        conn._aqua._trace('connection.resume.success', {
+          guildId: conn._guildId
+        })
+      }
 
       conn._reconnectAttempts = 0
       conn._consecutiveFailures = 0
@@ -186,10 +194,12 @@ class ConnectionRecovery {
         AqualinkEvents.Debug,
         `Resume failed for guild ${conn._guildId}: ${error?.message || error}`
       )
-      conn._aqua?._trace?.('connection.resume.error', {
-        guildId: conn._guildId,
-        error: error?.message || String(error)
-      })
+      if (conn._aqua?.debugTrace) {
+        conn._aqua._trace('connection.resume.error', {
+          guildId: conn._guildId,
+          error: error?.message || String(error)
+        })
+      }
 
       if (
         conn._reconnectAttempts < this.MAX_RECONNECT_ATTEMPTS &&
@@ -226,10 +236,12 @@ class ConnectionRecovery {
 
     conn._missingPlayerRecovering = true
     conn._lastMissingPlayerRecoverAt = now
-    conn._aqua?._trace?.('connection.playerMissing.recover.start', {
-      guildId: conn._guildId,
-      isSessionError: !!isSessionError
-    })
+    if (conn._aqua?.debugTrace) {
+      conn._aqua._trace('connection.playerMissing.recover.start', {
+        guildId: conn._guildId,
+        isSessionError: !!isSessionError
+      })
+    }
 
     try {
       if (isSessionError && conn._player?.nodes?._clearSession) {
@@ -263,17 +275,21 @@ class ConnectionRecovery {
         })
       }
 
-      conn._aqua?._trace?.('connection.playerMissing.recover.ok', {
-        guildId: conn._guildId,
-        resumed: !!resumed,
-        playing: !!conn._player.playing
-      })
+      if (conn._aqua?.debugTrace) {
+        conn._aqua._trace('connection.playerMissing.recover.ok', {
+          guildId: conn._guildId,
+          resumed: !!resumed,
+          playing: !!conn._player.playing
+        })
+      }
       return true
     } catch (error) {
-      conn._aqua?._trace?.('connection.playerMissing.recover.error', {
-        guildId: conn._guildId,
-        error: error?.message || String(error)
-      })
+      if (conn._aqua?.debugTrace) {
+        conn._aqua._trace('connection.playerMissing.recover.error', {
+          guildId: conn._guildId,
+          error: error?.message || String(error)
+        })
+      }
       return false
     } finally {
       conn._missingPlayerRecovering = false
@@ -286,22 +302,29 @@ class ConnectionRecovery {
     if (!conn._rest) throw new Error('REST interface unavailable')
 
     try {
-      conn._aqua?._trace?.('connection.update.send', {
-        guildId: conn._guildId,
-        hasSessionId: !!conn._rest?.sessionId,
-        hasVoice:
-          !!payload?.data?.voice?.sessionId && !!payload?.data?.voice?.endpoint
-      })
+      if (conn._aqua?.debugTrace) {
+        conn._aqua._trace('connection.update.send', {
+          guildId: conn._guildId,
+          hasSessionId: !!conn._rest?.sessionId,
+          hasVoice:
+            !!payload?.data?.voice?.sessionId &&
+            !!payload?.data?.voice?.endpoint
+        })
+      }
       await conn._rest.updatePlayer(payload)
-      conn._aqua?._trace?.('connection.update.ok', {
-        guildId: conn._guildId
-      })
+      if (conn._aqua?.debugTrace) {
+        conn._aqua._trace('connection.update.ok', {
+          guildId: conn._guildId
+        })
+      }
     } catch (error) {
-      conn._aqua?._trace?.('connection.update.error', {
-        guildId: conn._guildId,
-        statusCode: error?.statusCode || error?.response?.statusCode || null,
-        error: error?.message || String(error)
-      })
+      if (conn._aqua?.debugTrace) {
+        conn._aqua._trace('connection.update.error', {
+          guildId: conn._guildId,
+          statusCode: error?.statusCode || error?.response?.statusCode || null,
+          error: error?.message || String(error)
+        })
+      }
       if (error.statusCode === 404 || error.response?.statusCode === 404) {
         const isSessionError =
           error.body?.message?.includes('sessionId') || false

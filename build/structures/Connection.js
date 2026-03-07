@@ -233,10 +233,12 @@ class Connection {
     if (data.txId && data.txId < this.txId) return
 
     if (!channelId) {
-      this._aqua?._trace?.('connection.stateUpdate.nullChannel', {
-        guildId: this._guildId,
-        txId: data.txId || null
-      })
+      if (this._aqua?.debugTrace) {
+        this._aqua._trace('connection.stateUpdate.nullChannel', {
+          guildId: this._guildId,
+          txId: data.txId || null
+        })
+      }
       this.isWaitingForDisconnect = true
       if (!this._nullChannelTimer) {
         this._nullChannelTimer = setTimeout(() => {
@@ -249,12 +251,14 @@ class Connection {
     }
 
     this.isWaitingForDisconnect = false
-    this._aqua?._trace?.('connection.stateUpdate', {
-      guildId: this._guildId,
-      channelId,
-      sessionId,
-      txId: data.txId || null
-    })
+    if (this._aqua?.debugTrace) {
+      this._aqua._trace('connection.stateUpdate', {
+        guildId: this._guildId,
+        channelId,
+        sessionId,
+        txId: data.txId || null
+      })
+    }
 
     if (p && p.txId > this.txId) this.txId = p.txId
 
@@ -295,9 +299,11 @@ class Connection {
 
     this._stateFlags =
       (this._stateFlags | STATE.DISCONNECTING) & ~STATE.CONNECTED
-    this._aqua?._trace?.('connection.disconnect', {
-      guildId: this._guildId
-    })
+    if (this._aqua?.debugTrace) {
+      this._aqua._trace('connection.disconnect', {
+        guildId: this._guildId
+      })
+    }
     this._clearNullChannelTimer()
     this._clearPendingUpdate()
     this._clearReconnectTimer()
@@ -387,20 +393,24 @@ class Connection {
 
   _scheduleVoiceUpdate() {
     if (this._destroyed) {
-      this._aqua?._trace?.('connection.update.skip', {
-        guildId: this._guildId,
-        reason: 'destroyed'
-      })
+      if (this._aqua?.debugTrace) {
+        this._aqua._trace('connection.update.skip', {
+          guildId: this._guildId,
+          reason: 'destroyed'
+        })
+      }
       return
     }
     if (!this._hasValidVoiceData()) {
-      this._aqua?._trace?.('connection.update.skip', {
-        guildId: this._guildId,
-        reason: 'invalid_voice_data',
-        hasSessionId: !!this.sessionId,
-        hasEndpoint: !!this.endpoint,
-        hasToken: !!this.token
-      })
+      if (this._aqua?.debugTrace) {
+        this._aqua._trace('connection.update.skip', {
+          guildId: this._guildId,
+          reason: 'invalid_voice_data',
+          hasSessionId: !!this.sessionId,
+          hasEndpoint: !!this.endpoint,
+          hasToken: !!this.token
+        })
+      }
       return
     }
 
@@ -427,9 +437,11 @@ class Connection {
 
     if (this._stateFlags & STATE.UPDATE_SCHEDULED) return
     this._stateFlags |= STATE.UPDATE_SCHEDULED
-    this._aqua?._trace?.('connection.update.scheduled', {
-      guildId: this._guildId
-    })
+    if (this._aqua?.debugTrace) {
+      this._aqua._trace('connection.update.scheduled', {
+        guildId: this._guildId
+      })
+    }
 
     this._voiceFlushTimer = setTimeout(
       () => this._executeVoiceUpdate(),

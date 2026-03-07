@@ -16,10 +16,12 @@ function getAqua(target) {
 function reportSuppressedError(target, scope, error, data = null) {
   const aqua = getAqua(target)
   const err = normalizeError(error, `Suppressed error in ${scope}`)
-  aqua?._trace?.(`${scope}.suppressed`, {
-    ...(data || {}),
-    error: err.message
-  })
+  if (aqua?.debugTrace) {
+    aqua._trace(`${scope}.suppressed`, {
+      ...(data || {}),
+      error: err.message
+    })
+  }
   aqua?.emit?.(AqualinkEvents.Debug, err)
   return err
 }

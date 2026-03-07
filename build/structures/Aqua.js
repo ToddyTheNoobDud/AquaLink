@@ -141,7 +141,7 @@ class Aqua extends EventEmitter {
     )
     this.traceSink =
       typeof merged.traceSink === 'function' ? merged.traceSink : null
-    this._traceBuffer = new Array(this.traceMaxEntries)
+    this._traceBuffer = this.debugTrace ? new Array(this.traceMaxEntries) : null
     this._traceBufferCount = 0
     this._traceBufferIndex = 0
     this._traceSeq = 0
@@ -179,16 +179,17 @@ class Aqua extends EventEmitter {
 
   _trace(event, data = null) {
     if (!this.debugTrace) return
+    if (!this._traceBuffer || this._traceBuffer.length !== this.traceMaxEntries) {
+      this._traceBuffer = new Array(this.traceMaxEntries)
+      this._traceBufferCount = 0
+      this._traceBufferIndex = 0
+    }
+    const resolvedData = typeof data === 'function' ? data() : data
     const entry = {
       seq: ++this._traceSeq,
       at: Date.now(),
       event,
-      data
-    }
-    if (this._traceBuffer.length !== this.traceMaxEntries) {
-      this._traceBuffer = new Array(this.traceMaxEntries)
-      this._traceBufferCount = 0
-      this._traceBufferIndex = 0
+      data: resolvedData
     }
     this._traceBuffer[this._traceBufferIndex] = entry
     this._traceBufferIndex = (this._traceBufferIndex + 1) % this.traceMaxEntries
@@ -201,6 +202,7 @@ class Aqua extends EventEmitter {
 
   getTrace(limit = 300) {
     const max = Math.max(1, Number(limit) || 300)
+    if (!this._traceBuffer) return []
     const count = Math.min(max, this._traceBufferCount)
     if (!count) return []
     const out = new Array(count)
@@ -215,7 +217,7 @@ class Aqua extends EventEmitter {
   }
 
   clearTrace() {
-    this._traceBuffer.fill(undefined)
+    if (this._traceBuffer) this._traceBuffer.fill(undefined)
     this._traceBufferCount = 0
     this._traceBufferIndex = 0
   }
@@ -244,10 +246,12 @@ class Aqua extends EventEmitter {
       this._voiceStateQueue.push(guildId)
     }
 
-    this._trace('voice.queue.enqueue', {
-      guildId,
-      size: this._voiceStateQueued.size
-    })
+    if (this.debugTrace) {
+      this._trace('voice.queue.enqueue', {
+        guildId,
+        size: this._voiceStateQueued.size
+      })
+    }
     this._scheduleVoiceStateFlush()
     return true
   }
@@ -302,10 +306,12 @@ class Aqua extends EventEmitter {
 
     if (data) {
       this._lastVoiceStateSendAt = now
-      this._trace('voice.queue.send', {
-        guildId,
-        remaining: this._voiceStateQueued.size
-      })
+      if (this.debugTrace) {
+        this._trace('voice.queue.send', {
+          guildId,
+          remaining: this._voiceStateQueued.size
+        })
+      }
       _functions.safeCall(() => this.send({ op: 4, d: data }))
     }
 
@@ -317,12 +323,14 @@ class Aqua extends EventEmitter {
   _bindEventHandlers() {
     this._eventHandlers = {
       onNodeConnect: (node) => {
-        this._trace('node.connect', { node: node?.name || node?.host })
+        if (this.debugTrace)
+          this._trace('node.connect', { node: node?.name || node?.host })
         this._invalidateCache()
         this._performCleanup()
       },
       onNodeDisconnect: (node) => {
-        this._trace('node.disconnect', { node: node?.name || node?.host })
+        if (this.debugTrace)
+          this._trace('node.disconnect', { node: node?.name || node?.host })
         this._invalidateCache()
         queueMicrotask(() => {
           this._storeBrokenPlayers(node)
@@ -330,11 +338,13 @@ class Aqua extends EventEmitter {
         })
       },
       onNodeReady: (node, { resumed }) => {
-        this._trace('node.ready', {
-          node: node?.name || node?.host,
-          resumed: !!resumed,
-          players: this.players.size
-        })
+        if (this.debugTrace) {
+          this._trace('node.ready', {
+            node: node?.name || node?.host,
+            resumed: !!resumed,
+            players: this.players.size
+          })
+        }
         if (resumed) {
           const batch = []
           for (const player of this.players.values()) {
@@ -606,13 +616,15 @@ class Aqua extends EventEmitter {
       return
     const player = this.players.get(String(d.guild_id))
     if (!player) return
-    this._trace('voice.gateway', {
-      guildId: String(d.guild_id),
-      type: t,
-      hasSessionId: !!d.session_id,
-      hasEndpoint: !!d.endpoint,
-      hasChannelId: d.channel_id !== undefined
-    })
+    if (this.debugTrace) {
+      this._trace('voice.gateway', {
+        guildId: String(d.guild_id),
+        type: t,
+        hasSessionId: !!d.session_id,
+        hasEndpoint: !!d.endpoint,
+        hasChannelId: d.channel_id !== undefined
+      })
+    }
 
     d.txId = player.txId
     if (t === 'VOICE_STATE_UPDATE') {
@@ -675,13 +687,15 @@ class Aqua extends EventEmitter {
     const player = new Player(this, node, options)
     const guildId = String(options.guildId)
     this.players.set(guildId, player)
-    this._trace('player.create', {
-      guildId,
-      node: node?.name || node?.host,
-      voiceChannel: options.voiceChannel,
-      textChannel: options.textChannel,
-      resuming: !!options.resuming
-    })
+    if (this.debugTrace) {
+      this._trace('player.create', {
+        guildId,
+        node: node?.name || node?.host,
+        voiceChannel: options.voiceChannel,
+        textChannel: options.textChannel,
+        resuming: !!options.resuming
+      })
+    }
     node?.players?.add?.(player)
     player.once('destroy', () => this._handlePlayerDestroy(player))
     player.connect(options)
@@ -693,10 +707,12 @@ class Aqua extends EventEmitter {
     player.nodes?.players?.delete?.(player)
     const guildId = String(player.guildId)
     if (this.players.get(guildId) === player) this.players.delete(guildId)
-    this._trace('player.destroyed', {
-      guildId,
-      node: player?.nodes?.name || player?.nodes?.host
-    })
+    if (this.debugTrace) {
+      this._trace('player.destroyed', {
+        guildId,
+        node: player?.nodes?.name || player?.nodes?.host
+      })
+    }
     this.emit(AqualinkEvents.PlayerDestroyed, player)
   }
 

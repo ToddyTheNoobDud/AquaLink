@@ -352,12 +352,14 @@ class Player extends EventEmitter {
       if (!this.current?.track) {
         this.current = null
         this.playing = false
-        this.aqua?._trace?.('player.play.unresolved', {
-          guildId: this.guildId,
-          reconnecting: !!this._reconnecting,
-          resuming: !!this._resuming,
-          voiceRecovering: !!this._voiceRecovering
-        })
+        if (this.aqua?.debugTrace) {
+          this.aqua._trace('player.play.unresolved', {
+            guildId: this.guildId,
+            reconnecting: !!this._reconnecting,
+            resuming: !!this._resuming,
+            voiceRecovering: !!this._voiceRecovering
+          })
+        }
         if (this._reconnecting || this._resuming || this._voiceRecovering)
           return this
         throw new Error('Failed to resolve track')
@@ -366,12 +368,14 @@ class Player extends EventEmitter {
       this.playing = true
       this.paused = !!options.paused
       this.position = options.startTime || 0
-      this.aqua?._trace?.('player.play', {
-        guildId: this.guildId,
-        paused: this.paused,
-        startTime: this.position,
-        hasTrack: !!this.current?.track
-      })
+      if (this.aqua?.debugTrace) {
+        this.aqua._trace('player.play', {
+          guildId: this.guildId,
+          paused: this.paused,
+          startTime: this.position,
+          hasTrack: !!this.current?.track
+        })
+      }
 
       if (this.destroyed || !this._updateBatcher) return this
 
@@ -382,10 +386,12 @@ class Player extends EventEmitter {
         !this._voiceRecovering
       ) {
         this._deferredStart = true
-        this.aqua?._trace?.('player.play.deferred', {
-          guildId: this.guildId,
-          reason: 'voice_not_connected'
-        })
+        if (this.aqua?.debugTrace) {
+          this.aqua._trace('player.play.deferred', {
+            guildId: this.guildId,
+            reason: 'voice_not_connected'
+          })
+        }
         const now = Date.now()
         if (now - (this._voiceRequestAt || 0) >= 1200) {
           this._voiceRequestAt = now
@@ -409,10 +415,12 @@ class Player extends EventEmitter {
         !this.connection?.endpoint
       ) {
         this._deferredStart = true
-        this.aqua?._trace?.('player.play.deferred', {
-          guildId: this.guildId,
-          reason: 'awaiting_voice_server_update'
-        })
+        if (this.aqua?.debugTrace) {
+          this.aqua._trace('player.play.deferred', {
+            guildId: this.guildId,
+            reason: 'awaiting_voice_server_update'
+          })
+        }
         return this
       }
 
@@ -471,13 +479,15 @@ class Player extends EventEmitter {
       self_deaf: this.deaf,
       self_mute: this.mute
     })
-    this.aqua?._trace?.('player.connect.request', {
-      guildId: this.guildId,
-      txId: this.txId,
-      voiceChannel,
-      deaf: this.deaf,
-      mute: this.mute
-    })
+    if (this.aqua?.debugTrace) {
+      this.aqua._trace('player.connect.request', {
+        guildId: this.guildId,
+        txId: this.txId,
+        voiceChannel,
+        deaf: this.deaf,
+        mute: this.mute
+      })
+    }
     return this
   }
 
@@ -525,12 +535,14 @@ class Player extends EventEmitter {
     if (!this.destroyed) {
       this._reconnectNonce++
       this.destroyed = true
-      this.aqua?._trace?.('player.destroy', {
-        guildId: this.guildId,
-        skipRemote: !!skipRemote,
-        preserveTracks: !!preserveTracks,
-        preserveReconnecting: !!preserveReconnecting
-      })
+      if (this.aqua?.debugTrace) {
+        this.aqua._trace('player.destroy', {
+          guildId: this.guildId,
+          skipRemote: !!skipRemote,
+          preserveTracks: !!preserveTracks,
+          preserveReconnecting: !!preserveReconnecting
+        })
+      }
       this.emit('destroy')
     }
 

@@ -187,10 +187,12 @@ class Node {
     this._isConnecting = false
     this.reconnectAttempted = 0
     this._emitDebug('WebSocket connection established')
-    this.aqua?._trace?.('node.ws.open', {
-      node: this.name,
-      reconnectAttempted: this.reconnectAttempted
-    })
+    if (this.aqua?.debugTrace) {
+      this.aqua._trace('node.ws.open', {
+        node: this.name,
+        reconnectAttempted: this.reconnectAttempted
+      })
+    }
 
     if (!this.aqua?.bypassChecks?.nodeFetchInfo && !this.info) {
       const timeoutId = setTimeout(() => {
@@ -272,12 +274,14 @@ class Node {
       code,
       reason: _functions.reasonToString(reason)
     })
-    this.aqua?._trace?.('node.ws.close', {
-      node: this.name,
-      code,
-      reason: _functions.reasonToString(reason),
-      hasSessionId: !!this.sessionId
-    })
+    if (this.aqua?.debugTrace) {
+      this.aqua._trace('node.ws.close', {
+        node: this.name,
+        code,
+        reason: _functions.reasonToString(reason),
+        hasSessionId: !!this.sessionId
+      })
+    }
 
     if (this.isDestroyed) return
 
@@ -311,11 +315,13 @@ class Node {
     this._clearReconnectTimeout()
 
     const attempt = ++this.reconnectAttempted
-    this.aqua?._trace?.('node.ws.reconnect.scheduled', {
-      node: this.name,
-      attempt,
-      infinite: !!this.infiniteReconnects
-    })
+    if (this.aqua?.debugTrace) {
+      this.aqua._trace('node.ws.reconnect.scheduled', {
+        node: this.name,
+        attempt,
+        infinite: !!this.infiniteReconnects
+      })
+    }
 
     if (this.infiniteReconnects) {
       this.aqua.emit(AqualinkEvents.NodeReconnect, this, {
@@ -384,10 +390,12 @@ class Node {
     this._isConnecting = true
     this.state = NODE_STATE.CONNECTING
     this._cleanup()
-    this.aqua?._trace?.('node.ws.connect', {
-      node: this.name,
-      url: this.wsUrl
-    })
+    if (this.aqua?.debugTrace) {
+      this.aqua._trace('node.ws.connect', {
+        node: this.name,
+        url: this.wsUrl
+      })
+    }
 
     try {
       const h = this._boundHandlers
@@ -588,12 +596,14 @@ class Node {
       oldSessionId && oldSessionId !== sessionId && !payload.resumed
 
     this.sessionId = sessionId
-    this.aqua?._trace?.('node.ready.packet', {
-      node: this.name,
-      resumed: !!payload.resumed,
-      oldSessionId,
-      newSessionId: sessionId
-    })
+    if (this.aqua?.debugTrace) {
+      this.aqua._trace('node.ready.packet', {
+        node: this.name,
+        resumed: !!payload.resumed,
+        oldSessionId,
+        newSessionId: sessionId
+      })
+    }
     this.rest.setSessionId(sessionId)
     this._headers['Session-Id'] = sessionId
 
@@ -635,11 +645,13 @@ class Node {
 
   async _resumePlayers() {
     if (!this.sessionId) return
-    this.aqua?._trace?.('node.resume.begin', {
-      node: this.name,
-      sessionId: this.sessionId,
-      players: this.aqua?.players?.size || 0
-    })
+    if (this.aqua?.debugTrace) {
+      this.aqua._trace('node.resume.begin', {
+        node: this.name,
+        sessionId: this.sessionId,
+        players: this.aqua?.players?.size || 0
+      })
+    }
 
     try {
       await this.rest.makeRequest('PATCH', `/v4/sessions/${this.sessionId}`, {
@@ -653,13 +665,15 @@ class Node {
             (player?.nodes === this || player?.nodes?.name === this.name) &&
             player.voiceChannel
           ) {
-            try {
-              this._emitDebug(`Rejoining voice for guild ${guildId} on resume`)
-              this.aqua?._trace?.('node.resume.rejoin', {
-                node: this.name,
-                guildId,
-                voiceChannel: player.voiceChannel
-              })
+              try {
+                this._emitDebug(`Rejoining voice for guild ${guildId} on resume`)
+                if (this.aqua?.debugTrace) {
+                  this.aqua._trace('node.resume.rejoin', {
+                    node: this.name,
+                    guildId,
+                    voiceChannel: player.voiceChannel
+                  })
+                }
               player.connect({
                 voiceChannel: player.voiceChannel,
                 deaf: player.deaf,
@@ -678,10 +692,12 @@ class Node {
         await this.aqua.loadPlayers()
       }
     } catch (err) {
-      this.aqua?._trace?.('node.resume.error', {
-        node: this.name,
-        error: _functions.errMsg(err)
-      })
+      if (this.aqua?.debugTrace) {
+        this.aqua._trace('node.resume.error', {
+          node: this.name,
+          error: _functions.errMsg(err)
+        })
+      }
       this._emitError(`Failed to resume session: ${_functions.errMsg(err)}`)
       throw err
     }

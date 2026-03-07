@@ -32,11 +32,13 @@ class PlayerLifecycle {
 
     if (!player.connected) {
       if (wasConnected || !player._voiceDownSince) {
-        player.aqua?._trace?.('player.voice.down', {
-          guildId: player.guildId,
-          reconnecting: !!player._reconnecting,
-          recovering: !!player._voiceRecovering
-        })
+        if (player.aqua?.debugTrace) {
+          player.aqua._trace('player.voice.down', {
+            guildId: player.guildId,
+            reconnecting: !!player._reconnecting,
+            recovering: !!player._voiceRecovering
+          })
+        }
       }
       if (
         !player._voiceDownSince &&
@@ -74,10 +76,12 @@ class PlayerLifecycle {
         now - player._lastVoiceUpTraceAt >= this.VOICE_TRACE_INTERVAL
       ) {
         player._lastVoiceUpTraceAt = now
-        player.aqua?._trace?.('player.voice.up', {
-          guildId: player.guildId,
-          ping: player.ping
-        })
+        if (player.aqua?.debugTrace) {
+          player.aqua._trace('player.voice.up', {
+            guildId: player.guildId,
+            ping: player.ping
+          })
+        }
       }
       this.flushDeferredPlay()
     }
@@ -105,12 +109,14 @@ class PlayerLifecycle {
         player._voiceDownSince = now - this.VOICE_DOWN_THRESHOLD - 1
       player._lastPlayerUpdateAt = now
       player.connected = false
-      player.aqua?._trace?.('player.voice.silence', {
-        guildId: player.guildId,
-        silenceMs,
-        playing: !!player.playing,
-        paused: !!player.paused
-      })
+      if (player.aqua?.debugTrace) {
+        player.aqua._trace('player.voice.silence', {
+          guildId: player.guildId,
+          silenceMs,
+          playing: !!player.playing,
+          paused: !!player.paused
+        })
+      }
     }
 
     if (player._voiceDownSince && !player.connected) {
@@ -119,9 +125,11 @@ class PlayerLifecycle {
         downFor > this.VOICE_FORCE_DESTROY_MS &&
         player.reconnectionRetries >= this.RECONNECT_MAX
       ) {
-        player.aqua?._trace?.('player.forceDestroy', {
-          guildId: player.guildId
-        })
+        if (player.aqua?.debugTrace) {
+          player.aqua._trace('player.forceDestroy', {
+            guildId: player.guildId
+          })
+        }
         player.destroy()
         return
       }
@@ -201,18 +209,22 @@ class PlayerLifecycle {
   async socketClosed(_player, _track, payload) {
     const player = this.player
     if (player.destroyed || player._reconnecting) return
-    player.aqua?._trace?.('player.socketClosed', {
-      guildId: player.guildId,
-      code: payload?.code
-    })
+    if (player.aqua?.debugTrace) {
+      player.aqua._trace('player.socketClosed', {
+        guildId: player.guildId,
+        code: payload?.code
+      })
+    }
 
     const code = payload?.code
     if (code === 4006 && player._resuming) {
-      player.aqua?._trace?.('player.socketClosed.ignored', {
-        guildId: player.guildId,
-        code,
-        reason: 'transient_while_resuming'
-      })
+      if (player.aqua?.debugTrace) {
+        player.aqua._trace('player.socketClosed.ignored', {
+          guildId: player.guildId,
+          code,
+          reason: 'transient_while_resuming'
+        })
+      }
       return
     }
 
@@ -275,11 +287,13 @@ class PlayerLifecycle {
         )
       }
 
-      player.aqua?._trace?.('player.socketClosed.softRecover', {
-        guildId: player.guildId,
-        code,
-        strategy: code === 4022 ? 'resume_after_voice_refresh' : '4014_retry'
-      })
+      if (player.aqua?.debugTrace) {
+        player.aqua._trace('player.socketClosed.softRecover', {
+          guildId: player.guildId,
+          code,
+          strategy: code === 4022 ? 'resume_after_voice_refresh' : '4014_retry'
+        })
+      }
       const waitMs = Math.max(0, player._suppressResumeUntil - Date.now())
       if (waitMs > 0) await player._delay(waitMs)
 
@@ -304,17 +318,21 @@ class PlayerLifecycle {
         player.destroyed ||
         player._reconnecting
       ) {
-        player.aqua?._trace?.('player.socketClosed.softRecover.ok', {
-          guildId: player.guildId,
-          code,
-          resumed: !!resumed
-        })
+        if (player.aqua?.debugTrace) {
+          player.aqua._trace('player.socketClosed.softRecover.ok', {
+            guildId: player.guildId,
+            code,
+            resumed: !!resumed
+          })
+        }
         return
       }
-      player.aqua?._trace?.('player.socketClosed.softRecover.failed', {
-        guildId: player.guildId,
-        code
-      })
+      if (player.aqua?.debugTrace) {
+        player.aqua._trace('player.socketClosed.softRecover.failed', {
+          guildId: player.guildId,
+          code
+        })
+      }
     }
 
     const state = {
@@ -480,10 +498,12 @@ class PlayerLifecycle {
       paused: player.paused
     }
     if (player.position > 0) updateData.position = player.position
-    player.aqua?._trace?.('player.play.deferred.flush', {
-      guildId: player.guildId,
-      hasEndpoint: !!player.connection?.endpoint
-    })
+    if (player.aqua?.debugTrace) {
+      player.aqua._trace('player.play.deferred.flush', {
+        guildId: player.guildId,
+        hasEndpoint: !!player.connection?.endpoint
+      })
+    }
     player.batchUpdatePlayer(updateData, true).catch((error) =>
       reportSuppressedError(player, 'player.deferredPlay.flush', error, {
         guildId: player.guildId
