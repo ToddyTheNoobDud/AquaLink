@@ -19,15 +19,17 @@ class AquaRecovery {
   }
 
   _stateFor(id) {
-    return (
-      this.aqua._failoverState[id] ||
-      (this.aqua._failoverState[id] = {
-        connected: false,
-        failoverInProgress: false,
-        attempts: 0,
-        lastAttempt: 0
-      })
-    )
+    const existing = this.aqua._failoverState[id]
+    if (existing) return existing
+
+    const created = {
+      connected: false,
+      failoverInProgress: false,
+      attempts: 0,
+      lastAttempt: 0
+    }
+    this.aqua._failoverState[id] = created
+    return created
   }
 
   _deleteState(id) {
@@ -220,28 +222,32 @@ class AquaRecovery {
 
   async migratePlayer(player, pickNode) {
     const guildId = String(player?.guildId)
-    return this.withGuildLifecycleLock(guildId, 'failover-migrate', async () => {
-      const state = this.capturePlayerState(player)
-      if (!state) throw new Error('Failed to capture state')
-      const { maxRetries, retryDelay } = this.aqua.failoverOptions
-      for (let retry = 0; retry < maxRetries; retry++) {
-        try {
-          const targetNode = pickNode()
-          const newPlayer = this.createPlayerOnNode(targetNode, state)
-          await this.restorePlayerState(newPlayer, state)
-          this.aqua.emit(
-            AqualinkEvents.PlayerMigrated,
-            player,
-            newPlayer,
-            targetNode
-          )
-          return newPlayer
-        } catch (error) {
-          if (retry === maxRetries - 1) throw error
-          await this._functions.delay(retryDelay * 1.5 ** retry)
+    return this.withGuildLifecycleLock(
+      guildId,
+      'failover-migrate',
+      async () => {
+        const state = this.capturePlayerState(player)
+        if (!state) throw new Error('Failed to capture state')
+        const { maxRetries, retryDelay } = this.aqua.failoverOptions
+        for (let retry = 0; retry < maxRetries; retry++) {
+          try {
+            const targetNode = pickNode()
+            const newPlayer = this.createPlayerOnNode(targetNode, state)
+            await this.restorePlayerState(newPlayer, state)
+            this.aqua.emit(
+              AqualinkEvents.PlayerMigrated,
+              player,
+              newPlayer,
+              targetNode
+            )
+            return newPlayer
+          } catch (error) {
+            if (retry === maxRetries - 1) throw error
+            await this._functions.delay(retryDelay * 1.5 ** retry)
+          }
         }
       }
-    })
+    )
   }
 
   regionMatches(configuredRegion, extractedRegion) {
@@ -270,8 +276,10 @@ class AquaRecovery {
     const id = String(guildId)
     return this.withGuildLifecycleLock(id, `move:${reason}`, async () => {
       const player = this.aqua.players.get(id)
-      if (!player || player.destroyed) throw new Error(`Player not found: ${id}`)
-      if (!targetNode?.connected) throw new Error('Target node is not connected')
+      if (!player || player.destroyed)
+        throw new Error(`Player not found: ${id}`)
+      if (!targetNode?.connected)
+        throw new Error('Target node is not connected')
       if (player.nodes === targetNode || player.nodes?.name === targetNode.name)
         return player
 
@@ -311,11 +319,13 @@ class AquaRecovery {
       })
 
       if (oldVoice && newPlayer.connection) {
-        if (oldVoice.sessionId) newPlayer.connection.sessionId = oldVoice.sessionId
+        if (oldVoice.sessionId)
+          newPlayer.connection.sessionId = oldVoice.sessionId
         if (oldVoice.endpoint) newPlayer.connection.endpoint = oldVoice.endpoint
         if (oldVoice.token) newPlayer.connection.token = oldVoice.token
         if (oldVoice.region) newPlayer.connection.region = oldVoice.region
-        if (oldVoice.channelId) newPlayer.connection.channelId = oldVoice.channelId
+        if (oldVoice.channelId)
+          newPlayer.connection.channelId = oldVoice.channelId
         newPlayer.connection._lastVoiceDataUpdate = Date.now()
         newPlayer.connection.resendVoiceUpdate(true)
         this.aqua._trace('player.migrate.voiceBootstrap', {
@@ -392,7 +402,9 @@ class AquaRecovery {
       this._functions.unrefTimeout(() => player.seek?.(position), delay)
     }
     this.aqua.once(AqualinkEvents.TrackStart, seekOnce)
-    player.once('destroy', () => this.aqua.off(AqualinkEvents.TrackStart, seekOnce))
+    player.once('destroy', () =>
+      this.aqua.off(AqualinkEvents.TrackStart, seekOnce)
+    )
   }
 
   async restorePlayerState(newPlayer, state) {
@@ -402,11 +414,17 @@ class AquaRecovery {
         ops.push(newPlayer.setVolume(state.volume))
       else newPlayer.volume = state.volume
     }
-    if (state.queue?.length && newPlayer.queue?.add) newPlayer.queue.add(...state.queue)
+    if (state.queue?.length && newPlayer.queue?.add)
+      newPlayer.queue.add(...state.queue)
     if (state.current && this.aqua.failoverOptions.preservePosition) {
       if (this.aqua.failoverOptions.resumePlayback) {
         ops.push(newPlayer.play(state.current))
-        this.seekAfterTrackStart(newPlayer, newPlayer.guildId, state.position, 50)
+        this.seekAfterTrackStart(
+          newPlayer,
+          newPlayer.guildId,
+          state.position,
+          50
+        )
         if (state.paused) ops.push(newPlayer.pause(true))
       } else if (newPlayer.queue?.add) {
         newPlayer.queue.add(state.current)
@@ -437,7 +455,9 @@ class AquaRecovery {
       const flushBatch = async () => {
         if (!batch.length) return
         const entries = batch.splice(0, batch.length)
-        const results = await Promise.all(entries.map((p) => this.restorePlayer(p)))
+        const results = await Promise.all(
+          entries.map((p) => this.restorePlayer(p))
+        )
         for (let i = 0; i < results.length; i++) {
           if (!results[i]) failed.push(entries[i])
         }
@@ -461,7 +481,10 @@ class AquaRecovery {
       const lines = []
       if (nodeSessions) lines.push(JSON.stringify(nodeSessions))
       for (const entry of failed) lines.push(JSON.stringify(entry))
-      await fs.promises.writeFile(filePath, lines.length ? `${lines.join('\n')}\n` : '')
+      await fs.promises.writeFile(
+        filePath,
+        lines.length ? `${lines.join('\n')}\n` : ''
+      )
     } catch (error) {
       if (error.code !== 'ENOENT') {
         console.error(`[Aqua/Autoresume]Error loading players:`, error)
@@ -511,7 +534,8 @@ class AquaRecovery {
         }
         if (p.u && validTracks[0]) {
           if (p.vol != null) {
-            if (typeof player.setVolume === 'function') await player.setVolume(p.vol)
+            if (typeof player.setVolume === 'function')
+              await player.setVolume(p.vol)
             else player.volume = p.vol
           }
 
@@ -621,7 +645,9 @@ class AquaRecovery {
           const parsed = JSON.parse(line)
           if (parsed.type === 'node_sessions') {
             for (const [name, sessionId] of Object.entries(parsed.data)) {
-              const nodeOptions = this.aqua.nodes.find((n) => (n.name || n.host) === name)
+              const nodeOptions = this.aqua.nodes.find(
+                (n) => (n.name || n.host) === name
+              )
               if (nodeOptions) nodeOptions.sessionId = sessionId
             }
             break

@@ -54,7 +54,11 @@ class ConnectionRecovery {
   checkRegionMigration() {
     const conn = this.connection
     if (conn._destroyed || conn._regionMigrationAttempted) return false
-    if (!conn._aqua?.autoRegionMigrate || !conn.region || conn.region === 'unknown')
+    if (
+      !conn._aqua?.autoRegionMigrate ||
+      !conn.region ||
+      conn.region === 'unknown'
+    )
       return false
 
     const player = conn._player
@@ -91,10 +95,15 @@ class ConnectionRecovery {
         .movePlayerToNode?.(conn._guildId, targetNode, 'region')
         .catch((error) => {
           conn._regionMigrationAttempted = false
-          reportSuppressedError(conn._aqua, 'connection.region.migrate', error, {
-            guildId: conn._guildId,
-            region: conn.region
-          })
+          reportSuppressedError(
+            conn._aqua,
+            'connection.region.migrate',
+            error,
+            {
+              guildId: conn._guildId,
+              region: conn.region
+            }
+          )
         })
     })
     return true
@@ -140,7 +149,13 @@ class ConnectionRecovery {
 
     const payload = sharedPool.acquire()
     try {
-      this._functions.fillVoicePayload(payload, conn._guildId, conn, conn._player, true)
+      this._functions.fillVoicePayload(
+        payload,
+        conn._guildId,
+        conn,
+        conn._player,
+        true
+      )
 
       if (conn._stateGeneration !== currentGen) {
         conn._aqua.emit(
@@ -223,9 +238,14 @@ class ConnectionRecovery {
 
       conn._requestVoiceState()
       const resumed = await this.attemptResume().catch((error) => {
-        reportSuppressedError(conn._aqua, 'connection.playerMissing.resume', error, {
-          guildId: conn._guildId
-        })
+        reportSuppressedError(
+          conn._aqua,
+          'connection.playerMissing.resume',
+          error,
+          {
+            guildId: conn._guildId
+          }
+        )
         return false
       })
       if (!resumed) conn.resendVoiceUpdate(true)
@@ -283,7 +303,8 @@ class ConnectionRecovery {
         error: error?.message || String(error)
       })
       if (error.statusCode === 404 || error.response?.statusCode === 404) {
-        const isSessionError = error.body?.message?.includes('sessionId') || false
+        const isSessionError =
+          error.body?.message?.includes('sessionId') || false
         const recovered = await this.recoverMissingPlayer(isSessionError)
         if (recovered) return
 

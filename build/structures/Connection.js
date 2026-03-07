@@ -468,7 +468,6 @@ class Connection {
       .finally(() => sharedPool.release(pending.payload))
   }
 
-
   async _recoverMissingPlayer(isSessionError) {
     return this._recovery.recoverMissingPlayer(isSessionError)
   }

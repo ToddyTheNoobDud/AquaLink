@@ -7,8 +7,7 @@ class PlayerLifecycle {
     this._functions = deps._functions
     this.PLAYER_STATE = deps.PLAYER_STATE
     this.VOICE_TRACE_INTERVAL = deps.VOICE_TRACE_INTERVAL
-    this.PLAYER_UPDATE_SILENCE_THRESHOLD =
-      deps.PLAYER_UPDATE_SILENCE_THRESHOLD
+    this.PLAYER_UPDATE_SILENCE_THRESHOLD = deps.PLAYER_UPDATE_SILENCE_THRESHOLD
     this.VOICE_DOWN_THRESHOLD = deps.VOICE_DOWN_THRESHOLD
     this.VOICE_ABANDON_MULTIPLIER = deps.VOICE_ABANDON_MULTIPLIER
     this.VOICE_FORCE_DESTROY_MS = deps.VOICE_FORCE_DESTROY_MS
@@ -120,7 +119,9 @@ class PlayerLifecycle {
         downFor > this.VOICE_FORCE_DESTROY_MS &&
         player.reconnectionRetries >= this.RECONNECT_MAX
       ) {
-        player.aqua?._trace?.('player.forceDestroy', { guildId: player.guildId })
+        player.aqua?._trace?.('player.forceDestroy', {
+          guildId: player.guildId
+        })
         player.destroy()
         return
       }
@@ -137,7 +138,10 @@ class PlayerLifecycle {
       if (downFor > this.VOICE_DOWN_THRESHOLD * this.VOICE_ABANDON_MULTIPLIER) {
         player.connection?._requestVoiceState?.()
         player.connection?.resendVoiceUpdate(true)
-        player.reconnectionRetries = Math.min(player.reconnectionRetries + 1, 30)
+        player.reconnectionRetries = Math.min(
+          player.reconnectionRetries + 1,
+          30
+        )
         if (
           downFor > this.VOICE_FORCE_DESTROY_MS &&
           player.reconnectionRetries >= this.RECONNECT_MAX * 2
@@ -242,8 +246,7 @@ class PlayerLifecycle {
     if (code === 4014 || code === 4022) {
       player.connected = false
       if (!player._voiceDownSince) player._voiceDownSince = Date.now()
-      player._suppressResumeUntil =
-        Date.now() + (code === 4022 ? 3000 : 2000)
+      player._suppressResumeUntil = Date.now() + (code === 4022 ? 3000 : 2000)
     }
 
     const aqua = player.aqua
@@ -282,15 +285,18 @@ class PlayerLifecycle {
 
       let resumed = false
       if (!player.destroyed && !player.connected) {
-        resumed = await player.connection
-          ?.attemptResume?.()
-          .catch((error) => {
-            reportSuppressedError(player, 'player.socketClosed.softRecover', error, {
+        resumed = await player.connection?.attemptResume?.().catch((error) => {
+          reportSuppressedError(
+            player,
+            'player.socketClosed.softRecover',
+            error,
+            {
               guildId: player.guildId,
               code
-            })
-            return false
-          })
+            }
+          )
+          return false
+        })
       }
       if (
         resumed ||
@@ -376,7 +382,11 @@ class PlayerLifecycle {
           return
         }
         const latestActivePlayer = aqua?.players?.get?.(String(guildId))
-        if (latestActivePlayer && latestActivePlayer !== player && !latestActivePlayer.destroyed) {
+        if (
+          latestActivePlayer &&
+          latestActivePlayer !== player &&
+          !latestActivePlayer.destroyed
+        ) {
           try {
             np.destroy?.()
           } catch {}
@@ -439,10 +449,7 @@ class PlayerLifecycle {
         if (retriesLeft > 0) {
           this._functions.createTimer(
             () => tryReconnect(attempt + 1),
-            Math.min(
-              this.RETRY_BACKOFF_BASE * attempt,
-              this.RETRY_BACKOFF_MAX
-            ),
+            Math.min(this.RETRY_BACKOFF_BASE * attempt, this.RETRY_BACKOFF_MAX),
             reconnectTimers
           )
         } else {

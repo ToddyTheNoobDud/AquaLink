@@ -1,5 +1,5 @@
 const fs = require('node:fs')
-const readline = require('node:readline')
+const _readline = require('node:readline')
 const { EventEmitter } = require('node:events')
 const { AqualinkEvents } = require('./AqualinkEvents')
 const AquaRecovery = require('./AquaRecovery')
@@ -254,10 +254,13 @@ class Aqua extends EventEmitter {
 
   _scheduleVoiceStateFlush(delay = 0) {
     if (this._voiceStateFlushTimer) return
-    this._voiceStateFlushTimer = setTimeout(() => {
-      this._voiceStateFlushTimer = null
-      this._flushVoiceStateQueue()
-    }, Math.max(0, delay))
+    this._voiceStateFlushTimer = setTimeout(
+      () => {
+        this._voiceStateFlushTimer = null
+        this._flushVoiceStateQueue()
+      },
+      Math.max(0, delay)
+    )
     this._voiceStateFlushTimer.unref?.()
   }
 
@@ -265,7 +268,8 @@ class Aqua extends EventEmitter {
     if (!this._voiceStateQueued.size) return
 
     const now = Date.now()
-    const waitFor = VOICE_STATE_QUEUE_INTERVAL - (now - this._lastVoiceStateSendAt)
+    const waitFor =
+      VOICE_STATE_QUEUE_INTERVAL - (now - this._lastVoiceStateSendAt)
     if (waitFor > 0) {
       this._scheduleVoiceStateFlush(waitFor)
       return
@@ -287,7 +291,9 @@ class Aqua extends EventEmitter {
       this._voiceStateQueueHead > 1024 ||
       this._voiceStateQueueHead > this._voiceStateQueue.length / 2
     ) {
-      this._voiceStateQueue = this._voiceStateQueue.slice(this._voiceStateQueueHead)
+      this._voiceStateQueue = this._voiceStateQueue.slice(
+        this._voiceStateQueueHead
+      )
       this._voiceStateQueueHead = 0
     }
 
@@ -344,9 +350,14 @@ class Aqua extends EventEmitter {
         }
         queueMicrotask(() => {
           this._rebuildBrokenPlayers(node).catch((error) =>
-            reportSuppressedError(this, 'aqua.nodeReady.rebuildBrokenPlayers', error, {
-              node: node?.name || node?.host
-            })
+            reportSuppressedError(
+              this,
+              'aqua.nodeReady.rebuildBrokenPlayers',
+              error,
+              {
+                node: node?.name || node?.host
+              }
+            )
           )
         })
       }
