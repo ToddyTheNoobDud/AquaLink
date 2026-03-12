@@ -345,7 +345,16 @@ class PlayerLifecycle {
       queue: player.queue?.toArray() || [],
       previousIdentifiers: Array.from(player.previousIdentifiers),
       autoplaySeed: player.autoplaySeed,
-      nowPlayingMessage: player.nowPlayingMessage
+      nowPlayingMessage: player.nowPlayingMessage,
+      voiceState: player.connection
+        ? {
+            sessionId: player.connection.sessionId || null,
+            endpoint: player.connection.endpoint || null,
+            token: player.connection.token || null,
+            region: player.connection.region || null,
+            channelId: player.connection.channelId || null
+          }
+        : null
     }
 
     player._reconnecting = true
@@ -421,6 +430,26 @@ class PlayerLifecycle {
         np.autoplaySeed = state.autoplaySeed
         np.previousIdentifiers = new Set(state.previousIdentifiers)
         np.nowPlayingMessage = state.nowPlayingMessage
+        if (state.voiceState && np.connection) {
+          np.connection.sessionId =
+            state.voiceState.sessionId || np.connection.sessionId
+          np.connection.endpoint =
+            state.voiceState.endpoint || np.connection.endpoint
+          np.connection.token = state.voiceState.token || np.connection.token
+          np.connection.region = state.voiceState.region || np.connection.region
+          np.connection.channelId =
+            state.voiceState.channelId || np.connection.channelId
+          np.connection._lastEndpoint =
+            state.voiceState.endpoint || np.connection._lastEndpoint
+          if (
+            np.connection.sessionId &&
+            np.connection.endpoint &&
+            np.connection.token
+          ) {
+            np.connection._lastVoiceDataUpdate = Date.now()
+            np.connection.resendVoiceUpdate(true)
+          }
+        }
 
         const ct = state.currentTrack
         if (ct) np.queue.add(ct)

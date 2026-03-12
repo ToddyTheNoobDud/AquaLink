@@ -611,19 +611,38 @@ class Node {
       this._emitDebug(
         `Session changed from ${oldSessionId} to ${sessionId}, invalidating stale players`
       )
+      try {
+        await this.aqua._storeBrokenPlayers?.(this)
+      } catch (e) {
+        this._emitDebug(
+          `Failed to snapshot stale players before invalidation: ${e?.message || e}`
+        )
+      }
       const playersToDestroy = []
       for (const [guildId, player] of this.aqua.players) {
         if (player?.nodes === this || player?.nodes?.name === this.name) {
-          playersToDestroy.push(guildId)
+          playersToDestroy.push({ guildId, player })
         }
       }
-      for (const guildId of playersToDestroy) {
+      for (const { guildId, player } of playersToDestroy) {
         try {
-          this._emitDebug(`Destroying stale player for guild ${guildId}`)
-          await this.aqua.destroyPlayer(guildId)
+          this._emitDebug(
+            `Invalidating stale player for guild ${guildId} without voice disconnect`
+          )
+          player?.destroy?.({
+            preserveClient: true,
+            skipRemote: true,
+            preserveMessage: true,
+            preserveTracks: true,
+            preserveReconnecting: true
+          })
+          if (this.aqua.players.get(String(guildId)) === player) {
+            this.aqua.players.delete(String(guildId))
+          }
+          this.players?.delete?.(player)
         } catch (e) {
           this._emitDebug(
-            `Failed to destroy stale player ${guildId}: ${e?.message || e}`
+            `Failed to invalidate stale player ${guildId}: ${e?.message || e}`
           )
         }
       }

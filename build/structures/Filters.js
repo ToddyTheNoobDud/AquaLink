@@ -384,6 +384,12 @@ class Filters {
       }
     }
 
+    if (f.pluginFilters !== null) {
+      f.pluginFilters = null
+      this._dirty.add('pluginFilters')
+      changed = true
+    }
+
     for (const key in this.presets) {
       if (this.presets[key] !== null) this.presets[key] = null
     }
@@ -395,6 +401,7 @@ class Filters {
     if (!this.player || !this._dirty.size) return this
 
     const dirtyKeys = [...this._dirty]
+    const dirtySet = new Set(dirtyKeys)
     const payload = {
       volume: this.filters.volume,
       equalizer: this.filters.equalizer
@@ -403,6 +410,7 @@ class Filters {
     for (let i = 0; i < filterNames.length; i++) {
       const key = filterNames[i]
       if (this.filters[key] !== null) payload[key] = this.filters[key]
+      else if (dirtySet.has(key)) payload[key] = null
     }
     payload.pluginFilters = this.filters.pluginFilters || {}
 

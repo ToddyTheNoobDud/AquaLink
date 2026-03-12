@@ -1,4 +1,5 @@
 const fs = require('node:fs')
+const path = require('node:path')
 const readline = require('node:readline')
 const { AqualinkEvents } = require('./AqualinkEvents')
 const { reportSuppressedError } = require('./Reporting')
@@ -16,6 +17,10 @@ class AquaRecovery {
     this.RECONNECT_DELAY = deps.RECONNECT_DELAY
     this.NODE_TIMEOUT = deps.NODE_TIMEOUT
     this.EMPTY_ARRAY = deps.EMPTY_ARRAY
+    this._trackResolveActive = 0
+    this._trackResolveQueue = []
+    this._brokenSnapshotNodes = new Set()
+    this._brokenSnapshotWrites = new Map()
   }
 
   _stateFor(id) {
@@ -67,43 +72,67 @@ class AquaRecovery {
   storeBrokenPlayers(node) {
     const id = node.name || node.host
     const now = Date.now()
+    const records = []
     for (const player of this.aqua.players.values()) {
       if (player.nodes !== node) continue
-      const state = this.capturePlayerState(player)
-      if (state) {
-        state.originalNodeId = id
-        state.brokenAt = now
-        this.aqua._brokenPlayers.set(String(player.guildId), state)
-      }
+      const record = this._serializeBrokenPlayer(player, id, now)
+      if (!record) continue
+      this.aqua._brokenPlayers.set(String(player.guildId), {
+        originalNodeId: id,
+        brokenAt: now
+      })
+      records.push(record)
     }
+    return this._writeBrokenPlayerSnapshot(id, records)
   }
 
   async rebuildBrokenPlayers(node) {
     const id = node.name || node.host
-    const rebuilds = []
+    const rebuildGuilds = new Set()
     const now = Date.now()
     for (const [guildId, state] of this.aqua._brokenPlayers) {
       if (
         state.originalNodeId === id &&
         now - state.brokenAt < this.BROKEN_PLAYER_TTL
       ) {
-        rebuilds.push({ guildId, state })
+        rebuildGuilds.add(guildId)
       }
     }
+    if (!rebuildGuilds.size) {
+      await this._deleteBrokenPlayerSnapshot(id)
+      return
+    }
+    const pendingWrite = this._brokenSnapshotWrites.get(id)
+    if (pendingWrite) await pendingWrite.catch(this._functions.noop)
+    const rebuilds = await this._readBrokenPlayerSnapshot(id, rebuildGuilds)
     if (!rebuilds.length) return
     const successes = []
+    const failed = []
     for (let i = 0; i < rebuilds.length; i += this.MAX_CONCURRENT_OPS) {
       const batch = rebuilds.slice(i, i + this.MAX_CONCURRENT_OPS)
       const results = await Promise.allSettled(
-        batch.map(({ guildId, state }) =>
-          this.rebuildPlayer(state, node).then(() => guildId)
+        batch.map((state) =>
+          this.restorePlayer(state, node).then((ok) => ({ ok, guildId: state.g }))
         )
       )
-      for (const result of results) {
-        if (result.status === 'fulfilled') successes.push(result.value)
+      for (let j = 0; j < results.length; j++) {
+        const result = results[j]
+        const state = batch[j]
+        if (result.status === 'fulfilled' && result.value?.ok) {
+          successes.push(result.value.guildId)
+        } else {
+          failed.push(state)
+        }
       }
     }
     for (const guildId of successes) this.aqua._brokenPlayers.delete(guildId)
+    for (const state of failed) {
+      this.aqua._brokenPlayers.set(String(state.g), {
+        originalNodeId: id,
+        brokenAt: state.brokenAt || now
+      })
+    }
+    await this._writeBrokenPlayerSnapshot(id, failed)
     if (successes.length)
       this.aqua.emit(AqualinkEvents.PlayersRebuilt, node, successes.length)
     this.performCleanup()
@@ -118,26 +147,29 @@ class AquaRecovery {
       volume = 65,
       deaf = true
     } = state
-    return this.withGuildLifecycleLock(guildId, 'rebuild', async () => {
-      const lockKey = `rebuild_${guildId}`
+    const id = String(guildId)
+    return this.withGuildLifecycleLock(id, 'rebuild', async () => {
+      const lockKey = `rebuild_${id}`
       if (this.aqua._rebuildLocks.has(lockKey)) return
       this.aqua._rebuildLocks.add(lockKey)
       try {
-        if (this.aqua.players.has(guildId)) {
-          await this.aqua.destroyPlayer(guildId)
+        if (this.aqua.players.has(id)) {
+          await this.aqua.destroyPlayer(id)
           await this._functions.delay(this.RECONNECT_DELAY)
         }
         const player = this.aqua.createPlayer(targetNode, {
-          guildId,
+          guildId: id,
           textChannel,
           voiceChannel,
           defaultVolume: volume,
-          deaf
+          deaf,
+          mute: !!state.mute,
+          resuming: true
         })
         if (current && player?.queue?.add) {
           player.queue.add(current)
           await player.play()
-          this.seekAfterTrackStart(player, guildId, state.position, 50)
+          this.seekAfterTrackStart(player, id, state.position, 50)
           if (state.paused) player.pause(true)
         }
         return player
@@ -317,21 +349,20 @@ class AquaRecovery {
         voiceChannel: state.voiceChannel,
         defaultVolume: state.volume || 100,
         deaf: state.deaf || false,
-        mute: oldPlayer.mute || false,
+        mute: state.mute || false,
         resuming: true,
         preserveMessage: true
       })
 
-      if (oldVoice && newPlayer.connection) {
-        if (oldVoice.sessionId)
-          newPlayer.connection.sessionId = oldVoice.sessionId
-        if (oldVoice.endpoint) newPlayer.connection.endpoint = oldVoice.endpoint
-        if (oldVoice.token) newPlayer.connection.token = oldVoice.token
-        if (oldVoice.region) newPlayer.connection.region = oldVoice.region
-        if (oldVoice.channelId)
-          newPlayer.connection.channelId = oldVoice.channelId
-        newPlayer.connection._lastVoiceDataUpdate = Date.now()
-        newPlayer.connection.resendVoiceUpdate(true)
+      if (
+        this._applyVoiceBootstrap(newPlayer, {
+          sid: oldVoice?.sessionId,
+          ep: oldVoice?.endpoint,
+          tok: oldVoice?.token,
+          reg: oldVoice?.region,
+          cid: oldVoice?.channelId
+        })
+      ) {
         if (this.aqua.debugTrace) {
           this.aqua._trace('player.migrate.voiceBootstrap', {
             guildId: id,
@@ -391,6 +422,7 @@ class AquaRecovery {
       loop: player.loop,
       shuffle: player.shuffle,
       deaf: player.deaf ?? false,
+      mute: !!player.mute,
       connected: !!player.connected
     }
   }
@@ -401,7 +433,9 @@ class AquaRecovery {
       textChannel: state.textChannel,
       voiceChannel: state.voiceChannel,
       defaultVolume: state.volume || 100,
-      deaf: state.deaf || false
+      deaf: state.deaf || false,
+      mute: !!state.mute,
+      resuming: true
     })
   }
 
@@ -465,11 +499,12 @@ class AquaRecovery {
       const flushBatch = async () => {
         if (!batch.length) return
         const entries = batch.splice(0, batch.length)
-        const results = await Promise.all(
+        const results = await Promise.allSettled(
           entries.map((p) => this.restorePlayer(p))
         )
         for (let i = 0; i < results.length; i++) {
-          if (!results[i]) failed.push(entries[i])
+          if (results[i].status !== 'fulfilled' || !results[i].value)
+            failed.push(entries[i])
         }
       }
       for await (const line of rl) {
@@ -508,40 +543,51 @@ class AquaRecovery {
     }
   }
 
-  async restorePlayer(p) {
+  async restorePlayer(p, preferredNode = null) {
     const gId = String(p.g)
     return this.withGuildLifecycleLock(gId, 'restore', async () => {
       try {
         const existing = this.aqua.players.get(gId)
-        if (existing?.playing) return true
+        if (existing?.playing && !existing.destroyed) return true
+        if (existing?.destroyed) this.aqua.players.delete(gId)
+
+        const targetNode =
+          preferredNode?.connected ? preferredNode : this.aqua.leastUsedNodes[0]
+        if (!targetNode?.connected) {
+          throw new Error(`No connected node available to restore guild ${gId}`)
+        }
 
         const player =
-          existing ||
-          this.aqua.createPlayer(
-            this.aqua._chooseLeastBusyNode(this.aqua.leastUsedNodes),
-            {
-              guildId: gId,
-              textChannel: p.t,
-              voiceChannel: p.v,
-              defaultVolume: p.vol || 65,
-              deaf: true,
-              resuming: !!p.resuming
-            }
-          )
+          !existing || existing.destroyed
+            ? this.aqua.createPlayer(targetNode, {
+                guildId: gId,
+                textChannel: p.t,
+                voiceChannel: p.v,
+                defaultVolume: p.vol || 65,
+                deaf: p.d ?? true,
+                mute: !!p.m,
+                resuming: !!p.resuming
+              })
+            : existing
         player._resuming = !!p.resuming
+        this._applyVoiceBootstrap(player, p.vs)
         const requester = this._functions.parseRequester(p.r)
         const tracksToResolve = [p.u, ...(p.q || [])]
           .filter(Boolean)
           .slice(0, this.aqua.maxTracksRestore)
         const resolved = await Promise.all(
           tracksToResolve.map((uri) =>
-            this.aqua.resolve({ query: uri, requester }).catch(() => null)
+            this._resolveTrackWithLimit(() =>
+              this.aqua.resolve({ query: uri, requester }).catch(() => null)
+            )
           )
         )
         const validTracks = resolved.flatMap((result) => result?.tracks || [])
         if (validTracks.length && player.queue?.add) {
           player.queue.add(...validTracks)
         }
+        if (typeof p.loop === 'number') player.loop = p.loop
+        if (p.sh !== undefined) player.shuffle = p.sh
         if (p.u && validTracks[0]) {
           if (p.vol != null) {
             if (typeof player.setVolume === 'function')
@@ -618,6 +664,16 @@ class AquaRecovery {
       }
     }
 
+    const activeBrokenNodes = new Set()
+    for (const state of this.aqua._brokenPlayers.values()) {
+      if (state?.originalNodeId) activeBrokenNodes.add(state.originalNodeId)
+    }
+    for (const nodeId of this._brokenSnapshotNodes) {
+      if (!activeBrokenNodes.has(nodeId)) {
+        this._deleteBrokenPlayerSnapshot(nodeId).catch(this._functions.noop)
+      }
+    }
+
     const ids = Object.keys(this.aqua._failoverState)
     if (ids.length > this.MAX_FAILOVER_QUEUE) {
       this.aqua._failoverState = Object.create(null)
@@ -674,6 +730,171 @@ class AquaRecovery {
       if (rl) this._functions.safeCall(() => rl.close())
       if (stream) this._functions.safeCall(() => stream.destroy())
     }
+  }
+
+  async dispose() {
+    const deletions = []
+    for (const pending of this._brokenSnapshotWrites.values()) {
+      deletions.push(pending.catch(this._functions.noop))
+    }
+    for (const nodeId of this._brokenSnapshotNodes) {
+      deletions.push(this._deleteBrokenPlayerSnapshot(nodeId))
+    }
+    this._brokenSnapshotNodes.clear()
+    this._brokenSnapshotWrites.clear()
+    this._trackResolveQueue.length = 0
+    await Promise.allSettled(deletions)
+  }
+
+  _resolveTrackWithLimit(task) {
+    return new Promise((resolve, reject) => {
+      const run = () => {
+        this._trackResolveActive++
+        Promise.resolve()
+          .then(task)
+          .then(resolve, reject)
+          .finally(() => {
+            this._trackResolveActive--
+            const next = this._trackResolveQueue.shift()
+            if (next) next()
+          })
+      }
+      if (this._trackResolveActive < this.aqua.trackResolveConcurrency) run()
+      else this._trackResolveQueue.push(run)
+    })
+  }
+
+  _applyVoiceBootstrap(player, voiceState) {
+    if (!voiceState || !player?.connection) return false
+    const connection = player.connection
+    connection.sessionId = voiceState.sid || connection.sessionId
+    connection.endpoint = voiceState.ep || connection.endpoint
+    connection.token = voiceState.tok || connection.token
+    connection.region = voiceState.reg || connection.region
+    connection.channelId = voiceState.cid || connection.channelId
+    connection._lastEndpoint = voiceState.ep || connection._lastEndpoint
+    if (!connection.sessionId || !connection.endpoint || !connection.token)
+      return false
+    connection._lastVoiceDataUpdate = Date.now()
+    connection.resendVoiceUpdate(true)
+    return true
+  }
+
+  _serializeBrokenPlayer(player, nodeId, brokenAt) {
+    const state = this.capturePlayerState(player)
+    if (!state) return null
+    const requester = player.requester || player.current?.requester
+    const connection = player.connection
+    return {
+      type: 'broken_player',
+      n: nodeId,
+      brokenAt,
+      g: state.guildId,
+      t: state.textChannel,
+      v: state.voiceChannel,
+      u: state.current?.uri || null,
+      p: state.position || 0,
+      q: (state.queue || [])
+        .slice(0, this.aqua.maxQueueSave)
+        .map((track) => track?.uri)
+        .filter(Boolean),
+      r: requester ? `${requester.id}:${requester.username}` : null,
+      vol: state.volume,
+      pa: state.paused,
+      pl: state.playing,
+      nw: player.nowPlayingMessage?.id || null,
+      d: state.deaf,
+      m: !!player.mute,
+      loop: state.loop,
+      sh: state.shuffle,
+      vs: connection
+        ? {
+            sid: connection.sessionId || null,
+            ep: connection.endpoint || null,
+            tok: connection.token || null,
+            reg: connection.region || null,
+            cid: connection.channelId || null
+          }
+        : null,
+      resuming: true
+    }
+  }
+
+  _getBrokenPlayerSnapshotPath(nodeId) {
+    const base = this.aqua.brokenPlayerStorePath
+    const ext = path.extname(base) || '.jsonl'
+    const dir = path.dirname(base)
+    const name = path.basename(base, ext)
+    const safeId = String(nodeId || 'unknown').replace(/[^a-z0-9._-]+/gi, '_')
+    return path.join(dir, `${name}.${safeId}${ext}`)
+  }
+
+  async _writeBrokenPlayerSnapshot(nodeId, records) {
+    const filePath = this._getBrokenPlayerSnapshotPath(nodeId)
+    if (!records.length) {
+      await this._deleteBrokenPlayerSnapshot(nodeId)
+      return
+    }
+    const tempFile = `${filePath}.tmp`
+    this._brokenSnapshotNodes.add(nodeId)
+    const writeTask = (async () => {
+      await fs.promises.mkdir(path.dirname(filePath), { recursive: true })
+      await fs.promises.writeFile(
+        tempFile,
+        `${records.map((record) => JSON.stringify(record)).join('\n')}\n`,
+        'utf8'
+      )
+      await fs.promises.rename(tempFile, filePath)
+    })()
+    this._brokenSnapshotWrites.set(nodeId, writeTask)
+    try {
+      await writeTask
+    } finally {
+      if (this._brokenSnapshotWrites.get(nodeId) === writeTask) {
+        this._brokenSnapshotWrites.delete(nodeId)
+      }
+    }
+  }
+
+  async _readBrokenPlayerSnapshot(nodeId, guildIds) {
+    const filePath = this._getBrokenPlayerSnapshotPath(nodeId)
+    let stream = null
+    let rl = null
+    const entries = []
+    try {
+      stream = fs.createReadStream(filePath, { encoding: 'utf8' })
+      rl = readline.createInterface({ input: stream, crlfDelay: Infinity })
+      for await (const line of rl) {
+        if (!line.trim()) continue
+        try {
+          const parsed = JSON.parse(line)
+          if (
+            parsed?.type === 'broken_player' &&
+            parsed.n === nodeId &&
+            guildIds.has(String(parsed.g))
+          ) {
+            entries.push(parsed)
+          }
+        } catch {}
+      }
+    } catch (error) {
+      if (error?.code !== 'ENOENT') {
+        reportSuppressedError(this.aqua, 'aqua.brokenPlayers.read', error, {
+          node: nodeId
+        })
+      }
+    } finally {
+      if (rl) this._functions.safeCall(() => rl.close())
+      if (stream) this._functions.safeCall(() => stream.destroy())
+    }
+    return entries
+  }
+
+  async _deleteBrokenPlayerSnapshot(nodeId) {
+    const filePath = this._getBrokenPlayerSnapshotPath(nodeId)
+    this._brokenSnapshotNodes.delete(nodeId)
+    await fs.promises.unlink(filePath).catch(this._functions.noop)
+    await fs.promises.unlink(`${filePath}.tmp`).catch(this._functions.noop)
   }
 }
 

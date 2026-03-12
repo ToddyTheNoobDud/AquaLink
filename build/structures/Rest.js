@@ -172,6 +172,7 @@ class Rest {
 
     this._headerPool = []
     this._tlsOptions = null
+    this._autoplayAgent = null
     this._setupAgent(node)
     this.useHttp2 = !!aqua?.options?.useHttp2
     this._h2 = null
@@ -207,8 +208,21 @@ class Rest {
     this.agent = new (node.ssl ? HttpsAgent : HttpAgent)(opts)
     this.request = node.ssl ? httpsRequest : httpRequest
 
-    if (node.ssl && autoplayModule?.setSharedAgent) {
-      autoplayModule.setSharedAgent(this.agent)
+    if (autoplayModule?.setSharedAgent) {
+      if (node.ssl) {
+        this._autoplayAgent = this.agent
+      } else {
+        this._autoplayAgent = new HttpsAgent({
+          keepAlive: true,
+          maxSockets: node.maxSockets || 128,
+          maxFreeSockets: node.maxFreeSockets || 64,
+          freeSocketTimeout: node.freeSocketTimeout || 15000,
+          keepAliveMsecs: node.keepAliveMsecs || 500,
+          scheduling: 'lifo',
+          timeout: this.timeout
+        })
+      }
+      autoplayModule.setSharedAgent(this._autoplayAgent)
     }
 
     const origCreate = this.agent.createConnection.bind(this.agent)
@@ -845,9 +859,17 @@ class Rest {
   }
 
   destroy() {
+    const autoplayAgent = this._autoplayAgent
+    const primaryAgent = this.agent
     if (this.agent) {
       this.agent.destroy()
       this.agent = null
+    }
+    if (autoplayAgent && autoplayAgent !== primaryAgent) {
+      autoplayAgent.destroy?.()
+    }
+    if (autoplayModule?.setSharedAgent && autoplayAgent) {
+      autoplayModule.setSharedAgent(null)
     }
     this._closeH2()
     if (this._headerPool) {
@@ -859,6 +881,7 @@ class Rest {
       this.request =
       this.defaultHeaders =
       this._endpoints =
+      this._autoplayAgent =
         null
     this.calls = 0
   }

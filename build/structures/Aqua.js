@@ -1,4 +1,5 @@
 const fs = require('node:fs')
+const path = require('node:path')
 const _readline = require('node:readline')
 const { EventEmitter } = require('node:events')
 const { AqualinkEvents } = require('./AqualinkEvents')
@@ -57,7 +58,9 @@ const DEFAULT_OPTIONS = Object.freeze({
     maxFailoverAttempts: 5
   }),
   maxQueueSave: 10,
-  maxTracksRestore: 20
+  maxTracksRestore: 20,
+  trackResolveConcurrency: 4,
+  brokenPlayerStorePath: null
 })
 
 const _functions = {
@@ -133,6 +136,15 @@ class Aqua extends EventEmitter {
     this.useHttp2 = merged.useHttp2
     this.maxQueueSave = merged.maxQueueSave
     this.maxTracksRestore = merged.maxTracksRestore
+    this.trackResolveConcurrency = Math.max(
+      1,
+      Number(merged.trackResolveConcurrency) || 4
+    )
+    this.brokenPlayerStorePath =
+      typeof merged.brokenPlayerStorePath === 'string' &&
+      merged.brokenPlayerStorePath.trim()
+        ? merged.brokenPlayerStorePath
+        : path.join(process.cwd(), `AquaBrokenPlayers.${process.pid}.jsonl`)
     this.send = merged.send || this._createDefaultSend()
     this.debugTrace = !!merged.debugTrace
     this.traceMaxEntries = Math.max(
@@ -333,7 +345,11 @@ class Aqua extends EventEmitter {
           this._trace('node.disconnect', { node: node?.name || node?.host })
         this._invalidateCache()
         queueMicrotask(() => {
-          this._storeBrokenPlayers(node)
+          this._storeBrokenPlayers(node).catch((error) =>
+            reportSuppressedError(this, 'aqua.nodeDisconnect.storeBrokenPlayers', error, {
+              node: node?.name || node?.host
+            })
+          )
           this._performCleanup()
         })
       },
@@ -408,6 +424,7 @@ class Aqua extends EventEmitter {
     this._rebuildLocks.clear()
     this._nodeLoadCache.clear()
     this._invalidateCache()
+    _functions.safeCall(() => this._recovery?.dispose?.())
     this._recovery = null
   }
 
@@ -670,11 +687,12 @@ class Aqua extends EventEmitter {
       ? this.fetchRegion(options.region)
       : this.leastUsedNodes
     if (!candidates.length) throw new Error('No nodes available')
-    return this.createPlayer(this._chooseLeastBusyNode(candidates), options)
+    return this.createPlayer(candidates[0], options)
   }
 
   createPlayer(node, options) {
-    const existing = this.players.get(options.guildId)
+    const guildId = String(options.guildId)
+    const existing = this.players.get(guildId)
     if (existing) {
       _functions.safeCall(() =>
         existing.destroy({
@@ -685,7 +703,6 @@ class Aqua extends EventEmitter {
       )
     }
     const player = new Player(this, node, options)
-    const guildId = String(options.guildId)
     this.players.set(guildId, player)
     if (this.debugTrace) {
       this._trace('player.create', {

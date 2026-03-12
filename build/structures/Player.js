@@ -590,6 +590,16 @@ class Player extends EventEmitter {
       this._updateBatcher = null
     }
 
+    if (this.filters) {
+      try {
+        this.filters.destroy()
+      } catch (error) {
+        reportSuppressedError(this, 'player.destroy.filters', error, {
+          guildId: this.guildId
+        })
+      }
+    }
+
     this.previousTracks?.clear()
     this.previousTracks = null
     this.previousIdentifiers?.clear()
