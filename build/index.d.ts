@@ -1358,7 +1358,6 @@ declare module 'aqualink' {
     ) => void
     playerCreate: (player: Player) => void
     playerDestroy: (player: Player) => void
-    playerDestroyed: (player: Player) => void
     playerUpdate: (player: Player, packet: any) => void
     playerMigrated: (
       oldPlayer: Player,
@@ -1537,7 +1536,6 @@ declare module 'aqualink' {
     readonly Error: 'error'
     readonly PlayerCreate: 'playerCreate'
     readonly PlayerDestroy: 'playerDestroy'
-    readonly PlayerDestroyed: 'playerDestroy'
     readonly PlayersRebuilt: 'playersRebuilt'
     readonly PlayerMigrated: 'playerMigrated'
   }

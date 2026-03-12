@@ -27,6 +27,7 @@ const FILTER_DEFAULTS = Object.freeze({
   }),
   lowPass: Object.freeze({ smoothing: 20 })
 })
+const { reportSuppressedError } = require('./Reporting')
 
 const FILTER_KEYS = Object.freeze(
   Object.fromEntries(
@@ -38,6 +39,7 @@ const FILTER_KEYS = Object.freeze(
 )
 
 const EMPTY_ARRAY = Object.freeze([])
+const EMPTY_OBJECT = Object.freeze({})
 
 const FILTER_POOL_SIZE = 16
 const filterPool = {
@@ -88,6 +90,27 @@ const _utils = Object.freeze({
     return !arr || arr.length === 0
   },
 
+  objectEqual(a, b) {
+    if (a === b) return true
+    const keysA = a ? Object.keys(a) : EMPTY_ARRAY
+    const keysB = b ? Object.keys(b) : EMPTY_ARRAY
+    if (keysA.length !== keysB.length) return false
+    for (let i = 0; i < keysA.length; i++) {
+      const key = keysA[i]
+      if (!(key in b) || a[key] !== b[key]) return false
+    }
+    return true
+  },
+
+  normalizePluginFilters(filters) {
+    if (!filters || typeof filters !== 'object') return null
+    const entries = Object.entries(filters).filter(
+      ([key, value]) => key && value && typeof value === 'object'
+    )
+    if (!entries.length) return null
+    return Object.fromEntries(entries)
+  },
+
   makeEqArray(len, gain) {
     const out = new Array(len)
     for (let i = 0; i < len; i++) out[i] = { band: i, gain }
@@ -125,7 +148,8 @@ class Filters {
       rotation: options.rotation ?? null,
       distortion: options.distortion ?? null,
       channelMix: options.channelMix ?? null,
-      lowPass: options.lowPass ?? null
+      lowPass: options.lowPass ?? null,
+      pluginFilters: _utils.normalizePluginFilters(options.pluginFilters)
     }
 
     this.presets = {
@@ -140,6 +164,7 @@ class Filters {
   destroy() {
     for (const [key, value] of Object.entries(this.filters)) {
       if (value && typeof value === 'object' && key !== 'equalizer') {
+        if (key === 'pluginFilters') continue
         filterPool.release(key, value)
       }
     }
@@ -182,7 +207,11 @@ class Filters {
     queueMicrotask(() => {
       this._pendingUpdate = false
       if (this.player) {
-        this.updateFilters().catch(() => {})
+        this.updateFilters().catch((error) =>
+          reportSuppressedError(this.player, 'filters.update', error, {
+            guildId: this.player.guildId
+          })
+        )
       }
     })
     return this
@@ -219,6 +248,37 @@ class Filters {
   }
   setLowPass(enabled, options = {}) {
     return this._setFilter('lowPass', enabled, options)
+  }
+
+  setPluginFilters(filters) {
+    const next = _utils.normalizePluginFilters(filters)
+    if (_utils.objectEqual(this.filters.pluginFilters, next)) return this
+    this.filters.pluginFilters = next
+    this._dirty.add('pluginFilters')
+    return this._scheduleUpdate()
+  }
+
+  setPluginFilter(name, config) {
+    if (!name || typeof name !== 'string')
+      throw new TypeError('Plugin filter name is required')
+
+    if (!config || typeof config !== 'object') {
+      if (!this.filters.pluginFilters?.[name]) return this
+      const next = { ...this.filters.pluginFilters }
+      delete next[name]
+      return this.setPluginFilters(next)
+    }
+
+    const current = this.filters.pluginFilters || EMPTY_OBJECT
+    if (current[name] === config) return this
+    return this.setPluginFilters({ ...current, [name]: config })
+  }
+
+  clearPluginFilters() {
+    if (!this.filters.pluginFilters) return this
+    this.filters.pluginFilters = null
+    this._dirty.add('pluginFilters')
+    return this._scheduleUpdate()
   }
 
   setBassboost(enabled, options = {}) {
@@ -317,6 +377,7 @@ class Filters {
     for (let i = 0; i < filterNames.length; i++) {
       const key = filterNames[i]
       if (f[key] !== null) {
+        if (key !== 'pluginFilters') filterPool.release(key, f[key])
         f[key] = null
         this._dirty.add(key)
         changed = true
@@ -333,17 +394,29 @@ class Filters {
   async updateFilters() {
     if (!this.player || !this._dirty.size) return this
 
-    const payload = {}
-    for (const key of this._dirty) {
-      payload[key] = this.filters[key]
+    const dirtyKeys = [...this._dirty]
+    const payload = {
+      volume: this.filters.volume,
+      equalizer: this.filters.equalizer
     }
+    const filterNames = Object.keys(FILTER_DEFAULTS)
+    for (let i = 0; i < filterNames.length; i++) {
+      const key = filterNames[i]
+      if (this.filters[key] !== null) payload[key] = this.filters[key]
+    }
+    payload.pluginFilters = this.filters.pluginFilters || {}
 
-    this._dirty.clear()
+    for (const key of dirtyKeys) this._dirty.delete(key)
 
-    await this.player.nodes.rest.updatePlayer({
-      guildId: this.player.guildId,
-      data: { filters: payload }
-    })
+    try {
+      await this.player.nodes.rest.updatePlayer({
+        guildId: this.player.guildId,
+        data: { filters: payload }
+      })
+    } catch (error) {
+      for (const key of dirtyKeys) this._dirty.add(key)
+      throw error
+    }
     return this
   }
 }

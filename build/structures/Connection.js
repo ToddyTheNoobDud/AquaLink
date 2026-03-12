@@ -1,4 +1,6 @@
 const { AqualinkEvents } = require('./AqualinkEvents')
+const ConnectionRecovery = require('./ConnectionRecovery')
+const { reportSuppressedError } = require('./Reporting')
 
 const POOL_SIZE = 12
 const UPDATE_TIMEOUT = 4000
@@ -156,10 +158,18 @@ class Connection {
     this.isWaitingForDisconnect = false
 
     this._lastStateReqAt = 0
+    this._lastResumeBlockedLogAt = 0
     this._stateGeneration = 0
     this._regionMigrationAttempted = false
     this._missingPlayerRecovering = false
     this._lastMissingPlayerRecoverAt = 0
+    this._recovery = new ConnectionRecovery(this, {
+      _functions,
+      STATE,
+      RECONNECT_DELAY,
+      MAX_RECONNECT_ATTEMPTS,
+      RESUME_BACKOFF_MAX
+    })
   }
 
   _hasValidVoiceData() {
@@ -193,96 +203,11 @@ class Connection {
   }
 
   setServerUpdate(data) {
-    if (this._destroyed || !data?.token) return
-
-    const endpoint =
-      typeof data.endpoint === 'string' ? data.endpoint.trim() : ''
-    if (!endpoint) return
-
-    if (this._lastEndpoint === endpoint && this.token === data.token) return
-
-    if (data.txId && data.txId < this.txId) return
-
-    this._stateGeneration++
-
-    if (this._lastEndpoint !== endpoint) {
-      this.sequence = 0
-      this._lastEndpoint = endpoint
-      this._reconnectAttempts = 0
-      this._consecutiveFailures = 0
-      this._regionMigrationAttempted = false
-    }
-
-    this.endpoint = endpoint
-    this.region = _functions.extractRegion(endpoint)
-    this.token = data.token
-    this.channelId = data.channel_id || this.channelId || this.voiceChannel
-    this._lastVoiceDataUpdate = Date.now()
-    this._aqua?._trace?.('connection.serverUpdate', {
-      guildId: this._guildId,
-      endpoint: this.endpoint,
-      region: this.region,
-      txId: data.txId || null
-    })
-    this._stateFlags &= ~STATE.VOICE_DATA_STALE
-
-    if (this._player?.paused) this._player.pause(false)
-    const migrated = this._checkRegionMigration()
-    if (migrated) return
-    this._scheduleVoiceUpdate()
-    this._player?._flushDeferredPlay?.()
+    return this._recovery.setServerUpdate(data)
   }
 
   _checkRegionMigration() {
-    if (this._destroyed || this._regionMigrationAttempted) return false
-    if (
-      !this._aqua?.autoRegionMigrate ||
-      !this.region ||
-      this.region === 'unknown'
-    )
-      return false
-    const player = this._player
-    if (!player || player.destroyed || player._resuming || player._reconnecting)
-      return false
-
-    const currentNode = player.nodes
-    if (!currentNode) return false
-
-    const currentRegions = Array.isArray(currentNode.regions)
-      ? currentNode.regions
-      : []
-    const alreadyMatching = currentRegions.some((r) =>
-      this._aqua._regionMatches?.(r, this.region)
-    )
-    if (alreadyMatching) {
-      this._regionMigrationAttempted = true
-      return false
-    }
-
-    const targetNode = this._aqua._findBestNodeForRegion?.(this.region)
-    if (!targetNode || targetNode === currentNode) return false
-
-    this._regionMigrationAttempted = true
-    this._aqua?._trace?.('connection.region.migrate', {
-      guildId: this._guildId,
-      region: this.region,
-      from: currentNode?.name || currentNode?.host,
-      to: targetNode?.name || targetNode?.host
-    })
-
-    queueMicrotask(() => {
-      this._aqua
-        .movePlayerToNode?.(this._guildId, targetNode, 'region')
-        .catch((err) => {
-          this._regionMigrationAttempted = false
-          this._aqua?._trace?.('connection.region.migrate.error', {
-            guildId: this._guildId,
-            region: this.region,
-            error: err?.message || String(err)
-          })
-        })
-    })
-    return true
+    return this._recovery.checkRegionMigration()
   }
 
   resendVoiceUpdate(force = false) {
@@ -308,10 +233,12 @@ class Connection {
     if (data.txId && data.txId < this.txId) return
 
     if (!channelId) {
-      this._aqua?._trace?.('connection.stateUpdate.nullChannel', {
-        guildId: this._guildId,
-        txId: data.txId || null
-      })
+      if (this._aqua?.debugTrace) {
+        this._aqua._trace('connection.stateUpdate.nullChannel', {
+          guildId: this._guildId,
+          txId: data.txId || null
+        })
+      }
       this.isWaitingForDisconnect = true
       if (!this._nullChannelTimer) {
         this._nullChannelTimer = setTimeout(() => {
@@ -324,12 +251,14 @@ class Connection {
     }
 
     this.isWaitingForDisconnect = false
-    this._aqua?._trace?.('connection.stateUpdate', {
-      guildId: this._guildId,
-      channelId,
-      sessionId,
-      txId: data.txId || null
-    })
+    if (this._aqua?.debugTrace) {
+      this._aqua._trace('connection.stateUpdate', {
+        guildId: this._guildId,
+        channelId,
+        sessionId,
+        txId: data.txId || null
+      })
+    }
 
     if (p && p.txId > this.txId) this.txId = p.txId
 
@@ -370,9 +299,11 @@ class Connection {
 
     this._stateFlags =
       (this._stateFlags | STATE.DISCONNECTING) & ~STATE.CONNECTED
-    this._aqua?._trace?.('connection.disconnect', {
-      guildId: this._guildId
-    })
+    if (this._aqua?.debugTrace) {
+      this._aqua._trace('connection.disconnect', {
+        guildId: this._guildId
+      })
+    }
     this._clearNullChannelTimer()
     this._clearPendingUpdate()
     this._clearReconnectTimer()
@@ -401,126 +332,30 @@ class Connection {
     try {
       const now = Date.now()
       if (now - (this._lastStateReqAt || 0) < 1500) return false
-      this._lastStateReqAt = now
 
       if (
         typeof this._player?.send !== 'function' ||
         !this._player.voiceChannel
       )
         return false
-      this._player.send({
+      const queued = this._player.send({
         guild_id: this._guildId,
         channel_id: this._player.voiceChannel,
         self_deaf: this._player.deaf,
         self_mute: this._player.mute
       })
-      return true
-    } catch {
+      this._lastStateReqAt = now
+      return queued !== false
+    } catch (error) {
+      reportSuppressedError(this._aqua, 'connection.requestVoiceState', error, {
+        guildId: this._guildId
+      })
       return false
     }
   }
 
   async attemptResume() {
-    if (!this._canAttemptResumeCore()) return false
-    this._aqua?._trace?.('connection.resume.attempt', {
-      guildId: this._guildId,
-      reconnectAttempts: this._reconnectAttempts,
-      hasSessionId: !!this.sessionId,
-      hasEndpoint: !!this.endpoint,
-      hasToken: !!this.token
-    })
-
-    const currentGen = this._stateGeneration
-
-    if (
-      !this.sessionId ||
-      !this.endpoint ||
-      !this.token ||
-      this._stateFlags & STATE.VOICE_DATA_STALE
-    ) {
-      this._aqua.emit(
-        AqualinkEvents.Debug,
-        `Resume blocked: missing voice data for guild ${this._guildId}, requesting voice state`
-      )
-      this._requestVoiceState()
-      return false
-    }
-
-    this.txId = this._player.txId || this.txId
-    this._stateFlags |= STATE.ATTEMPTING_RESUME
-    this._reconnectAttempts++
-    this._aqua.emit(
-      AqualinkEvents.Debug,
-      `Attempt resume: guild=${this._guildId} endpoint=${this.endpoint} session=${this.sessionId}`
-    )
-
-    const payload = sharedPool.acquire()
-    try {
-      _functions.fillVoicePayload(
-        payload,
-        this._guildId,
-        this,
-        this._player,
-        true
-      )
-
-      if (this._stateGeneration !== currentGen) {
-        this._aqua.emit(
-          AqualinkEvents.Debug,
-          `Resume aborted: State changed during attempt for guild ${this._guildId}`
-        )
-        return false
-      }
-
-      await this._sendUpdate(payload)
-      this._aqua?._trace?.('connection.resume.success', {
-        guildId: this._guildId
-      })
-
-      this._reconnectAttempts = 0
-      this._consecutiveFailures = 0
-      if (this._player) this._player._resuming = false
-
-      this._aqua.emit(
-        AqualinkEvents.Debug,
-        `Resume PATCH sent for guild ${this._guildId}`
-      )
-      return true
-    } catch (e) {
-      if (this._destroyed || !this._aqua) throw e
-      this._consecutiveFailures++
-      this._aqua.emit(
-        AqualinkEvents.Debug,
-        `Resume failed for guild ${this._guildId}: ${e?.message || e}`
-      )
-      this._aqua?._trace?.('connection.resume.error', {
-        guildId: this._guildId,
-        error: e?.message || String(e)
-      })
-
-      if (
-        this._reconnectAttempts < MAX_RECONNECT_ATTEMPTS &&
-        !this._destroyed &&
-        this._consecutiveFailures < 5
-      ) {
-        const delay = Math.min(
-          RECONNECT_DELAY * (1 << (this._reconnectAttempts - 1)),
-          RESUME_BACKOFF_MAX
-        )
-        this._setReconnectTimer(delay)
-      } else {
-        this._aqua.emit(
-          AqualinkEvents.Debug,
-          `Max reconnect attempts/failures reached for guild ${this._guildId}`
-        )
-        if (this._player) this._player._resuming = false
-        this._handleDisconnect()
-      }
-      return false
-    } finally {
-      this._stateFlags &= ~STATE.ATTEMPTING_RESUME
-      sharedPool.release(payload)
-    }
+    return this._recovery.attemptResume()
   }
 
   _handleReconnect() {
@@ -558,20 +393,24 @@ class Connection {
 
   _scheduleVoiceUpdate() {
     if (this._destroyed) {
-      this._aqua?._trace?.('connection.update.skip', {
-        guildId: this._guildId,
-        reason: 'destroyed'
-      })
+      if (this._aqua?.debugTrace) {
+        this._aqua._trace('connection.update.skip', {
+          guildId: this._guildId,
+          reason: 'destroyed'
+        })
+      }
       return
     }
     if (!this._hasValidVoiceData()) {
-      this._aqua?._trace?.('connection.update.skip', {
-        guildId: this._guildId,
-        reason: 'invalid_voice_data',
-        hasSessionId: !!this.sessionId,
-        hasEndpoint: !!this.endpoint,
-        hasToken: !!this.token
-      })
+      if (this._aqua?.debugTrace) {
+        this._aqua._trace('connection.update.skip', {
+          guildId: this._guildId,
+          reason: 'invalid_voice_data',
+          hasSessionId: !!this.sessionId,
+          hasEndpoint: !!this.endpoint,
+          hasToken: !!this.token
+        })
+      }
       return
     }
 
@@ -598,9 +437,11 @@ class Connection {
 
     if (this._stateFlags & STATE.UPDATE_SCHEDULED) return
     this._stateFlags |= STATE.UPDATE_SCHEDULED
-    this._aqua?._trace?.('connection.update.scheduled', {
-      guildId: this._guildId
-    })
+    if (this._aqua?.debugTrace) {
+      this._aqua._trace('connection.update.scheduled', {
+        guildId: this._guildId
+      })
+    }
 
     this._voiceFlushTimer = setTimeout(
       () => this._executeVoiceUpdate(),
@@ -631,107 +472,20 @@ class Connection {
     this._lastSentVoiceKey = key
 
     this._sendUpdate(pending.payload)
-      .catch(_functions.noop)
+      .catch((error) =>
+        reportSuppressedError(this._aqua, 'connection.update.execute', error, {
+          guildId: this._guildId
+        })
+      )
       .finally(() => sharedPool.release(pending.payload))
   }
 
-
   async _recoverMissingPlayer(isSessionError) {
-    if (this._destroyed || !this._player || this._missingPlayerRecovering)
-      return false
-
-    const now = Date.now()
-    if (now - this._lastMissingPlayerRecoverAt < 5000) return false
-
-    this._missingPlayerRecovering = true
-    this._lastMissingPlayerRecoverAt = now
-    this._aqua?._trace?.('connection.playerMissing.recover.start', {
-      guildId: this._guildId,
-      isSessionError: !!isSessionError
-    })
-
-    try {
-      if (isSessionError && this._player?.nodes?._clearSession) {
-        this._player.nodes._clearSession()
-      }
-
-      this._requestVoiceState()
-      const resumed = await this.attemptResume().catch(() => false)
-      if (!resumed) this.resendVoiceUpdate(true)
-
-      if (this._player.playing && this._player.current?.track) {
-        const data = {
-          track: { encoded: this._player.current.track },
-          paused: !!this._player.paused
-        }
-        if (this._player.position > 0) data.position = this._player.position
-        await this._rest.updatePlayer({
-          guildId: this._guildId,
-          data,
-          noReplace: false
-        })
-      }
-
-      this._aqua?._trace?.('connection.playerMissing.recover.ok', {
-        guildId: this._guildId,
-        resumed: !!resumed,
-        playing: !!this._player.playing
-      })
-      return true
-    } catch (error) {
-      this._aqua?._trace?.('connection.playerMissing.recover.error', {
-        guildId: this._guildId,
-        error: error?.message || String(error)
-      })
-      return false
-    } finally {
-      this._missingPlayerRecovering = false
-    }
+    return this._recovery.recoverMissingPlayer(isSessionError)
   }
 
   async _sendUpdate(payload) {
-    if (this._destroyed) throw new Error('Connection destroyed')
-    if (!this._rest) throw new Error('REST interface unavailable')
-
-    try {
-      this._aqua?._trace?.('connection.update.send', {
-        guildId: this._guildId,
-        hasSessionId: !!this._rest?.sessionId,
-        hasVoice:
-          !!payload?.data?.voice?.sessionId && !!payload?.data?.voice?.endpoint
-      })
-      await this._rest.updatePlayer(payload)
-      this._aqua?._trace?.('connection.update.ok', {
-        guildId: this._guildId
-      })
-    } catch (e) {
-      this._aqua?._trace?.('connection.update.error', {
-        guildId: this._guildId,
-        statusCode: e?.statusCode || e?.response?.statusCode || null,
-        error: e?.message || String(e)
-      })
-      if (e.statusCode === 404 || e.response?.statusCode === 404) {
-        const isSessionError = e.body?.message?.includes('sessionId') || false
-        const recovered = await this._recoverMissingPlayer(isSessionError)
-        if (recovered) return
-
-        if (this._aqua) {
-          this._aqua.emit(
-            AqualinkEvents.Debug,
-            `[Aqua/Connection] Player ${this._guildId} not found (404)${isSessionError ? ' - Session invalid' : ''}. Recovery failed, destroying.`
-          )
-          await this._aqua.destroyPlayer(this._guildId)
-        }
-        throw e
-      }
-      if (!_functions.isNetworkError(e)) {
-        this._aqua.emit(
-          AqualinkEvents.Debug,
-          new Error(`Voice update failed: ${e?.message || e}`)
-        )
-      }
-      throw e
-    }
+    return this._recovery.sendUpdate(payload)
   }
 
   destroy() {
@@ -755,6 +509,7 @@ class Connection {
     this._reconnectAttempts = 0
     this._consecutiveFailures = 0
     this._lastVoiceDataUpdate = 0
+    this._recovery = null
   }
 }
 

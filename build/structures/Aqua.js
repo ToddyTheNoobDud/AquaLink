@@ -1,10 +1,12 @@
 const fs = require('node:fs')
-const readline = require('node:readline')
+const _readline = require('node:readline')
 const { EventEmitter } = require('node:events')
 const { AqualinkEvents } = require('./AqualinkEvents')
+const AquaRecovery = require('./AquaRecovery')
 const Node = require('./Node')
 const Player = require('./Player')
 const Track = require('./Track')
+const { reportSuppressedError } = require('./Reporting')
 const { version: pkgVersion } = require('../../package.json')
 
 const SEARCH_PREFIX = ':'
@@ -29,6 +31,7 @@ const MAX_FAILOVER_QUEUE = 50
 const MAX_REBUILD_LOCKS = 100
 const WRITE_BUFFER_SIZE = 100
 const TRACE_BUFFER_SIZE = 3000
+const VOICE_STATE_QUEUE_INTERVAL = 900
 
 const DEFAULT_OPTIONS = Object.freeze({
   shouldDeleteMessage: false,
@@ -106,7 +109,6 @@ class Aqua extends EventEmitter {
     this.players = new Map()
     this.clientId = null
     this.initiated = false
-    this.destroyed = false
     this.version = pkgVersion
 
     const merged = { ...DEFAULT_OPTIONS, ...options }
@@ -139,14 +141,13 @@ class Aqua extends EventEmitter {
     )
     this.traceSink =
       typeof merged.traceSink === 'function' ? merged.traceSink : null
-    this._traceBuffer = new Array(this.traceMaxEntries)
+    this._traceBuffer = this.debugTrace ? new Array(this.traceMaxEntries) : null
     this._traceBufferCount = 0
     this._traceBufferIndex = 0
     this._traceSeq = 0
 
-    this._nodeStates = new Map()
-    this._failoverQueue = new Map()
-    this._lastFailoverAttempt = new Map()
+    this._failoverState = Object.create(null)
+    this._guildLifecycleLocks = new Map()
     this._brokenPlayers = new Map()
     this._rebuildLocks = new Set()
     this._leastUsedNodesCache = null
@@ -154,22 +155,41 @@ class Aqua extends EventEmitter {
     this._nodeLoadCache = new Map()
     this._eventHandlers = null
     this._loading = false
+    this._voiceStateQueue = []
+    this._voiceStateQueueHead = 0
+    this._voiceStateQueued = new Set()
+    this._voiceStatePending = new Map()
+    this._voiceStateFlushTimer = null
+    this._lastVoiceStateSendAt = 0
+    this._recovery = new AquaRecovery(this, {
+      _functions,
+      MAX_CONCURRENT_OPS,
+      BROKEN_PLAYER_TTL,
+      FAILOVER_CLEANUP_TTL,
+      MAX_FAILOVER_QUEUE,
+      MAX_REBUILD_LOCKS,
+      PLAYER_BATCH_SIZE,
+      RECONNECT_DELAY,
+      NODE_TIMEOUT,
+      EMPTY_ARRAY
+    })
 
     if (this.autoResume) this._bindEventHandlers()
   }
 
   _trace(event, data = null) {
     if (!this.debugTrace) return
+    if (!this._traceBuffer || this._traceBuffer.length !== this.traceMaxEntries) {
+      this._traceBuffer = new Array(this.traceMaxEntries)
+      this._traceBufferCount = 0
+      this._traceBufferIndex = 0
+    }
+    const resolvedData = typeof data === 'function' ? data() : data
     const entry = {
       seq: ++this._traceSeq,
       at: Date.now(),
       event,
-      data
-    }
-    if (this._traceBuffer.length !== this.traceMaxEntries) {
-      this._traceBuffer = new Array(this.traceMaxEntries)
-      this._traceBufferCount = 0
-      this._traceBufferIndex = 0
+      data: resolvedData
     }
     this._traceBuffer[this._traceBufferIndex] = entry
     this._traceBufferIndex = (this._traceBufferIndex + 1) % this.traceMaxEntries
@@ -182,6 +202,7 @@ class Aqua extends EventEmitter {
 
   getTrace(limit = 300) {
     const max = Math.max(1, Number(limit) || 300)
+    if (!this._traceBuffer) return []
     const count = Math.min(max, this._traceBufferCount)
     if (!count) return []
     const out = new Array(count)
@@ -196,7 +217,7 @@ class Aqua extends EventEmitter {
   }
 
   clearTrace() {
-    this._traceBuffer.fill(undefined)
+    if (this._traceBuffer) this._traceBuffer.fill(undefined)
     this._traceBufferCount = 0
     this._traceBufferIndex = 0
   }
@@ -215,15 +236,101 @@ class Aqua extends EventEmitter {
     }
   }
 
+  queueVoiceStateUpdate(data) {
+    const guildId = data?.guild_id ? String(data.guild_id) : null
+    if (!guildId) return false
+
+    this._voiceStatePending.set(guildId, data)
+    if (!this._voiceStateQueued.has(guildId)) {
+      this._voiceStateQueued.add(guildId)
+      this._voiceStateQueue.push(guildId)
+    }
+
+    if (this.debugTrace) {
+      this._trace('voice.queue.enqueue', {
+        guildId,
+        size: this._voiceStateQueued.size
+      })
+    }
+    this._scheduleVoiceStateFlush()
+    return true
+  }
+
+  _scheduleVoiceStateFlush(delay = 0) {
+    if (this._voiceStateFlushTimer) return
+    this._voiceStateFlushTimer = setTimeout(
+      () => {
+        this._voiceStateFlushTimer = null
+        this._flushVoiceStateQueue()
+      },
+      Math.max(0, delay)
+    )
+    this._voiceStateFlushTimer.unref?.()
+  }
+
+  _flushVoiceStateQueue() {
+    if (!this._voiceStateQueued.size) return
+
+    const now = Date.now()
+    const waitFor =
+      VOICE_STATE_QUEUE_INTERVAL - (now - this._lastVoiceStateSendAt)
+    if (waitFor > 0) {
+      this._scheduleVoiceStateFlush(waitFor)
+      return
+    }
+
+    let guildId = null
+    while (this._voiceStateQueueHead < this._voiceStateQueue.length) {
+      const candidate = this._voiceStateQueue[this._voiceStateQueueHead]
+      this._voiceStateQueue[this._voiceStateQueueHead] = undefined
+      this._voiceStateQueueHead++
+      if (candidate && this._voiceStateQueued.has(candidate)) {
+        guildId = candidate
+        this._voiceStateQueued.delete(candidate)
+        break
+      }
+    }
+
+    if (
+      this._voiceStateQueueHead > 1024 ||
+      this._voiceStateQueueHead > this._voiceStateQueue.length / 2
+    ) {
+      this._voiceStateQueue = this._voiceStateQueue.slice(
+        this._voiceStateQueueHead
+      )
+      this._voiceStateQueueHead = 0
+    }
+
+    const data = guildId ? this._voiceStatePending.get(guildId) : null
+    if (guildId) this._voiceStatePending.delete(guildId)
+
+    if (data) {
+      this._lastVoiceStateSendAt = now
+      if (this.debugTrace) {
+        this._trace('voice.queue.send', {
+          guildId,
+          remaining: this._voiceStateQueued.size
+        })
+      }
+      _functions.safeCall(() => this.send({ op: 4, d: data }))
+    }
+
+    if (this._voiceStateQueued.size) {
+      this._scheduleVoiceStateFlush(VOICE_STATE_QUEUE_INTERVAL)
+    }
+  }
+
   _bindEventHandlers() {
     this._eventHandlers = {
       onNodeConnect: (node) => {
-        this._trace('node.connect', { node: node?.name || node?.host })
+        if (this.debugTrace)
+          this._trace('node.connect', { node: node?.name || node?.host })
         this._invalidateCache()
         this._performCleanup()
       },
       onNodeDisconnect: (node) => {
-        this._trace('node.disconnect', { node: node?.name || node?.host })
+        if (this.debugTrace)
+          this._trace('node.disconnect', { node: node?.name || node?.host })
         this._invalidateCache()
         queueMicrotask(() => {
           this._storeBrokenPlayers(node)
@@ -231,11 +338,13 @@ class Aqua extends EventEmitter {
         })
       },
       onNodeReady: (node, { resumed }) => {
-        this._trace('node.ready', {
-          node: node?.name || node?.host,
-          resumed: !!resumed,
-          players: this.players.size
-        })
+        if (this.debugTrace) {
+          this._trace('node.ready', {
+            node: node?.name || node?.host,
+            resumed: !!resumed,
+            players: this.players.size
+          })
+        }
         if (resumed) {
           const batch = []
           for (const player of this.players.values()) {
@@ -250,7 +359,16 @@ class Aqua extends EventEmitter {
           return
         }
         queueMicrotask(() => {
-          this._rebuildBrokenPlayers(node).catch(_functions.noop)
+          this._rebuildBrokenPlayers(node).catch((error) =>
+            reportSuppressedError(
+              this,
+              'aqua.nodeReady.rebuildBrokenPlayers',
+              error,
+              {
+                node: node?.name || node?.host
+              }
+            )
+          )
         })
       }
     }
@@ -260,9 +378,6 @@ class Aqua extends EventEmitter {
   }
 
   destroy() {
-    if (this.destroyed) return
-    this.destroyed = true
-
     if (this._eventHandlers) {
       this.off(AqualinkEvents.NodeConnect, this._eventHandlers.onNodeConnect)
       this.off(
@@ -273,20 +388,27 @@ class Aqua extends EventEmitter {
       this._eventHandlers = null
     }
     this.removeAllListeners()
+    if (this._voiceStateFlushTimer) {
+      clearTimeout(this._voiceStateFlushTimer)
+      this._voiceStateFlushTimer = null
+    }
+    this._voiceStateQueue.length = 0
+    this._voiceStateQueueHead = 0
+    this._voiceStateQueued.clear()
+    this._voiceStatePending.clear()
 
     for (const id of Array.from(this.nodeMap.keys())) this._destroyNode(id)
     for (const player of Array.from(this.players.values()))
       _functions.safeCall(() => player.destroy())
 
     this.players.clear()
-    this._nodeStates.clear()
-    this._failoverQueue.clear()
-    this._lastFailoverAttempt.clear()
+    this._failoverState = Object.create(null)
+    this._guildLifecycleLocks.clear()
     this._brokenPlayers.clear()
     this._rebuildLocks.clear()
     this._nodeLoadCache.clear()
     this._invalidateCache()
-    this.initiated = false
+    this._recovery = null
   }
 
   get leastUsedNodes() {
@@ -366,7 +488,9 @@ class Aqua extends EventEmitter {
 
     if (this.initiated) return this
     if (!this.clientId) return this
-    await this._loadNodeSessions().catch(() => {})
+    await this._loadNodeSessions().catch((error) =>
+      reportSuppressedError(this, 'aqua.init.loadNodeSessions', error)
+    )
     const results = await Promise.allSettled(
       this.nodes.map((n) =>
         Promise.race([
@@ -394,63 +518,23 @@ class Aqua extends EventEmitter {
     const node = new Node(this, options, this.options)
     node.players = new Set()
     this.nodeMap.set(id, node)
-    this._nodeStates.set(id, { connected: false, failoverInProgress: false })
+    this._failoverState[id] = {
+      connected: false,
+      failoverInProgress: false,
+      attempts: 0,
+      lastAttempt: 0
+    }
     try {
-      node.connect()
-      await this._awaitNodeConnect(node)
-      this._nodeStates.set(id, { connected: true, failoverInProgress: false })
+      await node.connect()
+      this._failoverState[id].connected = true
+      this._failoverState[id].failoverInProgress = false
       this._invalidateCache()
       this.emit(AqualinkEvents.NodeCreate, node)
       return node
     } catch (error) {
-      this._destroyNode(id)
+      this._cleanupNode(id)
       throw error
     }
-  }
-
-  _awaitNodeConnect(node, timeout = NODE_TIMEOUT) {
-    if (node?.connected) return Promise.resolve(node)
-    return new Promise((resolve, reject) => {
-      let done = false
-      const finish = (ok, value) => {
-        if (done) return
-        done = true
-        clearTimeout(timer)
-        this.off(AqualinkEvents.NodeConnect, onConnect)
-        this.off(AqualinkEvents.NodeError, onError)
-        ok ? resolve(value) : reject(value)
-      }
-      const onConnect = (connectedNode) => {
-        if (connectedNode !== node) return
-        finish(true, connectedNode)
-      }
-      const onError = (errorNode, error) => {
-        if (errorNode !== node) return
-        finish(
-          false,
-          error instanceof Error
-            ? error
-            : new Error(`Node connect failed: ${error?.message || error}`)
-        )
-      }
-      const timer = setTimeout(
-        () =>
-          finish(
-            false,
-            new Error(
-              `Node connect timeout (${timeout}ms): ${node?.name || node?.host}`
-            )
-          ),
-        timeout
-      )
-      timer.unref?.()
-      this.on(AqualinkEvents.NodeConnect, onConnect)
-      this.on(AqualinkEvents.NodeError, onError)
-    })
-  }
-
-  destroyNode(id) {
-    this._destroyNode(id)
   }
 
   _destroyNode(id) {
@@ -467,361 +551,61 @@ class Aqua extends EventEmitter {
       _functions.safeCall(() => node.players.clear())
       this.nodeMap.delete(id)
     }
-    this._nodeStates.delete(id)
-    this._failoverQueue.delete(id)
-    this._lastFailoverAttempt.delete(id)
+    delete this._failoverState[id]
     this._nodeLoadCache.delete(id)
     this._invalidateCache()
   }
 
   _storeBrokenPlayers(node) {
-    const id = node.name || node.host
-    const now = Date.now()
-    for (const player of this.players.values()) {
-      if (player.nodes !== node) continue
-      const state = this._capturePlayerState(player)
-      if (state) {
-        state.originalNodeId = id
-        state.brokenAt = now
-        this._brokenPlayers.set(String(player.guildId), state)
-      }
-    }
+    return this._recovery.storeBrokenPlayers(node)
   }
 
   async _rebuildBrokenPlayers(node) {
-    const id = node.name || node.host
-    const rebuilds = []
-    const now = Date.now()
-    for (const [guildId, state] of this._brokenPlayers) {
-      if (
-        state.originalNodeId === id &&
-        now - state.brokenAt < BROKEN_PLAYER_TTL
-      ) {
-        rebuilds.push({ guildId, state })
-      }
-    }
-    if (!rebuilds.length) return
-    const successes = []
-    for (let i = 0; i < rebuilds.length; i += MAX_CONCURRENT_OPS) {
-      const batch = rebuilds.slice(i, i + MAX_CONCURRENT_OPS)
-      const results = await Promise.allSettled(
-        batch.map(({ guildId, state }) =>
-          this._rebuildPlayer(state, node).then(() => guildId)
-        )
-      )
-      for (const r of results) {
-        if (r.status === 'fulfilled') successes.push(r.value)
-      }
-    }
-    for (const guildId of successes) this._brokenPlayers.delete(guildId)
-    if (successes.length)
-      this.emit(AqualinkEvents.PlayersRebuilt, node, successes.length)
-    this._performCleanup()
+    return this._recovery.rebuildBrokenPlayers(node)
   }
 
   async _rebuildPlayer(state, targetNode) {
-    const {
-      guildId,
-      textChannel,
-      voiceChannel,
-      current,
-      volume = 65,
-      deaf = true
-    } = state
-    const lockKey = `rebuild_${guildId}`
-    if (this._rebuildLocks.has(lockKey)) return
-    this._rebuildLocks.add(lockKey)
-    try {
-      if (this.players.has(guildId)) {
-        await this.destroyPlayer(guildId)
-        await _functions.delay(RECONNECT_DELAY)
-      }
-      const player = this.createPlayer(targetNode, {
-        guildId,
-        textChannel,
-        voiceChannel,
-        defaultVolume: volume,
-        deaf
-      })
-      if (current && player?.queue?.add) {
-        player.queue.add(current)
-        await player.play()
-        this._seekAfterTrackStart(player, guildId, state.position, 50)
-        if (state.paused) player.pause(true)
-      }
-      return player
-    } finally {
-      this._rebuildLocks.delete(lockKey)
-    }
+    return this._recovery.rebuildPlayer(state, targetNode)
   }
 
   async handleNodeFailover(failedNode) {
-    if (!this.failoverOptions.enabled) return
-    const id = failedNode.name || failedNode.host
-    const now = Date.now()
-    const state = this._nodeStates.get(id)
-    if (state?.failoverInProgress) return
-    const lastAttempt = this._lastFailoverAttempt.get(id)
-    if (lastAttempt && now - lastAttempt < this.failoverOptions.cooldownTime)
-      return
-    const attempts = this._failoverQueue.get(id) || 0
-    if (attempts >= this.failoverOptions.maxFailoverAttempts) return
-
-    this._nodeStates.set(id, { connected: false, failoverInProgress: true })
-    this._lastFailoverAttempt.set(id, now)
-    this._failoverQueue.set(id, attempts + 1)
-
-    try {
-      this.emit(AqualinkEvents.NodeFailover, failedNode)
-      const players = Array.from(failedNode.players || [])
-      if (!players.length) return
-      const available = []
-      for (const n of this.nodeMap.values()) {
-        if (n !== failedNode && n.connected) available.push(n)
-      }
-      if (!available.length) throw new Error('No failover nodes')
-      const results = await this._migratePlayersOptimized(players, available)
-      const successful = results.filter((r) => r.success).length
-      if (successful) {
-        this.emit(
-          AqualinkEvents.NodeFailoverComplete,
-          failedNode,
-          successful,
-          results.length - successful
-        )
-        this._performCleanup()
-      }
-    } catch (error) {
-      this.emit(AqualinkEvents.Error, null, error)
-    } finally {
-      this._nodeStates.set(id, { connected: false, failoverInProgress: false })
-    }
+    return this._recovery.handleNodeFailover(failedNode)
   }
 
   async _migratePlayersOptimized(players, nodes) {
-    const loads = new Map()
-    const counts = new Map()
-    for (const n of nodes) {
-      loads.set(n, this._getNodeLoad(n))
-      counts.set(n, 0)
-    }
-    const pickNode = () => {
-      let best = nodes[0],
-        bestScore = loads.get(best) + counts.get(best)
-      for (let i = 1; i < nodes.length; i++) {
-        const score = loads.get(nodes[i]) + counts.get(nodes[i])
-        if (score < bestScore) {
-          best = nodes[i]
-          bestScore = score
-        }
-      }
-      counts.set(best, counts.get(best) + 1)
-      return best
-    }
-    const results = []
-    for (let i = 0; i < players.length; i += MAX_CONCURRENT_OPS) {
-      const batch = players.slice(i, i + MAX_CONCURRENT_OPS)
-      const batchResults = await Promise.allSettled(
-        batch.map((p) => this._migratePlayer(p, pickNode))
-      )
-      for (const r of batchResults)
-        results.push({ success: r.status === 'fulfilled', error: r.reason })
-    }
-    return results
+    return this._recovery.migratePlayersOptimized(players, nodes)
   }
 
   async _migratePlayer(player, pickNode) {
-    const state = this._capturePlayerState(player)
-    if (!state) throw new Error('Failed to capture state')
-    const { maxRetries, retryDelay } = this.failoverOptions
-    for (let retry = 0; retry < maxRetries; retry++) {
-      try {
-        const targetNode = pickNode()
-        const newPlayer = this._createPlayerOnNode(targetNode, state)
-        await this._restorePlayerState(newPlayer, state)
-        this.emit(AqualinkEvents.PlayerMigrated, player, newPlayer, targetNode)
-        return newPlayer
-      } catch (error) {
-        if (retry === maxRetries - 1) throw error
-        await _functions.delay(retryDelay * 1.5 ** retry)
-      }
-    }
+    return this._recovery.migratePlayer(player, pickNode)
   }
 
   _regionMatches(configuredRegion, extractedRegion) {
-    if (!configuredRegion || !extractedRegion) return false
-    const configured = String(configuredRegion).trim().toLowerCase()
-    const extracted = String(extractedRegion).trim().toLowerCase()
-    if (!configured || !extracted) return false
-    return configured === extracted
+    return this._recovery.regionMatches(configuredRegion, extractedRegion)
   }
 
   _findBestNodeForRegion(region) {
-    if (!region) return null
-    const candidates = []
-    for (const node of this.nodeMap.values()) {
-      if (!node?.connected) continue
-      const regions = Array.isArray(node.regions) ? node.regions : []
-      if (regions.some((r) => this._regionMatches(r, region))) {
-        candidates.push(node)
-      }
-    }
-    if (!candidates.length) return null
-    return this._chooseLeastBusyNode(candidates)
+    return this._recovery.findBestNodeForRegion(region)
   }
 
   async movePlayerToNode(guildId, targetNode, reason = 'region') {
-    const id = String(guildId)
-    const player = this.players.get(id)
-    if (!player || player.destroyed) throw new Error(`Player not found: ${id}`)
-    if (!targetNode?.connected) throw new Error('Target node is not connected')
-    if (player.nodes === targetNode || player.nodes?.name === targetNode.name)
-      return player
-
-    const state = this._capturePlayerState(player)
-    if (!state) throw new Error(`Failed to capture state for ${id}`)
-    const oldPlayer = player
-    const oldNode = oldPlayer.nodes
-    const oldMessage = oldPlayer.nowPlayingMessage || null
-    const oldConn = oldPlayer.connection
-    const oldVoice = oldConn
-      ? {
-          sessionId: oldConn.sessionId || null,
-          endpoint: oldConn.endpoint || null,
-          token: oldConn.token || null,
-          region: oldConn.region || null,
-          channelId: oldConn.channelId || null
-        }
-      : null
-
-    oldPlayer.destroy({
-      preserveClient: true,
-      skipRemote: true,
-      preserveMessage: true,
-      preserveTracks: true,
-      preserveReconnecting: true
-    })
-
-    const newPlayer = this.createPlayer(targetNode, {
-      guildId: state.guildId,
-      textChannel: state.textChannel,
-      voiceChannel: state.voiceChannel,
-      defaultVolume: state.volume || 100,
-      deaf: state.deaf || false,
-      mute: oldPlayer.mute || false,
-      resuming: true,
-      preserveMessage: true
-    })
-
-    // Bootstrap voice on the new node using last known voice state to avoid
-    // "track queued, waiting for voice state" after region migration.
-    if (oldVoice && newPlayer.connection) {
-      if (oldVoice.sessionId)
-        newPlayer.connection.sessionId = oldVoice.sessionId
-      if (oldVoice.endpoint) newPlayer.connection.endpoint = oldVoice.endpoint
-      if (oldVoice.token) newPlayer.connection.token = oldVoice.token
-      if (oldVoice.region) newPlayer.connection.region = oldVoice.region
-      if (oldVoice.channelId)
-        newPlayer.connection.channelId = oldVoice.channelId
-      newPlayer.connection._lastVoiceDataUpdate = Date.now()
-      newPlayer.connection.resendVoiceUpdate(true)
-      this._trace('player.migrate.voiceBootstrap', {
-        guildId: id,
-        from: oldNode?.name || oldNode?.host,
-        to: targetNode?.name || targetNode?.host,
-        hasSessionId: !!newPlayer.connection.sessionId,
-        hasEndpoint: !!newPlayer.connection.endpoint,
-        hasToken: !!newPlayer.connection.token
-      })
-    }
-
-    await this._restorePlayerState(newPlayer, state)
-    if (oldMessage) newPlayer.nowPlayingMessage = oldMessage
-
-    this._trace('player.migrated', {
-      guildId: id,
-      reason,
-      from: oldNode?.name || oldNode?.host,
-      to: targetNode?.name || targetNode?.host,
-      region:
-        newPlayer?.connection?.region || oldPlayer?.connection?.region || null
-    })
-    this.emit(AqualinkEvents.PlayerMigrated, oldPlayer, newPlayer, targetNode)
-    return newPlayer
+    return this._recovery.movePlayerToNode(guildId, targetNode, reason)
   }
 
   _capturePlayerState(player) {
-    if (!player) return null
-    let position = player.position || 0
-    if (player.playing && !player.paused && player.timestamp) {
-      const elapsed = Date.now() - player.timestamp
-      position = Math.min(
-        position + elapsed,
-        player.current?.info?.length || position + elapsed
-      )
-    }
-    return {
-      guildId: player.guildId,
-      textChannel: player.textChannel,
-      voiceChannel: player.voiceChannel,
-      volume: player.volume ?? 100,
-      paused: !!player.paused,
-      position,
-      current: player.current || null,
-      queue: player.queue?.toArray?.() || EMPTY_ARRAY,
-      loop: player.loop,
-      shuffle: player.shuffle,
-      deaf: player.deaf ?? false,
-      connected: !!player.connected
-    }
+    return this._recovery.capturePlayerState(player)
   }
 
   _createPlayerOnNode(targetNode, state) {
-    return this.createPlayer(targetNode, {
-      guildId: state.guildId,
-      textChannel: state.textChannel,
-      voiceChannel: state.voiceChannel,
-      defaultVolume: state.volume || 100,
-      deaf: state.deaf || false
-    })
+    return this._recovery.createPlayerOnNode(targetNode, state)
   }
 
   _seekAfterTrackStart(player, guildId, position, delay = 50) {
-    if (!player || !guildId || !(position > 0)) return
-    const seekOnce = (p) => {
-      if (p.guildId !== guildId) return
-      _functions.unrefTimeout(() => player.seek?.(position), delay)
-    }
-    this.once(AqualinkEvents.TrackStart, seekOnce)
-    player.once('destroy', () => this.off(AqualinkEvents.TrackStart, seekOnce))
+    return this._recovery.seekAfterTrackStart(player, guildId, position, delay)
   }
 
   async _restorePlayerState(newPlayer, state) {
-    const ops = []
-    if (typeof state.volume === 'number') {
-      if (typeof newPlayer.setVolume === 'function')
-        ops.push(newPlayer.setVolume(state.volume))
-      else newPlayer.volume = state.volume
-    }
-    if (state.queue?.length && newPlayer.queue?.add)
-      newPlayer.queue.add(...state.queue)
-    if (state.current && this.failoverOptions.preservePosition) {
-      if (this.failoverOptions.resumePlayback) {
-        ops.push(newPlayer.play(state.current))
-        this._seekAfterTrackStart(
-          newPlayer,
-          newPlayer.guildId,
-          state.position,
-          50
-        )
-        if (state.paused) ops.push(newPlayer.pause(true))
-      } else if (newPlayer.queue?.add) {
-        newPlayer.queue.add(state.current)
-      }
-    }
-    newPlayer.loop = state.loop
-    newPlayer.shuffle = state.shuffle
-    await Promise.allSettled(ops)
+    return this._recovery.restorePlayerState(newPlayer, state)
   }
 
   updateVoiceState({ d, t }) {
@@ -832,13 +616,15 @@ class Aqua extends EventEmitter {
       return
     const player = this.players.get(String(d.guild_id))
     if (!player) return
-    this._trace('voice.gateway', {
-      guildId: String(d.guild_id),
-      type: t,
-      hasSessionId: !!d.session_id,
-      hasEndpoint: !!d.endpoint,
-      hasChannelId: d.channel_id !== undefined
-    })
+    if (this.debugTrace) {
+      this._trace('voice.gateway', {
+        guildId: String(d.guild_id),
+        type: t,
+        hasSessionId: !!d.session_id,
+        hasEndpoint: !!d.endpoint,
+        hasChannelId: d.channel_id !== undefined
+      })
+    }
 
     d.txId = player.txId
     if (t === 'VOICE_STATE_UPDATE') {
@@ -890,26 +676,26 @@ class Aqua extends EventEmitter {
   createPlayer(node, options) {
     const existing = this.players.get(options.guildId)
     if (existing) {
-      try {
+      _functions.safeCall(() =>
         existing.destroy({
           preserveMessage:
             options.preserveMessage || !!options.resuming || false,
           preserveTracks: !!options.resuming || false
         })
-      } catch (err) {
-        this._trace?.('player.destroy.error', { guildId: options.guildId, err })
-      }
+      )
     }
     const player = new Player(this, node, options)
     const guildId = String(options.guildId)
     this.players.set(guildId, player)
-    this._trace('player.create', {
-      guildId,
-      node: node?.name || node?.host,
-      voiceChannel: options.voiceChannel,
-      textChannel: options.textChannel,
-      resuming: !!options.resuming
-    })
+    if (this.debugTrace) {
+      this._trace('player.create', {
+        guildId,
+        node: node?.name || node?.host,
+        voiceChannel: options.voiceChannel,
+        textChannel: options.textChannel,
+        resuming: !!options.resuming
+      })
+    }
     node?.players?.add?.(player)
     player.once('destroy', () => this._handlePlayerDestroy(player))
     player.connect(options)
@@ -921,10 +707,12 @@ class Aqua extends EventEmitter {
     player.nodes?.players?.delete?.(player)
     const guildId = String(player.guildId)
     if (this.players.get(guildId) === player) this.players.delete(guildId)
-    this._trace('player.destroyed', {
-      guildId,
-      node: player?.nodes?.name || player?.nodes?.host
-    })
+    if (this.debugTrace) {
+      this._trace('player.destroyed', {
+        guildId,
+        node: player?.nodes?.name || player?.nodes?.host
+      })
+    }
     this.emit(AqualinkEvents.PlayerDestroyed, player)
   }
 
@@ -1132,194 +920,23 @@ class Aqua extends EventEmitter {
   }
 
   async loadPlayers(filePath = './AquaPlayers.jsonl') {
-    if (this._loading) return
-    this._loading = true
-    const lockFile = `${filePath}.lock`
-    let stream = null,
-      rl = null
-    try {
-      await fs.promises.access(filePath)
-      await fs.promises.writeFile(lockFile, String(process.pid), { flag: 'wx' })
-      await this._waitForFirstNode()
-
-      stream = fs.createReadStream(filePath, { encoding: 'utf8' })
-      rl = readline.createInterface({ input: stream, crlfDelay: Infinity })
-
-      const batch = []
-      for await (const line of rl) {
-        if (!line.trim()) continue
-        try {
-          const parsed = JSON.parse(line)
-          if (parsed.type === 'node_sessions') continue
-          batch.push(parsed)
-        } catch {
-          continue
-        }
-        if (batch.length >= PLAYER_BATCH_SIZE) {
-          await Promise.allSettled(batch.map((p) => this._restorePlayer(p)))
-          batch.length = 0
-        }
-      }
-      if (batch.length)
-        await Promise.allSettled(batch.map((p) => this._restorePlayer(p)))
-      await fs.promises.writeFile(filePath, '')
-    } catch (err) {
-      if (err.code !== 'ENOENT') {
-        console.error(`[Aqua/Autoresume]Error loading players:`, err)
-        this.emit(AqualinkEvents.Error, null, err)
-      }
-    } finally {
-      this._loading = false
-      if (rl) _functions.safeCall(() => rl.close())
-      if (stream) _functions.safeCall(() => stream.destroy())
-      await fs.promises.unlink(lockFile).catch(_functions.noop)
-    }
+    return this._recovery.loadPlayers(filePath)
   }
 
   async _restorePlayer(p) {
-    try {
-      const gId = String(p.g)
-      const existing = this.players.get(gId)
-      if (existing?.playing) return
-
-      const player =
-        existing ||
-        this.createPlayer(this._chooseLeastBusyNode(this.leastUsedNodes), {
-          guildId: gId,
-          textChannel: p.t,
-          voiceChannel: p.v,
-          defaultVolume: p.vol || 65,
-          deaf: true,
-          resuming: !!p.resuming
-        })
-      player._resuming = !!p.resuming
-      const requester = _functions.parseRequester(p.r)
-      const tracksToResolve = [p.u, ...(p.q || [])]
-        .filter(Boolean)
-        .slice(0, this.maxTracksRestore)
-      const resolved = await Promise.all(
-        tracksToResolve.map((uri) =>
-          this.resolve({ query: uri, requester }).catch(() => null)
-        )
-      )
-      const validTracks = resolved.flatMap((r) => r?.tracks || [])
-      if (validTracks.length && player.queue?.add) {
-        player.queue.add(...validTracks)
-      }
-      if (p.u && validTracks[0]) {
-        if (p.vol != null) {
-          if (typeof player.setVolume === 'function')
-            await player.setVolume(p.vol)
-          else player.volume = p.vol
-        }
-
-        this._seekAfterTrackStart(player, gId, p.p, 100)
-
-        await player.play(undefined, { startTime: p.p, paused: p.pa })
-      }
-      if (p.nw && p.t) {
-        const channel = this.client.channels?.cache?.get?.(p.t)
-        if (channel?.messages?.fetch) {
-          player.nowPlayingMessage = await channel.messages
-            .fetch(p.nw)
-            .catch(() => null)
-        } else if (this.client.messages?.fetch) {
-          player.nowPlayingMessage = await this.client.messages
-            .fetch(p.nw, p.t)
-            .catch(() => null)
-        }
-        this._trace('player.nowPlaying.restore', {
-          guildId: gId,
-          messageId: p.nw,
-          restored: !!player.nowPlayingMessage
-        })
-      }
-    } catch (e) {
-      console.error(
-        `[Aqua/Autoresume]Failed to restore player for guild: ${p.g}`,
-        e
-      )
-    }
+    return this._recovery.restorePlayer(p)
   }
 
   async _waitForFirstNode(timeout = NODE_TIMEOUT) {
-    if (this.leastUsedNodes.length) return
-    return new Promise((resolve, reject) => {
-      let resolved = false
-      const cleanup = () => {
-        if (resolved) return
-        resolved = true
-        clearTimeout(timer)
-        this.off(AqualinkEvents.NodeConnect, onReady)
-        this.off(AqualinkEvents.NodeCreate, onReady)
-      }
-      const onReady = () => {
-        if (this.leastUsedNodes.length) {
-          cleanup()
-          resolve()
-        }
-      }
-      const timer = setTimeout(() => {
-        cleanup()
-        reject(new Error('Timeout waiting for first node'))
-      }, timeout)
-      timer.unref?.()
-      this.on(AqualinkEvents.NodeConnect, onReady)
-      this.on(AqualinkEvents.NodeCreate, onReady)
-      onReady()
-    })
+    return this._recovery.waitForFirstNode(timeout)
   }
 
   _performCleanup() {
-    const now = Date.now()
-    for (const [guildId, state] of this._brokenPlayers) {
-      if (now - state.brokenAt > BROKEN_PLAYER_TTL)
-        this._brokenPlayers.delete(guildId)
-    }
-    for (const [id, ts] of this._lastFailoverAttempt) {
-      if (now - ts > FAILOVER_CLEANUP_TTL) {
-        this._lastFailoverAttempt.delete(id)
-        this._failoverQueue.delete(id)
-      }
-    }
-    if (this._failoverQueue.size > MAX_FAILOVER_QUEUE)
-      this._failoverQueue.clear()
-    if (this._rebuildLocks.size > MAX_REBUILD_LOCKS) this._rebuildLocks.clear()
-    for (const id of this._nodeStates.keys()) {
-      if (!this.nodeMap.has(id)) this._nodeStates.delete(id)
-    }
+    return this._recovery.performCleanup()
   }
 
   async _loadNodeSessions(filePath = './AquaPlayers.jsonl') {
-    let stream = null,
-      rl = null
-    try {
-      await fs.promises.access(filePath)
-      stream = fs.createReadStream(filePath, { encoding: 'utf8' })
-      rl = readline.createInterface({ input: stream, crlfDelay: Infinity })
-
-      for await (const line of rl) {
-        if (!line.trim()) continue
-        try {
-          const parsed = JSON.parse(line)
-          if (parsed.type === 'node_sessions') {
-            for (const [name, sessionId] of Object.entries(parsed.data)) {
-              const nodeOptions = this.nodes.find(
-                (n) => (n.name || n.host) === name
-              )
-              if (nodeOptions) {
-                nodeOptions.sessionId = sessionId
-              }
-            }
-            break
-          }
-        } catch {}
-      }
-    } catch {
-    } finally {
-      if (rl) _functions.safeCall(() => rl.close())
-      if (stream) _functions.safeCall(() => stream.destroy())
-    }
+    return this._recovery.loadNodeSessions(filePath)
   }
 }
 
