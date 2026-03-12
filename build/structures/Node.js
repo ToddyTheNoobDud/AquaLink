@@ -685,6 +685,9 @@ class Node {
             player.voiceChannel
           ) {
               try {
+                const recoveryToken = player._claimVoiceRecovery?.(
+                  'node_resume_rejoin'
+                )
                 this._emitDebug(`Rejoining voice for guild ${guildId} on resume`)
                 if (this.aqua?.debugTrace) {
                   this.aqua._trace('node.resume.rejoin', {
@@ -693,11 +696,12 @@ class Node {
                     voiceChannel: player.voiceChannel
                   })
                 }
-              player.connect({
-                voiceChannel: player.voiceChannel,
-                deaf: player.deaf,
-                mute: player.mute
-              })
+                if (player._isVoiceRecoveryActive?.(recoveryToken))
+                  player.connect({
+                    voiceChannel: player.voiceChannel,
+                    deaf: player.deaf,
+                    mute: player.mute
+                  })
             } catch (e) {
               this._emitDebug(
                 `Failed to rejoin voice for ${guildId}: ${e?.message || e}`

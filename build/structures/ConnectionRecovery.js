@@ -244,11 +244,15 @@ class ConnectionRecovery {
     }
 
     try {
+      const recoveryToken = conn._player._claimVoiceRecovery?.(
+        'missing_player_recover'
+      )
       if (isSessionError && conn._player?.nodes?._clearSession) {
         conn._player.nodes._clearSession()
       }
 
-      conn._requestVoiceState()
+      if (conn._player?._isVoiceRecoveryActive?.(recoveryToken))
+        conn._requestVoiceState()
       const resumed = await this.attemptResume().catch((error) => {
         reportSuppressedError(
           conn._aqua,
@@ -260,7 +264,11 @@ class ConnectionRecovery {
         )
         return false
       })
-      if (!resumed) conn.resendVoiceUpdate(true)
+      if (resumed) {
+        conn._player?._clearVoiceRecovery?.(recoveryToken, 'missing_player_resumed')
+      } else if (conn._player?._isVoiceRecoveryActive?.(recoveryToken)) {
+        conn.resendVoiceUpdate(true)
+      }
 
       if (conn._player.playing && conn._player.current?.track) {
         const data = {

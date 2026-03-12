@@ -46,8 +46,10 @@ class PlayerLifecycle {
         !player._voiceRecovering
       ) {
         player._voiceDownSince = Date.now()
+        const recoveryToken = player._claimVoiceRecovery('player_update_resume')
         player._createTimer(() => {
           if (
+            !player._isVoiceRecoveryActive(recoveryToken) ||
             player.connected ||
             player.destroyed ||
             player._reconnecting ||
@@ -62,6 +64,8 @@ class PlayerLifecycle {
     } else {
       player._voiceDownSince = 0
       player.state = this.PLAYER_STATE.READY
+      player._clearVoiceRecovery(undefined, 'connected')
+      player._voiceRecovering = false
 
       if (player._reconnecting && !player._isActivelyReconnecting) {
         player._reconnecting = false
@@ -144,8 +148,11 @@ class PlayerLifecycle {
     if (!hasVoiceData) {
       const downFor = Date.now() - player._voiceDownSince
       if (downFor > this.VOICE_DOWN_THRESHOLD * this.VOICE_ABANDON_MULTIPLIER) {
-        player.connection?._requestVoiceState?.()
-        player.connection?.resendVoiceUpdate(true)
+        const recoveryToken = player._claimVoiceRecovery('watchdog_voice_refresh')
+        if (player._isVoiceRecoveryActive(recoveryToken))
+          player.connection?._requestVoiceState?.()
+        if (player._isVoiceRecoveryActive(recoveryToken))
+          player.connection?.resendVoiceUpdate(true)
         player.reconnectionRetries = Math.min(
           player.reconnectionRetries + 1,
           30
@@ -160,12 +167,16 @@ class PlayerLifecycle {
       return
     }
 
+    const recoveryToken = player._claimVoiceRecovery('watchdog_resume')
     player._voiceRecovering = true
     try {
+      if (!player._isVoiceRecoveryActive(recoveryToken)) return
       if (await player.connection.attemptResume()) {
         player.reconnectionRetries = player._voiceDownSince = 0
+        player._clearVoiceRecovery(recoveryToken, 'resumed')
         return
       }
+      if (!player._isVoiceRecoveryActive(recoveryToken)) return
       const originalMute = player.mute
       player.send({
         guild_id: player.guildId,
@@ -174,7 +185,7 @@ class PlayerLifecycle {
         self_mute: !originalMute
       })
       await player._delay(this.MUTE_TOGGLE_DELAY)
-      if (!player.destroyed) {
+      if (!player.destroyed && player._isVoiceRecoveryActive(recoveryToken)) {
         player.send({
           guild_id: player.guildId,
           channel_id: player.voiceChannel,
@@ -182,7 +193,8 @@ class PlayerLifecycle {
           self_mute: originalMute
         })
       }
-      player.connection.resendVoiceUpdate()
+      if (player._isVoiceRecoveryActive(recoveryToken))
+        player.connection.resendVoiceUpdate()
       player.reconnectionRetries++
     } catch (error) {
       player.reconnectionRetries++
@@ -190,12 +202,16 @@ class PlayerLifecycle {
         guildId: player.guildId
       })
       if (player.reconnectionRetries >= this.RECONNECT_MAX) {
-        player.connection?._requestVoiceState?.()
-        player.connection?.resendVoiceUpdate(true)
+        if (player._isVoiceRecoveryActive(recoveryToken))
+          player.connection?._requestVoiceState?.()
+        if (player._isVoiceRecoveryActive(recoveryToken))
+          player.connection?.resendVoiceUpdate(true)
         player.reconnectionRetries = this.RECONNECT_MAX - 2
       }
     } finally {
-      player._voiceRecovering = false
+      if (player._isVoiceRecoveryActive(recoveryToken)) {
+        player._voiceRecovering = false
+      }
     }
   }
 
@@ -233,10 +249,13 @@ class PlayerLifecycle {
       isRecoverable = false
 
     if (code === 4015 && !player.nodes?.info?.isNodelink) {
+      const recoveryToken = player._claimVoiceRecovery('socket_closed_resume')
       player._reconnecting = true
       player._isActivelyReconnecting = true
       try {
+        if (!player._isVoiceRecoveryActive(recoveryToken)) return
         await this.attemptVoiceResume()
+        player._clearVoiceRecovery(recoveryToken, 'socket_closed_resumed')
         player._reconnecting = false
         player._isActivelyReconnecting = false
         return
@@ -272,19 +291,26 @@ class PlayerLifecycle {
     }
 
     if (code === 4014 || code === 4022) {
+      const recoveryToken = player._claimVoiceRecovery('socket_closed_soft')
       const now = Date.now()
-      if (now - (player._voiceRequestAt || 0) >= 1200) {
+      if (
+        now - (player._voiceRequestAt || 0) >= 1200 &&
+        player._isVoiceRecoveryActive(recoveryToken)
+      ) {
         player._voiceRequestAt = now
-        player.connection?._requestVoiceState?.()
-        player.connection?.resendVoiceUpdate?.(true)
-        this._functions.safeCall(() =>
-          player.connect({
-            guildId,
-            voiceChannel: vcId,
-            deaf,
-            mute
-          })
-        )
+        if (player._isVoiceRecoveryActive(recoveryToken))
+          player.connection?._requestVoiceState?.()
+        if (player._isVoiceRecoveryActive(recoveryToken))
+          player.connection?.resendVoiceUpdate?.(true)
+        if (player._isVoiceRecoveryActive(recoveryToken))
+          this._functions.safeCall(() =>
+            player.connect({
+              guildId,
+              voiceChannel: vcId,
+              deaf,
+              mute
+            })
+          )
       }
 
       if (player.aqua?.debugTrace) {
@@ -298,7 +324,11 @@ class PlayerLifecycle {
       if (waitMs > 0) await player._delay(waitMs)
 
       let resumed = false
-      if (!player.destroyed && !player.connected) {
+      if (
+        player._isVoiceRecoveryActive(recoveryToken) &&
+        !player.destroyed &&
+        !player.connected
+      ) {
         resumed = await player.connection?.attemptResume?.().catch((error) => {
           reportSuppressedError(
             player,
@@ -312,6 +342,7 @@ class PlayerLifecycle {
           return false
         })
       }
+      if (resumed) player._clearVoiceRecovery(recoveryToken, 'socket_soft_resumed')
       if (
         resumed ||
         player.connected ||

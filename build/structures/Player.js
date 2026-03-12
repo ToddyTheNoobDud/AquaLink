@@ -249,6 +249,9 @@ class Player extends EventEmitter {
     this._suppressResumeUntil = 0
     this._lastVoiceUpTraceAt = 0
     this._lastPlayerUpdateAt = Date.now()
+    this._voiceRecoverySeq = 0
+    this._activeVoiceRecoveryToken = 0
+    this._voiceRecoveryReason = null
     this._bindEvents()
     this._startWatchdog()
   }
@@ -283,6 +286,24 @@ class Player extends EventEmitter {
 
   _delay(ms) {
     return new Promise((r) => this._createTimer(r, ms))
+  }
+
+  _claimVoiceRecovery(reason = 'unknown') {
+    const token = ++this._voiceRecoverySeq
+    this._activeVoiceRecoveryToken = token
+    this._voiceRecoveryReason = reason
+    return token
+  }
+
+  _isVoiceRecoveryActive(token) {
+    return !!token && !this.destroyed && this._activeVoiceRecoveryToken === token
+  }
+
+  _clearVoiceRecovery(token = this._activeVoiceRecoveryToken, reason = null) {
+    if (!token || this._activeVoiceRecoveryToken !== token) return false
+    this._activeVoiceRecoveryToken = 0
+    this._voiceRecoveryReason = reason
+    return true
   }
 
   _handlePlayerUpdate(packet) {
@@ -386,6 +407,7 @@ class Player extends EventEmitter {
         !this._voiceRecovering
       ) {
         this._deferredStart = true
+        const recoveryToken = this._claimVoiceRecovery('play_deferred')
         if (this.aqua?.debugTrace) {
           this.aqua._trace('player.play.deferred', {
             guildId: this.guildId,
@@ -393,18 +415,24 @@ class Player extends EventEmitter {
           })
         }
         const now = Date.now()
-        if (now - (this._voiceRequestAt || 0) >= 1200) {
+        if (
+          now - (this._voiceRequestAt || 0) >= 1200 &&
+          this._isVoiceRecoveryActive(recoveryToken)
+        ) {
           this._voiceRequestAt = now
-          this.connection?._requestVoiceState?.()
-          this.connection?.resendVoiceUpdate?.(true)
-          _functions.safeCall(() =>
-            this.connect({
-              guildId: this.guildId,
-              voiceChannel: this.voiceChannel,
-              deaf: this.deaf,
-              mute: this.mute
-            })
-          )
+          if (this._isVoiceRecoveryActive(recoveryToken))
+            this.connection?._requestVoiceState?.()
+          if (this._isVoiceRecoveryActive(recoveryToken))
+            this.connection?.resendVoiceUpdate?.(true)
+          if (this._isVoiceRecoveryActive(recoveryToken))
+            _functions.safeCall(() =>
+              this.connect({
+                guildId: this.guildId,
+                voiceChannel: this.voiceChannel,
+                deaf: this.deaf,
+                mute: this.mute
+              })
+            )
         }
         return this
       }
@@ -535,6 +563,7 @@ class Player extends EventEmitter {
     if (!this.destroyed) {
       this._reconnectNonce++
       this.destroyed = true
+      this._clearVoiceRecovery(undefined, 'destroyed')
       if (this.aqua?.debugTrace) {
         this.aqua._trace('player.destroy', {
           guildId: this.guildId,
