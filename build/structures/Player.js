@@ -1029,6 +1029,7 @@ class Player extends EventEmitter {
     const isReplaced = reason === 'replaced'
 
     if (track) this.previousTracks.push(track)
+    if (isReplaced) return
     if (this.shouldDeleteMessage && !this._reconnecting && !this._resuming)
       _functions.safeDel(this.nowPlayingMessage)
     if (!isReplaced) this.current = null
