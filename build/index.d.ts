@@ -1,4 +1,4 @@
-import { EventEmitter } from 'events'
+import { EventEmitter } from 'node:events'
 
 declare module 'aqualink' {
   // Main Classes

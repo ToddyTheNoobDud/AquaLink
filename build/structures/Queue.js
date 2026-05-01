@@ -2,6 +2,7 @@ class Queue {
   constructor() {
     this._items = []
     this._head = 0
+    this._compactThreshold = 64
   }
 
   get size() {
@@ -40,13 +41,16 @@ class Queue {
 
   _compact(force = false) {
     if (this._head <= 0) return
-    if (!force && this._head <= this._items.length / 2) return
+    if (!force && this._head < this._compactThreshold) return
     const len = this._items.length - this._head
     for (let i = 0; i < len; i++) {
       this._items[i] = this._items[this._head + i]
     }
     this._items.length = len
     this._head = 0
+    if (this._compactThreshold < len) {
+      this._compactThreshold = Math.min(len * 2, 1024)
+    }
   }
 
   shuffle() {

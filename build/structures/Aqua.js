@@ -1,4 +1,4 @@
-const fs = require('node:fs')
+﻿const fs = require('node:fs')
 const path = require('node:path')
 const _readline = require('node:readline')
 const { EventEmitter } = require('node:events')
@@ -191,7 +191,10 @@ class Aqua extends EventEmitter {
 
   _trace(event, data = null) {
     if (!this.debugTrace) return
-    if (!this._traceBuffer || this._traceBuffer.length !== this.traceMaxEntries) {
+    if (
+      !this._traceBuffer ||
+      this._traceBuffer.length !== this.traceMaxEntries
+    ) {
       this._traceBuffer = new Array(this.traceMaxEntries)
       this._traceBufferCount = 0
       this._traceBufferIndex = 0
@@ -346,9 +349,14 @@ class Aqua extends EventEmitter {
         this._invalidateCache()
         queueMicrotask(() => {
           this._storeBrokenPlayers(node).catch((error) =>
-            reportSuppressedError(this, 'aqua.nodeDisconnect.storeBrokenPlayers', error, {
-              node: node?.name || node?.host
-            })
+            reportSuppressedError(
+              this,
+              'aqua.nodeDisconnect.storeBrokenPlayers',
+              error,
+              {
+                node: node?.name || node?.host
+              }
+            )
           )
           this._performCleanup()
         })

@@ -30,6 +30,8 @@ class PlayerLifecycle {
     player.ping = this._functions.isNum(s.ping) ? s.ping : 0
     player.timestamp = this._functions.isNum(s.time) ? s.time : Date.now()
 
+    if (player.destroyed) return
+
     if (!player.connected) {
       if (wasConnected || !player._voiceDownSince) {
         if (player.aqua?.debugTrace) {
@@ -148,7 +150,9 @@ class PlayerLifecycle {
     if (!hasVoiceData) {
       const downFor = Date.now() - player._voiceDownSince
       if (downFor > this.VOICE_DOWN_THRESHOLD * this.VOICE_ABANDON_MULTIPLIER) {
-        const recoveryToken = player._claimVoiceRecovery('watchdog_voice_refresh')
+        const recoveryToken = player._claimVoiceRecovery(
+          'watchdog_voice_refresh'
+        )
         if (player._isVoiceRecoveryActive(recoveryToken))
           player.connection?._requestVoiceState?.()
         if (player._isVoiceRecoveryActive(recoveryToken))
@@ -215,11 +219,15 @@ class PlayerLifecycle {
     }
   }
 
-  async attemptVoiceResume() {
+  async attemptVoiceResume(abortSignal) {
     const player = this.player
-    if (!player.connection?.sessionId) throw new Error('No session')
+    if (!player.connection?.sessionId)
+      throw new Error(`No session (guild=${player.guildId})`)
+    if (abortSignal?.aborted) throw new Error('Resume aborted by signal')
     if (!(await player.connection.attemptResume()))
-      throw new Error('Resume failed')
+      throw new Error(
+        `Resume failed (guild=${player.guildId}, endpoint=${player.connection.endpoint || 'none'})`
+      )
   }
 
   async socketClosed(_player, _track, payload) {
@@ -342,7 +350,8 @@ class PlayerLifecycle {
           return false
         })
       }
-      if (resumed) player._clearVoiceRecovery(recoveryToken, 'socket_soft_resumed')
+      if (resumed)
+        player._clearVoiceRecovery(recoveryToken, 'socket_soft_resumed')
       if (
         resumed ||
         player.connected ||

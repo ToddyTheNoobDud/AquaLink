@@ -80,6 +80,16 @@ const _functions = {
 
   errMsg(err) {
     return err?.message || String(err)
+  },
+
+  statusCode(err) {
+    return (
+      err?.statusCode ||
+      err?.status ||
+      err?.response?.statusCode ||
+      err?.response?.status ||
+      null
+    )
   }
 }
 
@@ -205,7 +215,15 @@ class Node {
         this.isNodelink = !!this.info?.isNodelink
       } catch (err) {
         this.info = null
-        this._emitError(`Failed to fetch node info: ${_functions.errMsg(err)}`)
+        if (_functions.statusCode(err) === 404) {
+          this._emitDebug(
+            'Node info endpoint unavailable (HTTP 404); continuing without remote info'
+          )
+        } else {
+          this._emitError(
+            `Failed to fetch node info: ${_functions.errMsg(err)}`
+          )
+        }
       } finally {
         clearTimeout(timeoutId)
       }
@@ -592,8 +610,8 @@ class Node {
     }
 
     const oldSessionId = this.sessionId
-    const sessionChanged =
-      oldSessionId && oldSessionId !== sessionId && !payload.resumed
+    const sessionInvalidated = !payload.resumed && !!oldSessionId
+    const sessionChanged = sessionInvalidated && oldSessionId !== sessionId
 
     this.sessionId = sessionId
     if (this.aqua?.debugTrace) {
@@ -607,9 +625,9 @@ class Node {
     this.rest.setSessionId(sessionId)
     this._headers['Session-Id'] = sessionId
 
-    if (sessionChanged && this.aqua?.players) {
+    if (sessionInvalidated && this.aqua?.players) {
       this._emitDebug(
-        `Session changed from ${oldSessionId} to ${sessionId}, invalidating stale players`
+        `Session invalidated (resumed=${!!payload.resumed}, old=${oldSessionId}, new=${sessionId}), invalidating stale players`
       )
       try {
         await this.aqua._storeBrokenPlayers?.(this)
@@ -618,6 +636,15 @@ class Node {
           `Failed to snapshot stale players before invalidation: ${e?.message || e}`
         )
       }
+      for (const [, player] of this.aqua.players) {
+        if (player?.nodes === this || player?.nodes?.name === this.name) {
+          if (player.connection) {
+            player.connection._lastEndpoint = null
+            player.connection._stateFlags |= 512
+          }
+        }
+      }
+
       const playersToDestroy = []
       for (const [guildId, player] of this.aqua.players) {
         if (player?.nodes === this || player?.nodes?.name === this.name) {
@@ -650,7 +677,8 @@ class Node {
 
     this.aqua.emit(AqualinkEvents.NodeReady, this, {
       resumed: !!payload.resumed,
-      sessionChanged
+      sessionChanged,
+      sessionInvalidated
     })
 
     if (this.autoResume) {
@@ -672,57 +700,93 @@ class Node {
       })
     }
 
+    let resumeSupported = true
     try {
       await this.rest.makeRequest('PATCH', `/v4/sessions/${this.sessionId}`, {
         resuming: true,
         timeout: this.resumeTimeout
       })
+    } catch (err) {
+      if (_functions.statusCode(err) === 404) {
+        resumeSupported = false
+        this._emitDebug(
+          'Session resume endpoint unavailable (HTTP 404); falling back without server-side session resume'
+        )
+      } else {
+        if (this.aqua?.debugTrace) {
+          this.aqua._trace('node.resume.error', {
+            node: this.name,
+            error: _functions.errMsg(err)
+          })
+        }
+        this._emitError(`Failed to resume session: ${_functions.errMsg(err)}`)
+        throw err
+      }
+    }
 
-      if (this.aqua?.players) {
-        for (const [guildId, player] of this.aqua.players) {
-          if (
-            (player?.nodes === this || player?.nodes?.name === this.name) &&
-            player.voiceChannel
-          ) {
-              try {
-                const recoveryToken = player._claimVoiceRecovery?.(
-                  'node_resume_rejoin'
-                )
-                this._emitDebug(`Rejoining voice for guild ${guildId} on resume`)
-                if (this.aqua?.debugTrace) {
-                  this.aqua._trace('node.resume.rejoin', {
-                    node: this.name,
-                    guildId,
-                    voiceChannel: player.voiceChannel
-                  })
-                }
-                if (player._isVoiceRecoveryActive?.(recoveryToken))
-                  player.connect({
-                    voiceChannel: player.voiceChannel,
-                    deaf: player.deaf,
-                    mute: player.mute
-                  })
+    if (!resumeSupported) {
+      try {
+        const existingPlayers = await this.rest.getPlayers()
+        if (Array.isArray(existingPlayers) && existingPlayers.length === 0) {
+          this._emitDebug(
+            'No players found on Lavalink for this session; will rejoin voice only'
+          )
+        }
+      } catch (_) {
+        // getPlayers may also 404 — that's fine, we already know session is invalid
+      }
+    }
+
+    if (this.aqua?.players) {
+      const PLAYER_BATCH_SIZE = 20
+      const playersToResume = []
+      for (const [guildId, player] of this.aqua.players) {
+        if (
+          (player?.nodes === this || player?.nodes?.name === this.name) &&
+          player.voiceChannel &&
+          !player.destroyed
+        ) {
+          playersToResume.push({ guildId, player })
+        }
+      }
+
+      for (let i = 0; i < playersToResume.length; i += PLAYER_BATCH_SIZE) {
+        const batch = playersToResume.slice(i, i + PLAYER_BATCH_SIZE)
+        await Promise.allSettled(
+          batch.map(async ({ guildId, player }) => {
+            try {
+              const recoveryToken = player._claimVoiceRecovery?.(
+                resumeSupported
+                  ? 'node_resume_rejoin'
+                  : 'node_rejoin_after_resume_404'
+              )
+              this._emitDebug(`Rejoining voice for guild ${guildId} on resume`)
+              if (this.aqua?.debugTrace) {
+                this.aqua._trace('node.resume.rejoin', {
+                  node: this.name,
+                  guildId,
+                  voiceChannel: player.voiceChannel,
+                  resumeSupported
+                })
+              }
+              if (player._isVoiceRecoveryActive?.(recoveryToken))
+                player.connect({
+                  voiceChannel: player.voiceChannel,
+                  deaf: player.deaf,
+                  mute: player.mute
+                })
             } catch (e) {
               this._emitDebug(
                 `Failed to rejoin voice for ${guildId}: ${e?.message || e}`
               )
             }
-          }
-        }
+          })
+        )
       }
+    }
 
-      if (this.aqua.loadPlayers && this.aqua.players.size === 0) {
-        await this.aqua.loadPlayers()
-      }
-    } catch (err) {
-      if (this.aqua?.debugTrace) {
-        this.aqua._trace('node.resume.error', {
-          node: this.name,
-          error: _functions.errMsg(err)
-        })
-      }
-      this._emitError(`Failed to resume session: ${_functions.errMsg(err)}`)
-      throw err
+    if (this.aqua.loadPlayers && this.aqua.players.size === 0) {
+      await this.aqua.loadPlayers()
     }
   }
 

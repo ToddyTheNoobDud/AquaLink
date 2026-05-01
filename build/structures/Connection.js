@@ -321,7 +321,9 @@ class Connection {
     } catch (e) {
       this._aqua?.emit?.(
         AqualinkEvents.Debug,
-        new Error(`Player destroy failed: ${e?.message || e}`)
+        new Error(
+          `Player destroy failed (guild=${this._guildId}, sessionId=${this.sessionId || 'none'}): ${e?.message || e}`
+        )
       )
     } finally {
       this._stateFlags &= ~STATE.DISCONNECTING
@@ -452,6 +454,15 @@ class Connection {
 
   _executeVoiceUpdate() {
     if (this._destroyed) return
+    if (this._stateFlags & STATE.DISCONNECTING) {
+      this._stateFlags &= ~STATE.UPDATE_SCHEDULED
+      this._voiceFlushTimer = null
+      if (this._pendingUpdate) {
+        sharedPool.release(this._pendingUpdate.payload)
+        this._pendingUpdate = null
+      }
+      return
+    }
     this._stateFlags &= ~STATE.UPDATE_SCHEDULED
     this._voiceFlushTimer = null
 

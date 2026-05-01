@@ -202,7 +202,8 @@ class Filters {
   }
 
   _scheduleUpdate() {
-    if (this._pendingUpdate || !this.player) return this
+    if (this._pendingUpdate || !this.player || this.player.destroyed)
+      return this
     this._pendingUpdate = true
     queueMicrotask(() => {
       this._pendingUpdate = false
@@ -398,6 +399,7 @@ class Filters {
   }
 
   async updateFilters() {
+    this._pendingUpdate = false
     if (!this.player || !this._dirty.size) return this
 
     const dirtyKeys = [...this._dirty]

@@ -112,7 +112,10 @@ class AquaRecovery {
       const batch = rebuilds.slice(i, i + this.MAX_CONCURRENT_OPS)
       const results = await Promise.allSettled(
         batch.map((state) =>
-          this.restorePlayer(state, node).then((ok) => ({ ok, guildId: state.g }))
+          this.restorePlayer(state, node).then((ok) => ({
+            ok,
+            guildId: state.g
+          }))
         )
       )
       for (let j = 0; j < results.length; j++) {
@@ -551,8 +554,9 @@ class AquaRecovery {
         if (existing?.playing && !existing.destroyed) return true
         if (existing?.destroyed) this.aqua.players.delete(gId)
 
-        const targetNode =
-          preferredNode?.connected ? preferredNode : this.aqua.leastUsedNodes[0]
+        const targetNode = preferredNode?.connected
+          ? preferredNode
+          : this.aqua.leastUsedNodes[0]
         if (!targetNode?.connected) {
           throw new Error(`No connected node available to restore guild ${gId}`)
         }
