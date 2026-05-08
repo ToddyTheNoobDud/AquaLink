@@ -35,6 +35,7 @@ const EVENT_HANDLERS = Object.freeze({
   PlayerDestroyedEvent: 'playerDestroyed',
   LyricsNotFoundEvent: 'lyricsNotFound',
   MixStartedEvent: 'mixStarted',
+  PlayerReconnectingEvent: 'PlayerReconnectingEvent',
   MixEndedEvent: 'mixEnded'
 })
 
@@ -1170,6 +1171,12 @@ class Player extends EventEmitter {
   }
   mixEnded(_p, t, payload) {
     _functions.emitIfActive(this, AqualinkEvents.MixEnded, t, payload)
+  }
+  PlayerReconnectingEvent(_p, _t, payload) {
+    this._resuming = true
+    _functions.emitIfActive(this, AqualinkEvents.PlayerReconnectingEvent, payload)
+    this.connection?.resendVoiceUpdate?.(true)
+    this.aqua.emit(AqualinkEvents.PlayerReconnect, this, { resuming: true })
   }
 
   async _attemptVoiceResume(abortSignal) {

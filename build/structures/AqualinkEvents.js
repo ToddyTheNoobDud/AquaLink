@@ -36,6 +36,8 @@ const AqualinkEvents = {
   PlayerDestroyed: 'playerDestroy',
   PlayerMigrated: 'playerMigrated',
   PauseEvent: 'pauseEvent',
+  PlayerReconnectingEvent: 'PlayerReconnectingEvent',
+  PlayerReconnect: 'playerReconnect',
   MixStarted: 'mixStarted',
   MixEnded: 'mixEnded'
 }

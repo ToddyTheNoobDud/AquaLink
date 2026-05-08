@@ -76,6 +76,7 @@ const _functions = {
     v.endpoint = conn.endpoint
     v.sessionId = conn.sessionId
     v.channelId = player.voiceChannel
+    v.resuming = player?._resuming ?? false
     payload.data.volume = player?.volume ?? 100
     return payload
   }
