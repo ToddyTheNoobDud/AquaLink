@@ -491,6 +491,15 @@ class Rest {
       )
 
       req.once('error', (e) => finish(false, e))
+      req.on('socket', (socket) => {
+        if (socket.errored) return
+        const onTimeout = () => {
+          req.destroy()
+          finish(false, new Error(`Socket timeout: ${this.timeout}ms`))
+        }
+        if (socket.connecting) socket.once('connect', () => socket.setTimeout(this.timeout, onTimeout))
+        else socket.setTimeout(this.timeout, onTimeout)
+      })
       timer = setTimeout(
         () => finish(false, new Error(`Request timeout: ${this.timeout}ms`)),
         this.timeout

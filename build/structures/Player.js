@@ -168,8 +168,12 @@ class CircularBuffer {
 
   push(item) {
     if (!item) return
+    const oldIndex = this.index
     this.buffer[this.index] = item
     this.index = (this.index + 1) % this.size
+    if (this.count === this.size) {
+      this.buffer[oldIndex] = null
+    }
     if (this.count < this.size) this.count++
   }
 

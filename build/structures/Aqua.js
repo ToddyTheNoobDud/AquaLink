@@ -73,7 +73,11 @@ const _functions = {
   isUrl: (query) => {
     if (typeof query !== 'string' || query.length <= 8) return false
     const q = query.trimStart()
-    return q.startsWith('http://') || q.startsWith('https://')
+    return (
+      q.startsWith('http://') ||
+      q.startsWith('https://') ||
+      q.includes(':')
+    )
   },
   formatQuery(query, source) {
     return this.isUrl(query) ? query : `${source}${SEARCH_PREFIX}${query}`
@@ -762,9 +766,8 @@ class Aqua extends EventEmitter {
       query,
       source || this.defaultSearchPlatform
     )
-    const endpoint = `/${this.restVersion}/loadtracks?identifier=${encodeURIComponent(formatted)}`
     try {
-      const response = await node.rest.makeRequest('GET', endpoint)
+      const response = await node.rest.loadTracks(formatted)
       if (
         !response ||
         response.loadType === 'empty' ||
@@ -773,11 +776,13 @@ class Aqua extends EventEmitter {
         return EMPTY_TRACKS_RESPONSE
       return this._constructResponse(response, requester, node)
     } catch (error) {
-      throw new Error(
-        error?.name === 'AbortError'
-          ? 'Request timeout'
-          : `Resolve failed: ${error?.message || error}`
-      )
+      if (error?.name === 'AbortError') throw new Error('Request timeout')
+      const err = new Error(`Resolve failed: ${error?.message || error}`)
+      if (error?.statusCode != null) err.statusCode = error.statusCode
+      if (error?.body) err.body = error.body
+      if (error?.url) err.url = error.url
+      err.cause = error
+      throw err
     }
   }
 
