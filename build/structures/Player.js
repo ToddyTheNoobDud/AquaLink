@@ -962,21 +962,23 @@ class Player extends EventEmitter {
     const prev = this.previous
     const info = prev?.info
     if (!info?.sourceName || !info.identifier) return this
-    const { sourceName, identifier, uri, author } = info
+    const { sourceName, identifier, uri, author, title } = info
     this.isAutoplay = true
 
-    if (sourceName === 'spotify' && info.identifier) {
-      this.previousIdentifiers.add(info.identifier)
-      if (this.previousIdentifiers.size > PREVIOUS_IDS_MAX) {
-        this.previousIdentifiers.delete(
-          this.previousIdentifiers.values().next().value
-        )
-      }
-      if (!this.autoplaySeed) {
-        this.autoplaySeed = {
-          trackId: identifier,
-          artistIds: Array.isArray(author) ? author.join(',') : author
+    if (sourceName === 'spotify') {
+      if (info.identifier && info.identifier !== 'local') {
+        this.previousIdentifiers.add(info.identifier)
+        if (this.previousIdentifiers.size > PREVIOUS_IDS_MAX) {
+          this.previousIdentifiers.delete(
+            this.previousIdentifiers.values().next().value
+          )
         }
+      }
+      this.autoplaySeed = {
+        trackId: identifier,
+        isrc: prev.isrc || null,
+        title: title || null,
+        author: author || null
       }
     }
 
@@ -1025,27 +1027,51 @@ class Player extends EventEmitter {
   }
 
   async _getAutoplayTrack(sourceName, identifier, uri, requester) {
+    const seen = new Set(this.previousIdentifiers)
+    const prevId = this.current?.identifier
+    if (prevId) seen.add(prevId)
+
     if (sourceName === 'youtube' || sourceName === 'ytmusic') {
       const res = await this.aqua.resolve({
         query: `https://www.youtube.com/watch?v=${identifier}&list=RD${identifier}`,
         source: 'ytmsearch',
         requester
       })
-      return _functions.isInvalidLoad(res)
-        ? null
+      if (_functions.isInvalidLoad(res) || !res.tracks?.length) return null
+      const candidates = res.tracks.filter(t => t.identifier && !seen.has(t.identifier))
+      return candidates.length
+        ? candidates[_functions.randIdx(candidates.length)]
         : res.tracks[_functions.randIdx(res.tracks.length)]
     }
     if (sourceName === 'soundcloud') {
       const scRes = await scAutoPlay(uri)
       if (!scRes?.length) return null
-      const res = await this.aqua.resolve({
-        query: scRes[0],
-        source: 'scsearch',
-        requester
-      })
-      return _functions.isInvalidLoad(res)
-        ? null
-        : res.tracks[_functions.randIdx(res.tracks.length)]
+      
+      for (const link of scRes) {
+        const res = await this.aqua.resolve({
+          query: link,
+          source: 'scsearch',
+          requester
+        })
+        if (!_functions.isInvalidLoad(res) && res.tracks?.length) {
+          const candidates = res.tracks.filter(t => t.identifier && !seen.has(t.identifier))
+          if (candidates.length) {
+            return candidates[_functions.randIdx(candidates.length)]
+          }
+        }
+      }
+      
+      for (const link of scRes) {
+        const res = await this.aqua.resolve({
+          query: link,
+          source: 'scsearch',
+          requester
+        })
+        if (!_functions.isInvalidLoad(res) && res.tracks?.length) {
+          return res.tracks[_functions.randIdx(res.tracks.length)]
+        }
+      }
+      return null
     }
     if (sourceName === 'spotify') {
       const res = await spAutoPlay(

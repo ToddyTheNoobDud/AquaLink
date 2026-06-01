@@ -114,14 +114,44 @@ const scAutoPlay = async (baseUrl) => {
 
 const spAutoPlay = async (seed, player, requester, excludedIds = []) => {
   try {
-    if (!seed?.trackId) return null
+    if (!seed) return null
 
-    const seedQuery = `seed_tracks=${seed.trackId}${seed.artistIds ? `&seed_artists=${seed.artistIds}` : ''}`
-    const res = await player.aqua.resolve({
-      query: seedQuery,
-      source: 'spsearch',
+    let trackId = seed.trackId !== 'local' ? seed.trackId : null
+    let isrc = seed.isrc || null
+
+    if (!trackId && !isrc && seed.title) {
+      const searchRes = await player.aqua.resolve({
+        query: `${seed.author ? `${seed.author} - ` : ''}${seed.title}`,
+        source: 'spsearch',
+        requester
+      })
+      const foundTrack = searchRes?.tracks?.[0]
+      if (foundTrack) {
+        trackId = foundTrack.identifier !== 'local' ? foundTrack.identifier : null
+        isrc = foundTrack.isrc || null
+      }
+    }
+
+    if (!trackId && !isrc) return null
+
+    let query
+    if (isrc) {
+      query = `sprec:mix:isrc:${isrc}`
+    } else {
+      query = `sprec:seed_tracks=${trackId}`
+    }
+
+    let res = await player.aqua.resolve({
+      query,
       requester
     })
+
+    if ((!res || !res.tracks || !res.tracks.length) && isrc && trackId) {
+      res = await player.aqua.resolve({
+        query: `sprec:seed_tracks=${trackId}`,
+        requester
+      })
+    }
 
     const candidates = res?.tracks || []
     if (!candidates.length) return null
@@ -139,7 +169,6 @@ const spAutoPlay = async (seed, player, requester, excludedIds = []) => {
         clientData: { fromAutoplay: true }
       }
       out.push(t)
-      if (out.length === MAX_SP_RESULTS) break
     }
 
     return out.length ? out : null

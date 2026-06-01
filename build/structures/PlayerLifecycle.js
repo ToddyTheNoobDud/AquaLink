@@ -241,6 +241,11 @@ class PlayerLifecycle {
     }
 
     const code = payload?.code
+    if (code === 4014) {
+      await new Promise((resolve) => setTimeout(resolve, 150))
+      if (player.destroyed) return
+    }
+
     if (code === 4006 && player._resuming) {
       if (player.aqua?.debugTrace) {
         player.aqua._trace('player.socketClosed.ignored', {
@@ -253,7 +258,10 @@ class PlayerLifecycle {
     }
 
     let isRecoverable = [4015, 4009, 4006, 4014, 4022].includes(code)
-    if (code === 4014 && player.connection?.isWaitingForDisconnect)
+    if (
+      code === 4014 &&
+      (player.connection?.isWaitingForDisconnect || !player.voiceChannel)
+    )
       isRecoverable = false
 
     if (code === 4015 && !player.nodes?.info?.isNodelink) {

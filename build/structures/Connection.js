@@ -169,7 +169,8 @@ class Connection {
       STATE,
       RECONNECT_DELAY,
       MAX_RECONNECT_ATTEMPTS,
-      RESUME_BACKOFF_MAX
+      RESUME_BACKOFF_MAX,
+      sharedPool
     })
   }
 
@@ -241,6 +242,17 @@ class Connection {
         })
       }
       this.isWaitingForDisconnect = true
+      if (this.voiceChannel !== null) {
+        const oldChannel = this.voiceChannel
+        this.voiceChannel = null
+        if (p) p.voiceChannel = null
+        this._aqua.emit(
+          AqualinkEvents.PlayerMove,
+          p,
+          oldChannel,
+          null
+        )
+      }
       if (!this._nullChannelTimer) {
         this._nullChannelTimer = setTimeout(() => {
           this._nullChannelTimer = null

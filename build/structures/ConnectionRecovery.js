@@ -9,6 +9,7 @@ class ConnectionRecovery {
     this.RECONNECT_DELAY = deps.RECONNECT_DELAY
     this.MAX_RECONNECT_ATTEMPTS = deps.MAX_RECONNECT_ATTEMPTS
     this.RESUME_BACKOFF_MAX = deps.RESUME_BACKOFF_MAX
+    this.sharedPool = deps.sharedPool
   }
 
   setServerUpdate(data) {
@@ -153,7 +154,7 @@ class ConnectionRecovery {
       `Attempt resume: guild=${conn._guildId} endpoint=${conn.endpoint} session=${conn.sessionId}`
     )
 
-    const payload = sharedPool.acquire()
+    const payload = this.sharedPool.acquire()
     try {
       this._functions.fillVoicePayload(
         payload,
@@ -242,7 +243,7 @@ class ConnectionRecovery {
       return false
     } finally {
       conn._stateFlags &= ~this.STATE.ATTEMPTING_RESUME
-      sharedPool.release(payload)
+      this.sharedPool.release(payload)
     }
   }
 
@@ -385,41 +386,5 @@ class ConnectionRecovery {
     }
   }
 }
-
-class PayloadPool {
-  constructor() {
-    this._pool = []
-    this._size = 0
-  }
-
-  _create() {
-    return {
-      guildId: null,
-      data: {
-        voice: {
-          token: null,
-          endpoint: null,
-          sessionId: null
-        },
-        volume: null
-      }
-    }
-  }
-
-  acquire() {
-    return this._size > 0 ? this._pool[--this._size] : this._create()
-  }
-
-  release(payload) {
-    if (!payload || this._size >= 12) return
-    payload.guildId = null
-    const v = payload.data.voice
-    v.token = v.endpoint = v.sessionId = null
-    payload.data.volume = null
-    this._pool[this._size++] = payload
-  }
-}
-
-const sharedPool = new PayloadPool()
 
 module.exports = ConnectionRecovery
