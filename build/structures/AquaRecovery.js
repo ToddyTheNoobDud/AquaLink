@@ -446,12 +446,13 @@ class AquaRecovery {
     if (!player || !guildId || !(position > 0)) return
     const seekOnce = (startedPlayer) => {
       if (startedPlayer.guildId !== guildId) return
+      this.aqua.off(AqualinkEvents.TrackStart, seekOnce)
+      player.removeListener('destroy', cleanup)
       this._functions.unrefTimeout(() => player.seek?.(position), delay)
     }
-    this.aqua.once(AqualinkEvents.TrackStart, seekOnce)
-    player.once('destroy', () =>
-      this.aqua.off(AqualinkEvents.TrackStart, seekOnce)
-    )
+    const cleanup = () => this.aqua.off(AqualinkEvents.TrackStart, seekOnce)
+    this.aqua.on(AqualinkEvents.TrackStart, seekOnce)
+    player.once('destroy', cleanup)
   }
 
   async restorePlayerState(newPlayer, state) {

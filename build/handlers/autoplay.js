@@ -33,7 +33,7 @@ const SC_LINK_RE = /<a\s+itemprop="url"\s+href="(\/[^"]+)"/g
 const MAX_REDIRECTS = 3
 const MAX_RESPONSE_BYTES = 5 * 1024 * 1024 // 5 MB
 const MAX_SC_LINKS = 50
-const MAX_SP_RESULTS = 5
+const _MAX_SP_RESULTS = 5
 const DEFAULT_TIMEOUT_MS = 8000
 
 const fastFetch = (url, depth = 0) =>
@@ -97,85 +97,75 @@ const shuffleInPlace = (arr) => {
 }
 
 const scAutoPlay = async (baseUrl) => {
-  try {
-    const html = await fastFetch(`${baseUrl}/recommended`)
-    const links = []
-    for (const m of html.matchAll(SC_LINK_RE)) {
-      if (!m[1]) continue
-      links.push(`https://soundcloud.com${m[1]}`)
-      if (links.length >= MAX_SC_LINKS) break
-    }
-    return links.length ? shuffleInPlace(links) : []
-  } catch (err) {
-    console.error('scAutoPlay error:', err?.message || err)
-    return []
+  const html = await fastFetch(`${baseUrl}/recommended`)
+  const links = []
+  for (const m of html.matchAll(SC_LINK_RE)) {
+    if (!m[1]) continue
+    links.push(`https://soundcloud.com${m[1]}`)
+    if (links.length >= MAX_SC_LINKS) break
   }
+  return links.length ? shuffleInPlace(links) : []
 }
 
 const spAutoPlay = async (seed, player, requester, excludedIds = []) => {
-  try {
-    if (!seed) return null
+  if (!seed) return null
 
-    let trackId = seed.trackId !== 'local' ? seed.trackId : null
-    let isrc = seed.isrc || null
+  let trackId = seed.trackId !== 'local' ? seed.trackId : null
+  let isrc = seed.isrc || null
 
-    if (!trackId && !isrc && seed.title) {
-      const searchRes = await player.aqua.resolve({
-        query: `${seed.author ? `${seed.author} - ` : ''}${seed.title}`,
-        source: 'spsearch',
-        requester
-      })
-      const foundTrack = searchRes?.tracks?.[0]
-      if (foundTrack) {
-        trackId = foundTrack.identifier !== 'local' ? foundTrack.identifier : null
-        isrc = foundTrack.isrc || null
-      }
-    }
-
-    if (!trackId && !isrc) return null
-
-    let query
-    if (isrc) {
-      query = `sprec:mix:isrc:${isrc}`
-    } else {
-      query = `sprec:seed_tracks=${trackId}`
-    }
-
-    let res = await player.aqua.resolve({
-      query,
+  if (!trackId && !isrc && seed.title) {
+    const searchRes = await player.aqua.resolve({
+      query: `${seed.author ? `${seed.author} - ` : ''}${seed.title}`,
+      source: 'spsearch',
       requester
     })
-
-    if ((!res || !res.tracks || !res.tracks.length) && isrc && trackId) {
-      res = await player.aqua.resolve({
-        query: `sprec:seed_tracks=${trackId}`,
-        requester
-      })
+    const foundTrack = searchRes?.tracks?.[0]
+    if (foundTrack) {
+      trackId = foundTrack.identifier !== 'local' ? foundTrack.identifier : null
+      isrc = foundTrack.isrc || null
     }
-
-    const candidates = res?.tracks || []
-    if (!candidates.length) return null
-
-    const seen = new Set(excludedIds)
-    const prevId = player.current?.identifier
-    if (prevId) seen.add(prevId)
-
-    const out = []
-    for (const t of candidates) {
-      if (seen.has(t.identifier)) continue
-      seen.add(t.identifier)
-      t.pluginInfo = {
-        ...(t.pluginInfo || {}),
-        clientData: { fromAutoplay: true }
-      }
-      out.push(t)
-    }
-
-    return out.length ? out : null
-  } catch (err) {
-    console.error('spAutoPlay error:', err)
-    return null
   }
+
+  if (!trackId && !isrc) return null
+
+  let query
+  if (isrc) {
+    query = `sprec:mix:isrc:${isrc}`
+  } else {
+    query = `sprec:seed_tracks=${trackId}`
+  }
+
+  let res = await player.aqua.resolve({
+    query,
+    requester
+  })
+
+  if (!res?.tracks?.length && isrc && trackId) {
+    res = await player.aqua.resolve({
+      query: `sprec:seed_tracks=${trackId}`,
+      requester
+    })
+  }
+
+  const candidates = res?.tracks || []
+  if (!candidates.length) return null
+
+  const seen = new Set(excludedIds)
+  const prevId = player.current?.identifier
+  if (prevId) seen.add(prevId)
+
+  const out = []
+  for (const t of candidates) {
+    if (seen.has(t.identifier)) continue
+    seen.add(t.identifier)
+    t.pluginInfo = {
+      ...(t.pluginInfo || {}),
+      clientData: { fromAutoplay: true }
+    }
+    out.push(t)
+  }
+
+  return out.length ? out : null
 }
 
 module.exports = {

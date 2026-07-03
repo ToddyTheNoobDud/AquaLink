@@ -3,10 +3,10 @@ import { EventEmitter } from 'node:events'
 declare module 'aqualink' {
   // Main Classes
   export class Aqua extends EventEmitter {
-    constructor(client: any, nodes: NodeOptions[], options?: AquaOptions)
+    constructor(client: unknown, nodes: NodeOptions[], options?: AquaOptions)
 
     // Core Properties
-    client: any
+    client: unknown
     nodes: NodeOptions[]
     nodeMap: Map<string, Node>
     players: Map<string, Player>
@@ -28,7 +28,7 @@ declare module 'aqualink' {
     restrictedDomains: string[]
     allowedDomains: string[]
     loadBalancer: LoadBalancerStrategy
-    send: (payload: any) => void
+    send: (payload: Record<string, unknown>) => void
     autoRegionMigrate: boolean
 
     // Internal State Management
@@ -128,7 +128,7 @@ declare module 'aqualink' {
      */
     search(
       query: string,
-      requester: any,
+      requester: unknown,
       source?: SearchSource
     ): Promise<Track[] | null>
 
@@ -190,8 +190,8 @@ declare module 'aqualink' {
     _getRequestNode(nodes?: string | Node | Node[]): Node
     _chooseLeastBusyNode(nodes: Node[]): Node | null
     _constructResponse(
-      response: any,
-      requester: any,
+      response: Record<string, unknown>,
+      requester: unknown,
       requestNode: Node
     ): ResolveResponse
     _resolveSearchPlatform(source: string): SearchSource
@@ -200,9 +200,11 @@ declare module 'aqualink' {
     _handlePlayerDestroy(player: Player): void
     _waitForFirstNode(timeout?: number): Promise<void>
     _restorePlayer(data: SavedPlayerData): Promise<void>
-    _parseRequester(requesterString: string | null): any
+    _parseRequester(
+      requesterString: string | null
+    ): { id: string; username: string } | null
     _loadPlugins(): Promise<void>
-    _createDefaultSend(): (packet: any) => void
+    _createDefaultSend(): (packet: Record<string, unknown>) => void
     _bindEventHandlers(): void
     _startCleanupTimer(): void
     _onNodeReady(node: Node, data: { resumed: boolean }): void
@@ -239,7 +241,7 @@ declare module 'aqualink' {
     connected: boolean
     info: NodeInfo | null
     isNodelink: boolean
-    ws: any | null // WebSocket
+    ws: unknown | null // WebSocket
     reconnectAttempted: number
     reconnectTimeoutId: NodeJS.Timeout | null
     isDestroyed: boolean
@@ -263,12 +265,12 @@ declare module 'aqualink' {
 
     // Internal Methods
     _handleOpen(): Promise<void>
-    _handleError(error: any): void
-    _handleMessage(data: any, isBinary: boolean): void
-    _handleClose(code: number, reason: any): void
-    _handleReady(payload: any): Promise<void>
+    _handleError(error: Error | unknown): void
+    _handleMessage(data: Buffer | string | unknown, isBinary: boolean): void
+    _handleClose(code: number, reason: string | unknown): void
+    _handleReady(payload: Record<string, unknown>): Promise<void>
     _resumePlayers(): Promise<void>
-    _emitError(error: any): void
+    _emitError(error: Error | unknown): void
     _emitDebug(message: string | (() => string)): void
   }
 
@@ -306,7 +308,7 @@ declare module 'aqualink' {
     position: number
     timestamp: number
     ping: number
-    nowPlayingMessage: any
+    nowPlayingMessage: unknown
     isAutoplayEnabled: boolean
     isAutoplay: boolean
     autoplaySeed: AutoplaySeed | null
@@ -323,12 +325,12 @@ declare module 'aqualink' {
     // Additional Internal Properties
     previousTracks: CircularBuffer
     _updateBatcher: MicrotaskUpdateBatcher
-    _dataStore: Map<string, any> | null
+    _dataStore: Map<string, unknown> | null
     _voiceDownSince: number
     _voiceRecovering: boolean
     _voiceWatchdogTimer: NodeJS.Timer | null
-    _boundPlayerUpdate: (packet: any) => void
-    _boundEvent: (payload: any) => void
+    _boundPlayerUpdate: (packet: Record<string, unknown>) => void
+    _boundEvent: (payload: Record<string, unknown>) => void
     _boundAquaPlayerMove: (oldChannel: string, newChannel: string) => void
     _lastVoiceChannel: string | null
     _lastTextChannel: string | null
@@ -450,63 +452,98 @@ declare module 'aqualink' {
 
     // Advanced Methods
     getLyrics(options?: LyricsOptions): Promise<LyricsResponse | null>
-    subscribeLiveLyrics(): Promise<any>
-    unsubscribeLiveLyrics(): Promise<any>
-    liveLyrics(guildId: string, state: boolean): Promise<any>
+    subscribeLiveLyrics(): Promise<unknown>
+    unsubscribeLiveLyrics(): Promise<unknown>
+    liveLyrics(guildId: string, state: boolean): Promise<unknown>
     autoplay(): Promise<Player>
     setAutoplay(enabled: boolean): Player
-    updatePlayer(data: any): Promise<any>
+    updatePlayer(data: UpdatePlayerOptions['data']): Promise<unknown>
     cleanup(): Promise<void>
-    getActiveMixer(guildId: string): Promise<any[]>
+    getActiveMixer(guildId: string): Promise<unknown[]>
     updateMixerVolume(
       guildId: string,
       mix: string,
       volume: number
-    ): Promise<any>
-    removeMixer(guildId: string, mix: string): Promise<any>
-    addMixer(guildId: string, options: MixerOptions): Promise<any>
+    ): Promise<unknown>
+    removeMixer(guildId: string, mix: string): Promise<unknown>
+    addMixer(guildId: string, options: MixerOptions): Promise<unknown>
     getLoadLyrics(encodedTrack: string): Promise<LyricsResponse | null>
 
     // Data Methods
-    set(key: string, value: any): void
-    get(key: string): any
+    set(key: string, value: unknown): void
+    get<T = unknown>(key: string): T
     clearData(): Player
 
     // Utility Methods
-    send(data: any): void
-    batchUpdatePlayer(data: any, immediate?: boolean): Promise<void>
+    send(data: Record<string, unknown>): void
+    batchUpdatePlayer(
+      data: UpdatePlayerOptions['data'],
+      immediate?: boolean
+    ): Promise<void>
 
     // Internal Methods
-    _parseLoop(loop: any): LoopMode
+    _parseLoop(loop: unknown): LoopMode
     _bindEvents(): void
     _startWatchdog(): void
-    _handlePlayerUpdate(packet: any): void
-    _handleEvent(payload: any): Promise<void>
+    _handlePlayerUpdate(packet: Record<string, unknown>): void
+    _handleEvent(payload: Record<string, unknown>): Promise<void>
     _voiceWatchdog(): Promise<void>
     _attemptVoiceResume(): Promise<void>
     _getAutoplayTrack(
       sourceName: string,
       identifier: string,
       uri: string,
-      requester: any,
+      requester: unknown,
       prev: Track
     ): Promise<Track | null>
     _handleAquaPlayerMove(oldChannel: string, newChannel: string): void
 
     // Event handler methods (called internally)
     trackStart(player: Player, track: Track): Promise<void>
-    trackEnd(player: Player, track: Track, payload: any): Promise<void>
-    trackError(player: Player, track: Track, payload: any): Promise<void>
-    trackStuck(player: Player, track: Track, payload: any): Promise<void>
-    trackChange(player: Player, track: Track, payload: any): Promise<void>
-    socketClosed(player: Player, track: Track, payload: any): Promise<void>
-    lyricsLine(player: Player, track: Track, payload: any): Promise<void>
-    lyricsFound(player: Player, track: Track, payload: any): Promise<void>
-    lyricsNotFound(player: Player, track: Track, payload: any): Promise<void>
+    trackEnd(
+      player: Player,
+      track: Track,
+      payload: Record<string, unknown>
+    ): Promise<void>
+    trackError(
+      player: Player,
+      track: Track,
+      payload: Record<string, unknown>
+    ): Promise<void>
+    trackStuck(
+      player: Player,
+      track: Track,
+      payload: Record<string, unknown>
+    ): Promise<void>
+    trackChange(
+      player: Player,
+      track: Track,
+      payload: Record<string, unknown>
+    ): Promise<void>
+    socketClosed(
+      player: Player,
+      track: Track,
+      payload: Record<string, unknown>
+    ): Promise<void>
+    lyricsLine(
+      player: Player,
+      track: Track,
+      payload: Record<string, unknown>
+    ): Promise<void>
+    lyricsFound(
+      player: Player,
+      track: Track,
+      payload: Record<string, unknown>
+    ): Promise<void>
+    lyricsNotFound(
+      player: Player,
+      track: Track,
+      payload: Record<string, unknown>
+    ): Promise<void>
   }
 
   export class Track {
-    constructor(data?: TrackData, requester?: any, node?: Node)
+    constructor(data?: TrackData, requester?: unknown, node?: Node)
 
     // Properties
     identifier: string
@@ -521,7 +558,7 @@ declare module 'aqualink' {
     artworkUrl: string
     track: string | null
     playlist: PlaylistInfo | null
-    requester: any
+    requester: unknown
     nodes: Node
     node: Node | null
 
@@ -570,7 +607,7 @@ declare module 'aqualink' {
     timeout: number
     baseUrl: string
     defaultHeaders: Record<string, string>
-    agent: any // HTTP/HTTPS Agent
+    agent: unknown // HTTP/HTTPS Agent
     useHttp2: boolean
 
     // Core Methods
@@ -586,19 +623,23 @@ declare module 'aqualink' {
      * @param endpoint API endpoint
      * @param body Request body
      */
-    makeRequest(method: HttpMethod, endpoint: string, body?: any): Promise<any>
+    makeRequest<T = unknown>(
+      method: HttpMethod,
+      endpoint: string,
+      body?: unknown
+    ): Promise<T>
 
     /**
      * Updates a player via REST
      * @param options Update options
      */
-    updatePlayer(options: UpdatePlayerOptions): Promise<any>
+    updatePlayer(options: UpdatePlayerOptions): Promise<unknown>
 
     /**
      * Destroys a player via REST
      * @param guildId Guild ID
      */
-    destroyPlayer(guildId: string): Promise<any>
+    destroyPlayer(guildId: string): Promise<unknown>
 
     /**
      * Gets lyrics for a track
@@ -611,13 +652,13 @@ declare module 'aqualink' {
      * @param guildId Guild ID
      * @param sync Whether to sync with playback
      */
-    subscribeLiveLyrics(guildId: string, sync?: boolean): Promise<any>
+    subscribeLiveLyrics(guildId: string, sync?: boolean): Promise<unknown>
 
     /**
      * Unsubscribes from live lyrics
      * @param guildId Guild ID
      */
-    unsubscribeLiveLyrics(guildId: string): Promise<any>
+    unsubscribeLiveLyrics(guildId: string): Promise<unknown>
 
     /**
      * Gets node statistics
@@ -625,25 +666,25 @@ declare module 'aqualink' {
     getStats(): Promise<NodeStats>
 
     // Additional REST Methods
-    getPlayer(guildId: string): Promise<any>
-    getPlayers(): Promise<any>
-    decodeTrack(encodedTrack: string): Promise<any>
-    decodeTracks(encodedTracks: string[]): Promise<any>
+    getPlayer(guildId: string): Promise<unknown>
+    getPlayers(): Promise<unknown>
+    decodeTrack(encodedTrack: string): Promise<unknown>
+    decodeTracks(encodedTracks: string[]): Promise<unknown>
     getInfo(): Promise<NodeInfo>
     getVersion(): Promise<string>
-    getRoutePlannerStatus(): Promise<any>
-    freeRoutePlannerAddress(address: string): Promise<any>
-    freeAllRoutePlannerAddresses(): Promise<any>
-    addMixer(guildId: string, options: MixerOptions): Promise<any>
-    getActiveMixer(guildId: string): Promise<any[]>
+    getRoutePlannerStatus(): Promise<unknown>
+    freeRoutePlannerAddress(address: string): Promise<unknown>
+    freeAllRoutePlannerAddresses(): Promise<unknown>
+    addMixer(guildId: string, options: MixerOptions): Promise<unknown>
+    getActiveMixer(guildId: string): Promise<unknown[]>
     updateMixerVolume(
       guildId: string,
       mix: string,
       volume: number
-    ): Promise<any>
-    removeMixer(guildId: string, mix: string): Promise<any>
+    ): Promise<unknown>
+    removeMixer(guildId: string, mix: string): Promise<unknown>
     getLoadLyrics(encodedTrack: string): Promise<LyricsResponse>
-    loadTracks(identifier: string): Promise<any>
+    loadTracks(identifier: string): Promise<unknown>
     destroy(): void
   }
 
@@ -738,7 +779,7 @@ declare module 'aqualink' {
     updateFilters(): Promise<Filters>
 
     // Internal Methods
-    _setFilter(filterName: string, enabled: boolean, options?: any): Filters
+    _setFilter(filterName: string, enabled: boolean, options?: unknown): Filters
     _scheduleUpdate(): Filters
   }
 
@@ -759,7 +800,7 @@ declare module 'aqualink' {
     _guildId: string
     _clientId: string
     _lastEndpoint: string | null
-    _pendingUpdate: any
+    _pendingUpdate: unknown
     _updateTimer: NodeJS.Timeout | null
     _hasDebugListeners: boolean
     _hasMoveListeners: boolean
@@ -780,7 +821,7 @@ declare module 'aqualink' {
     _extractRegion(endpoint: string): string | null
     _scheduleVoiceUpdate(isResume?: boolean): void
     _executeVoiceUpdate(): void
-    _sendUpdate(payload: any): Promise<void>
+    _sendUpdate(payload: Record<string, unknown>): Promise<void>
     _handleDisconnect(): void
     _clearPendingUpdate(): void
     _checkRegionMigration(): void
@@ -797,26 +838,26 @@ declare module 'aqualink' {
   export class MicrotaskUpdateBatcher {
     constructor(player: Player)
     player: Player | null
-    updates: any
+    updates: Record<string, unknown> | null
     scheduled: number
     flush: () => Promise<void>
 
-    batch(data: any, immediate?: boolean): Promise<void>
+    batch(data: Record<string, unknown>, immediate?: boolean): Promise<void>
     destroy(): void
     _flush(): Promise<void>
   }
 
   export class CircularBuffer {
     constructor(size?: number)
-    buffer: any[]
+    buffer: unknown[]
     size: number
     index: number
     count: number
 
-    push(item: any): void
-    getLast(): any
+    push(item: unknown): void
+    getLast(): unknown
     clear(): void
-    toArray(): any[]
+    toArray(): unknown[]
   }
 
   // Configuration Interfaces
@@ -826,7 +867,7 @@ declare module 'aqualink' {
     leaveOnEnd?: boolean
     restVersion?: RestVersion
     plugins?: Plugin[]
-    send?: (payload: any) => void
+    send?: (payload: Record<string, unknown>) => void
     autoResume?: boolean
     infiniteReconnects?: boolean
     urlFilteringEnabled?: boolean
@@ -894,7 +935,7 @@ declare module 'aqualink' {
   export interface ResolveOptions {
     query: string
     source?: SearchSource | string
-    requester: any
+    requester: unknown
     nodes?: string | Node | Node[]
   }
 
@@ -903,7 +944,7 @@ declare module 'aqualink' {
     loadType: LoadType
     exception: LavalinkException | null
     playlistInfo: PlaylistInfo | null
-    pluginInfo: Record<string, any>
+    pluginInfo: Record<string, unknown>
     tracks: Track[]
   }
 
@@ -1065,7 +1106,7 @@ declare module 'aqualink' {
   export interface MixerOptions {
     identifier?: string
     encoded?: string
-    userData?: any
+    userData?: unknown
     volume?: number
   }
 
@@ -1123,8 +1164,8 @@ declare module 'aqualink' {
       position?: number
       volume?: number
       paused?: boolean
-      filters?: any
-      voice?: any
+      filters?: Record<string, unknown>
+      voice?: Record<string, unknown>
     }
   }
 
@@ -1161,7 +1202,7 @@ declare module 'aqualink' {
 
   export interface MigrationResult {
     success: boolean
-    error?: any
+    error?: Error | unknown
   }
 
   export interface SavedPlayerData {
@@ -1338,7 +1379,7 @@ declare module 'aqualink' {
 
   export type LoadBalancerStrategy = 'leastLoad' | 'leastRest' | 'random'
 
-  export type EventHandler<T = any> = (...args: T[]) => void | Promise<void>
+  export type EventHandler<T = unknown> = (...args: T[]) => void | Promise<void>
 
   // Event Interfaces
   export interface AquaEvents {
@@ -1346,10 +1387,10 @@ declare module 'aqualink' {
     nodeConnected: (node: Node) => void
     nodeDisconnect: (node: Node, data: { code: number; reason: string }) => void
     nodeError: (node: Node, error: Error) => void
-    nodeReconnect: (node: Node, data: any) => void
+    nodeReconnect: (node: Node, data: Record<string, unknown>) => void
     nodeCreate: (node: Node) => void
     nodeDestroy: (node: Node) => void
-    nodeReady: (node: Node, data: any) => void
+    nodeReady: (node: Node, data: Record<string, unknown>) => void
     nodeFailover: (node: Node) => void
     nodeFailoverComplete: (
       node: Node,
@@ -1358,26 +1399,42 @@ declare module 'aqualink' {
     ) => void
     playerCreate: (player: Player) => void
     playerDestroy: (player: Player) => void
-    playerUpdate: (player: Player, packet: any) => void
+    playerUpdate: (player: Player, packet: Record<string, unknown>) => void
     playerMigrated: (
       oldPlayer: Player,
       newPlayer: Player,
       targetNode: Node
     ) => void
-    playerReconnected: (player: Player, data: any) => void
+    playerReconnected: (player: Player, data: Record<string, unknown>) => void
     trackStart: (player: Player, track: Track) => void
     trackEnd: (player: Player, track: Track, reason?: string) => void
-    trackError: (player: Player, track: Track, error: any) => void
+    trackError: (player: Player, track: Track, error: Error | unknown) => void
     trackStuck: (player: Player, track: Track, thresholdMs: number) => void
-    trackChange: (player: Player, track: Track, payload: any) => void
+    trackChange: (
+      player: Player,
+      track: Track,
+      payload: Record<string, unknown>
+    ) => void
     queueEnd: (player: Player) => void
     playerMove: (oldChannel: string, newChannel: string) => void
     playersRebuilt: (node: Node, count: number) => void
-    reconnectionFailed: (player: Player, data: any) => void
-    socketClosed: (player: Player, payload: any) => void
-    lyricsLine: (player: Player, track: Track, payload: any) => void
-    lyricsFound: (player: Player, track: Track, payload: any) => void
-    lyricsNotFound: (player: Player, track: Track, payload: any) => void
+    reconnectionFailed: (player: Player, data: Record<string, unknown>) => void
+    socketClosed: (player: Player, payload: Record<string, unknown>) => void
+    lyricsLine: (
+      player: Player,
+      track: Track,
+      payload: Record<string, unknown>
+    ) => void
+    lyricsFound: (
+      player: Player,
+      track: Track,
+      payload: Record<string, unknown>
+    ) => void
+    lyricsNotFound: (
+      player: Player,
+      track: Track,
+      payload: Record<string, unknown>
+    ) => void
     autoplayFailed: (player: Player, error: Error) => void
     debug: (source: string, message: string) => void
     error: (node: Node | null, error: Error) => void
@@ -1385,35 +1442,35 @@ declare module 'aqualink' {
 
   export interface PlayerEvents {
     destroy: () => void
-    playerUpdate: (packet: any) => void
-    event: (payload: any) => void
+    playerUpdate: (packet: Record<string, unknown>) => void
+    event: (payload: Record<string, unknown>) => void
     trackStart: (track: Track) => void
     trackEnd: (track: Track, reason?: string) => void
-    trackError: (track: Track, error: any) => void
+    trackError: (track: Track, error: Error | unknown) => void
     trackStuck: (track: Track, thresholdMs: number) => void
-    trackChange: (track: Track, payload: any) => void
-    socketClosed: (payload: any) => void
-    lyricsLine: (track: Track, payload: any) => void
-    lyricsFound: (track: Track, payload: any) => void
-    lyricsNotFound: (track: Track, payload: any) => void
+    trackChange: (track: Track, payload: Record<string, unknown>) => void
+    socketClosed: (payload: Record<string, unknown>) => void
+    lyricsLine: (track: Track, payload: Record<string, unknown>) => void
+    lyricsFound: (track: Track, payload: Record<string, unknown>) => void
+    lyricsNotFound: (track: Track, payload: Record<string, unknown>) => void
   }
 
   // Event Emitter Type Extensions for Aqua
   interface Aqua {
     on<K extends keyof AquaEvents>(event: K, listener: AquaEvents[K]): this
-    on(event: string | symbol, listener: (...args: any[]) => void): this
+    on(event: string | symbol, listener: (...args: unknown[]) => void): this
 
     once<K extends keyof AquaEvents>(event: K, listener: AquaEvents[K]): this
-    once(event: string | symbol, listener: (...args: any[]) => void): this
+    once(event: string | symbol, listener: (...args: unknown[]) => void): this
 
     emit<K extends keyof AquaEvents>(
       event: K,
       ...args: Parameters<AquaEvents[K]>
     ): boolean
-    emit(event: string | symbol, ...args: any[]): boolean
+    emit(event: string | symbol, ...args: unknown[]): boolean
 
     off<K extends keyof AquaEvents>(event: K, listener: AquaEvents[K]): this
-    off(event: string | symbol, listener: (...args: any[]) => void): this
+    off(event: string | symbol, listener: (...args: unknown[]) => void): this
 
     removeListener<K extends keyof AquaEvents>(
       event: K,
@@ -1421,7 +1478,7 @@ declare module 'aqualink' {
     ): this
     removeListener(
       event: string | symbol,
-      listener: (...args: any[]) => void
+      listener: (...args: unknown[]) => void
     ): this
 
     addListener<K extends keyof AquaEvents>(
@@ -1430,7 +1487,7 @@ declare module 'aqualink' {
     ): this
     addListener(
       event: string | symbol,
-      listener: (...args: any[]) => void
+      listener: (...args: unknown[]) => void
     ): this
 
     removeAllListeners<K extends keyof AquaEvents>(event?: K): this
@@ -1439,22 +1496,22 @@ declare module 'aqualink' {
 
   interface Player {
     on<K extends keyof PlayerEvents>(event: K, listener: PlayerEvents[K]): this
-    on(event: string | symbol, listener: (...args: any[]) => void): this
+    on(event: string | symbol, listener: (...args: unknown[]) => void): this
 
     once<K extends keyof PlayerEvents>(
       event: K,
       listener: PlayerEvents[K]
     ): this
-    once(event: string | symbol, listener: (...args: any[]) => void): this
+    once(event: string | symbol, listener: (...args: unknown[]) => void): this
 
     emit<K extends keyof PlayerEvents>(
       event: K,
       ...args: Parameters<PlayerEvents[K]>
     ): boolean
-    emit(event: string | symbol, ...args: any[]): boolean
+    emit(event: string | symbol, ...args: unknown[]): boolean
 
     off<K extends keyof PlayerEvents>(event: K, listener: PlayerEvents[K]): this
-    off(event: string | symbol, listener: (...args: any[]) => void): this
+    off(event: string | symbol, listener: (...args: unknown[]) => void): this
 
     removeListener<K extends keyof PlayerEvents>(
       event: K,
@@ -1462,7 +1519,7 @@ declare module 'aqualink' {
     ): this
     removeListener(
       event: string | symbol,
-      listener: (...args: any[]) => void
+      listener: (...args: unknown[]) => void
     ): this
 
     addListener<K extends keyof PlayerEvents>(
@@ -1471,7 +1528,7 @@ declare module 'aqualink' {
     ): this
     addListener(
       event: string | symbol,
-      listener: (...args: any[]) => void
+      listener: (...args: unknown[]) => void
     ): this
 
     removeAllListeners<K extends keyof PlayerEvents>(event?: K): this
@@ -1491,7 +1548,7 @@ declare module 'aqualink' {
     statusCode?: number
     statusMessage?: string
     headers?: Record<string, string>
-    body?: any
+    body?: unknown
   }
 
   // Extended ResolveOptions for internal use

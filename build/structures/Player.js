@@ -168,12 +168,8 @@ class CircularBuffer {
 
   push(item) {
     if (!item) return
-    const oldIndex = this.index
     this.buffer[this.index] = item
     this.index = (this.index + 1) % this.size
-    if (this.count === this.size) {
-      this.buffer[oldIndex] = null
-    }
     if (this.count < this.size) this.count++
   }
 
@@ -1038,7 +1034,9 @@ class Player extends EventEmitter {
         requester
       })
       if (_functions.isInvalidLoad(res) || !res.tracks?.length) return null
-      const candidates = res.tracks.filter(t => t.identifier && !seen.has(t.identifier))
+      const candidates = res.tracks.filter(
+        (t) => t.identifier && !seen.has(t.identifier)
+      )
       return candidates.length
         ? candidates[_functions.randIdx(candidates.length)]
         : res.tracks[_functions.randIdx(res.tracks.length)]
@@ -1046,32 +1044,24 @@ class Player extends EventEmitter {
     if (sourceName === 'soundcloud') {
       const scRes = await scAutoPlay(uri)
       if (!scRes?.length) return null
-      
+
+      let anyValid = null
       for (const link of scRes) {
         const res = await this.aqua.resolve({
           query: link,
           source: 'scsearch',
           requester
         })
-        if (!_functions.isInvalidLoad(res) && res.tracks?.length) {
-          const candidates = res.tracks.filter(t => t.identifier && !seen.has(t.identifier))
-          if (candidates.length) {
-            return candidates[_functions.randIdx(candidates.length)]
-          }
-        }
+        if (_functions.isInvalidLoad(res) || !res.tracks?.length) continue
+        if (!anyValid)
+          anyValid = res.tracks[_functions.randIdx(res.tracks.length)]
+        const candidates = res.tracks.filter(
+          (t) => t.identifier && !seen.has(t.identifier)
+        )
+        if (candidates.length)
+          return candidates[_functions.randIdx(candidates.length)]
       }
-      
-      for (const link of scRes) {
-        const res = await this.aqua.resolve({
-          query: link,
-          source: 'scsearch',
-          requester
-        })
-        if (!_functions.isInvalidLoad(res) && res.tracks?.length) {
-          return res.tracks[_functions.randIdx(res.tracks.length)]
-        }
-      }
-      return null
+      return anyValid
     }
     if (sourceName === 'spotify') {
       const res = await spAutoPlay(
@@ -1204,7 +1194,11 @@ class Player extends EventEmitter {
   }
   PlayerReconnectingEvent(_p, _t, payload) {
     this._resuming = true
-    _functions.emitIfActive(this, AqualinkEvents.PlayerReconnectingEvent, payload)
+    _functions.emitIfActive(
+      this,
+      AqualinkEvents.PlayerReconnectingEvent,
+      payload
+    )
     this.connection?.resendVoiceUpdate?.(true)
     this.aqua.emit(AqualinkEvents.PlayerReconnect, this, { resuming: true })
   }

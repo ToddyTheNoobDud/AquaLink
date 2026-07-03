@@ -51,9 +51,9 @@ const VoiceRegion = Object.freeze({
   CanadaToronto: 'yyz',
   CanadaMontreal: 'ymq',
 
-  Brazil: 'gru' || 'brazil', // i only know this endpoint lol.
-  Chile: 'scl' || 'chile',
-  Argentina: 'eze' || 'argentina'
+  Brazil: 'gru', // i only know this endpoint lol.
+  Chile: 'scl',
+  Argentina: 'eze'
 })
 
 module.exports = {

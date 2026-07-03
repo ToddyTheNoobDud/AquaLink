@@ -90,7 +90,6 @@ const _functions = {
   parseBody(data, contentType, forceJson) {
     const isJson = forceJson || this.isJsonContent(contentType)
     if (isJson) {
-      if (typeof data === 'string') return JSON.parse(data)
       return JSON.parse(data)
     }
     return typeof data === 'string' ? data : data.toString(UTF8)
@@ -491,14 +490,9 @@ class Rest {
       )
 
       req.once('error', (e) => finish(false, e))
-      req.on('socket', (socket) => {
-        if (socket.errored) return
-        const onTimeout = () => {
-          req.destroy()
-          finish(false, new Error(`Socket timeout: ${this.timeout}ms`))
-        }
-        if (socket.connecting) socket.once('connect', () => socket.setTimeout(this.timeout, onTimeout))
-        else socket.setTimeout(this.timeout, onTimeout)
+      req.setTimeout(this.timeout, () => {
+        req.destroy()
+        finish(false, new Error(`Socket timeout: ${this.timeout}ms`))
       })
       timer = setTimeout(
         () => finish(false, new Error(`Request timeout: ${this.timeout}ms`)),
@@ -842,9 +836,10 @@ class Rest {
       volume: options.volume !== undefined ? options.volume : 0.8
     }
 
+    const gen = this._sessionGeneration
     return this.makeRequest(
       'POST',
-      `/v4/sessions/${this.sessionId}/players/${guildId}/mix`,
+      `${this._getSessionPath(gen)}/players/${guildId}/mix`,
       payload
     )
   }
@@ -852,9 +847,10 @@ class Rest {
   async getActiveMixer(guildId) {
     if (!this.node.isNodelink)
       throw new Error('Mixer endpoints are only available on Nodelink nodes')
+    const gen = this._sessionGeneration
     const response = await this.makeRequest(
       'GET',
-      `/v4/sessions/${this.sessionId}/players/${guildId}/mix`
+      `${this._getSessionPath(gen)}/players/${guildId}/mix`
     )
     return response?.mixes || []
   }
@@ -865,9 +861,10 @@ class Rest {
     if (!guildId || !mix || typeof volume !== 'number')
       throw new Error('You forget to set the guild_id, mix or volume options')
 
+    const gen = this._sessionGeneration
     return this.makeRequest(
       'PATCH',
-      `/v4/sessions/${this.sessionId}/players/${guildId}/mix/${mix}`,
+      `${this._getSessionPath(gen)}/players/${guildId}/mix/${mix}`,
       { volume }
     )
   }
@@ -878,9 +875,10 @@ class Rest {
     if (!guildId || !mix)
       throw new Error('You forget to set the guild_id and/or mix options')
 
+    const gen = this._sessionGeneration
     return this.makeRequest(
       'DELETE',
-      `/v4/sessions/${this.sessionId}/players/${guildId}/mix/${mix}`
+      `${this._getSessionPath(gen)}/players/${guildId}/mix/${mix}`
     )
   }
 

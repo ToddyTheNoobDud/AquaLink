@@ -2,8 +2,8 @@ const YT_ID_REGEX =
   /(?:[?&]v=|youtu\.be\/|\/embed\/|\/shorts\/)([A-Za-z0-9_-]{11})/
 
 const _h = {
-  str: (v, d = '') => (typeof v === 'string'? v : d),
-  num: (v, d = 0) => (Number.isFinite(v)? v : d)
+  str: (v, d = '') => (typeof v === 'string' ? v : d),
+  num: (v, d = 0) => (Number.isFinite(v) ? v : d)
 }
 
 class Track {
@@ -57,7 +57,7 @@ class Track {
 
   get thumbnail() {
     if (this.artworkUrl) return this.artworkUrl
-    if (this._artworkCache!== undefined) return this._artworkCache
+    if (this._artworkCache !== undefined) return this._artworkCache
     this._artworkCache = this._computeArtwork()
     return this._artworkCache
   }
@@ -74,7 +74,7 @@ class Track {
     if (!query) {
       if (this.title) {
         query = this.author
-         ? `${this.author} - ${this.title}`.trim()
+          ? `${this.author} - ${this.title}`.trim()
           : this.title.trim()
       } else if (
         this.identifier &&
@@ -102,21 +102,23 @@ class Track {
 
     this.track =
       typeof found.track === 'string'
-       ? found.track
+        ? found.track
         : found.encoded || this.track
-    this.identifier = fi.identifier?? this.identifier
-    this.title = fi.title?? this.title
-    this.author = fi.author?? this.author
-    this.uri = fi.uri?? this.uri
-    this.sourceName = fi.sourceName?? this.sourceName
-    this.artworkUrl = fi.artworkUrl?? this.artworkUrl
-    this.pluginInfo = fi.pluginInfo?? found.pluginInfo?? this.pluginInfo
-    this.isSeekable = fi.isSeekable?? this.isSeekable
-    this.isStream = fi.isStream?? this.isStream
+    this.identifier = fi.identifier ?? this.identifier
+    this.title = fi.title ?? this.title
+    this.author = fi.author ?? this.author
+    this.uri = fi.uri ?? this.uri
+    this.sourceName = fi.sourceName ?? this.sourceName
+    this.artworkUrl = fi.artworkUrl ?? this.artworkUrl
+    this.pluginInfo = fi.pluginInfo ?? found.pluginInfo ?? this.pluginInfo
+    this.isSeekable = fi.isSeekable ?? this.isSeekable
+    this.isStream = fi.isStream ?? this.isStream
     this.position = _h.num(fi.position, this.position)
     this.duration = _h.num(fi.length, this.duration)
-    this.playlist = found.playlist?? this.playlist
-    this.isrc = _h.str(fi.isrc?? fi.pluginInfo?.isrc?? found.pluginInfo?.isrc?? this.isrc) // keep ISRC
+    this.playlist = found.playlist ?? this.playlist
+    this.isrc = _h.str(
+      fi.isrc ?? fi.pluginInfo?.isrc ?? found.pluginInfo?.isrc ?? this.isrc
+    ) // keep ISRC
     this._infoCache = null
 
     return this
@@ -149,7 +151,7 @@ class Track {
 
   _computeArtwork() {
     if (this.artworkUrl) return this.artworkUrl
-    if (this._artworkCache!== undefined) return this._artworkCache
+    if (this._artworkCache !== undefined) return this._artworkCache
     const id = this.identifier || (this.uri && YT_ID_REGEX.exec(this.uri)?.[1])
     if (id && this.sourceName?.includes('youtube')) {
       this._artworkCache = `https://i.ytimg.com/vi/${id}/hqdefault.jpg`

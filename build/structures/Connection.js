@@ -246,12 +246,7 @@ class Connection {
         const oldChannel = this.voiceChannel
         this.voiceChannel = null
         if (p) p.voiceChannel = null
-        this._aqua.emit(
-          AqualinkEvents.PlayerMove,
-          p,
-          oldChannel,
-          null
-        )
+        this._aqua.emit(AqualinkEvents.PlayerMove, p, oldChannel, null)
       }
       if (!this._nullChannelTimer) {
         this._nullChannelTimer = setTimeout(() => {

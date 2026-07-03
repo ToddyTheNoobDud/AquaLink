@@ -307,7 +307,7 @@ class Node {
     if (
       code !== Node.WS_CLOSE_NORMAL &&
       code !== 1001 &&
-      !isFatal &&
+      isFatal &&
       this.sessionId
     ) {
       this._clearSession()
@@ -485,12 +485,22 @@ class Node {
         skipUTF8Validation: this.skipUTF8Validation
       })
 
-      ws.binaryType = 'nodebuffer'
-
-      ws.once('open', h.open)
+      ws.once('open', () => {
+        h.open()
+        this._wsPingInterval = setInterval(() => {
+          if (ws.readyState === WS_STATES.OPEN) ws.ping?.()
+        }, 30000)
+        this._wsPingInterval.unref?.()
+      })
       ws.once('error', h.error)
       ws.on('message', h.message)
-      ws.once('close', h.close)
+      ws.once('close', (...args) => {
+        if (this._wsPingInterval) {
+          clearInterval(this._wsPingInterval)
+          this._wsPingInterval = null
+        }
+        h.close(...args)
+      })
 
       this.ws = ws
     } catch (err) {
@@ -503,6 +513,11 @@ class Node {
   _cleanup() {
     const ws = this.ws
     if (!ws) return
+
+    if (this._wsPingInterval) {
+      clearInterval(this._wsPingInterval)
+      this._wsPingInterval = null
+    }
 
     if (this._wsIsBun) {
       try {
@@ -539,7 +554,7 @@ class Node {
     if (!clean) this.aqua.handleNodeFailover?.(this)
 
     this.connected = false
-    this.aqua.destroyNode?.(this.name)
+    this.aqua._destroyNode?.(this.name)
     this.aqua.emit(AqualinkEvents.NodeDestroy, this)
 
     this.rest?.destroy?.()

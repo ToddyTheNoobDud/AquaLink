@@ -1,4 +1,4 @@
-﻿const fs = require('node:fs')
+const fs = require('node:fs')
 const path = require('node:path')
 const _readline = require('node:readline')
 const { EventEmitter } = require('node:events')
@@ -74,13 +74,11 @@ const _functions = {
     if (typeof query !== 'string' || query.length <= 8) return false
     const q = query.trimStart()
     return (
-      q.startsWith('http://') ||
-      q.startsWith('https://') ||
-      q.includes(':')
+      q.startsWith('http://') || q.startsWith('https://') || q.includes(':')
     )
   },
   formatQuery(query, source) {
-    return this.isUrl(query) ? query : `${source}${SEARCH_PREFIX}${query}`
+    return _functions.isUrl(query) ? query : `${source}${SEARCH_PREFIX}${query}`
   },
   makeTrack: (t, requester, node) => new Track(t, requester, node),
   safeCall(fn) {
@@ -496,12 +494,7 @@ class Aqua extends EventEmitter {
       (stats.memory ? stats.memory.used / reservable : 0) * 40 +
       (node.rest?.calls || 0) * 0.001
     if (this._nodeLoadCache.size >= MAX_CACHE_SIZE) {
-      const iterator = this._nodeLoadCache.keys()
-      while (this._nodeLoadCache.size >= MAX_CACHE_SIZE) {
-        const oldest = iterator.next().value
-        if (!oldest) break
-        this._nodeLoadCache.delete(oldest)
-      }
+      this._nodeLoadCache.delete(this._nodeLoadCache.keys().next().value)
     }
     this._nodeLoadCache.set(id, { load, time: now })
     return load
