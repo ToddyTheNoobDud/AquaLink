@@ -1042,7 +1042,7 @@ class Player extends EventEmitter {
         : res.tracks[_functions.randIdx(res.tracks.length)]
     }
     if (sourceName === 'soundcloud') {
-      const scRes = await scAutoPlay(uri)
+      const scRes = await scAutoPlay(uri, this.nodes?.rest?._autoplayAgent)
       if (!scRes?.length) return null
 
       let anyValid = null

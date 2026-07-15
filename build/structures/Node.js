@@ -5,6 +5,7 @@ const WebSocketImpl = process.isBun ? globalThis.WebSocket : require('ws')
 
 const Rest = require('./Rest')
 const { AqualinkEvents } = require('./AqualinkEvents')
+const { emitOperationalError } = require('./Reporting')
 
 const privateData = new WeakMap()
 
@@ -36,6 +37,8 @@ const unrefTimer = (t) => {
 }
 
 const _functions = {
+  noop() {},
+
   buildWsUrl(host, port, ssl) {
     const needsBrackets = host.includes(':') && !host.startsWith('[')
     return `ws${ssl ? 's' : ''}://${needsBrackets ? `[${host}]` : host}:${port}${WS_PATH}`
@@ -138,6 +141,7 @@ class Node {
     this.reconnectTimeoutId = null
     this.isDestroyed = false
     this._isConnecting = false
+    this._connectPromise = null
     this.isNodelink = false
 
     this._wsIsBun = !!process.isBun
@@ -162,7 +166,7 @@ class Node {
         error: this._handleError.bind(this),
         message: this._handleMessage.bind(this),
         close: this._handleClose.bind(this),
-        connect: this.connect.bind(this)
+        connect: () => this.connect().catch(() => {})
       }
     })
   }
@@ -393,16 +397,17 @@ class Node {
   }
 
   connect() {
-    if (this.isDestroyed || this._isConnecting) return
+    if (this.isDestroyed) return Promise.reject(new Error('Node is destroyed'))
+    if (this._connectPromise) return this._connectPromise
 
     const state = this.ws?.readyState
     if (state === WS_STATES.OPEN) {
       this._emitDebug('WebSocket already connected')
-      return
+      return Promise.resolve()
     }
     if (state === WS_STATES.CONNECTING || state === WS_STATES.CLOSING) {
       this._emitDebug('WebSocket is connecting/closing; skipping new connect')
-      return
+      return Promise.reject(new Error('WebSocket is closing'))
     }
 
     this._isConnecting = true
@@ -415,99 +420,154 @@ class Node {
       })
     }
 
-    try {
-      const h = this._boundHandlers
+    let connectPromise
+    connectPromise = new Promise((resolve, reject) => {
+      let settled = false
+      let opened = false
+      let timer = null
+      const settle = (ok, error) => {
+        if (settled) return
+        settled = true
+        if (timer) clearTimeout(timer)
+        queueMicrotask(() => {
+          if (this._connectPromise === connectPromise)
+            this._connectPromise = null
+        })
+        this._rejectConnect = null
+        ok ? resolve() : reject(error)
+      }
+      timer = setTimeout(() => {
+        const error = new Error(`WebSocket open timeout: ${this.timeout}ms`)
+        this._isConnecting = false
+        this._cleanup()
+        settle(false, error)
+        this._scheduleReconnect()
+      }, this.timeout)
+      unrefTimer(timer)
+      this._rejectConnect = (error) => settle(false, error)
 
-      if (this._wsIsBun) {
-        const ws = new WebSocketImpl(this.wsUrl, { headers: this._headers })
-        ws.binaryType = 'arraybuffer'
-
-        const offs = []
-        const add = (type, fn, once = false) => {
-          const wrapped = once
-            ? (ev) => {
-                try {
-                  ws.removeEventListener(type, wrapped)
-                } catch {}
-                fn(ev)
-              }
-            : fn
-          ws.addEventListener(type, wrapped)
-          offs.push(() => {
-            try {
-              ws.removeEventListener(type, wrapped)
-            } catch {}
-          })
+      try {
+        const h = this._boundHandlers
+        const onOpen = () => {
+          opened = true
+          h.open()
+          settle(true)
+        }
+        const onError = (error) => {
+          h.error(error)
+          if (!opened) {
+            this._isConnecting = false
+            this._cleanup()
+            settle(false, error)
+            this._scheduleReconnect()
+          }
+        }
+        const onClose = (code, reason) => {
+          if (!opened) {
+            settle(
+              false,
+              new Error(
+                `WebSocket closed before open (code ${code}): ${_functions.reasonToString(reason)}`
+              )
+            )
+          }
+          h.close(code, reason)
         }
 
-        add('open', () => h.open(), true)
+        if (this._wsIsBun) {
+          const ws = new WebSocketImpl(this.wsUrl, { headers: this._headers })
+          ws.binaryType = 'arraybuffer'
 
-        add(
-          'error',
-          (event) => {
-            const err = event?.error
-            h.error(err instanceof Error ? err : new Error('WebSocket error'))
-          },
-          true
-        )
+          const offs = []
+          const add = (type, fn, once = false) => {
+            const wrapped = once
+              ? (ev) => {
+                  try {
+                    ws.removeEventListener(type, wrapped)
+                  } catch {}
+                  fn(ev)
+                }
+              : fn
+            ws.addEventListener(type, wrapped)
+            offs.push(() => {
+              try {
+                ws.removeEventListener(type, wrapped)
+              } catch {}
+            })
+          }
 
-        add('message', (event) => {
-          const data = event?.data
-          if (typeof data === 'string') h.message(data, false)
-          else h.message(data, true)
+          add('open', onOpen, true)
+
+          add(
+            'error',
+            (event) => {
+              const err = event?.error
+              onError(err instanceof Error ? err : new Error('WebSocket error'))
+            },
+            false
+          )
+
+          add('message', (event) => {
+            const data = event?.data
+            if (typeof data === 'string') h.message(data, false)
+            else h.message(data, true)
+          })
+
+          add(
+            'close',
+            (event) => {
+              onClose(
+                typeof event?.code === 'number'
+                  ? event.code
+                  : Node.WS_CLOSE_NORMAL,
+                typeof event?.reason === 'string' ? event.reason : ''
+              )
+            },
+            true
+          )
+
+          this._bunCleanup = () => {
+            for (let i = 0; i < offs.length; i++) offs[i]()
+          }
+          this.ws = ws
+          return
+        }
+
+        const ws = new WebSocketImpl(this.wsUrl, {
+          headers: this._headers,
+          perMessageDeflate: false,
+          handshakeTimeout: this.timeout,
+          maxPayload: this.maxPayload,
+          skipUTF8Validation: this.skipUTF8Validation
         })
 
-        add(
-          'close',
-          (event) => {
-            h.close(
-              typeof event?.code === 'number'
-                ? event.code
-                : Node.WS_CLOSE_NORMAL,
-              typeof event?.reason === 'string' ? event.reason : ''
-            )
-          },
-          true
-        )
+        ws.once('open', () => {
+          onOpen()
+          this._wsPingInterval = setInterval(() => {
+            if (ws.readyState === WS_STATES.OPEN) ws.ping?.()
+          }, 30000)
+          this._wsPingInterval.unref?.()
+        })
+        ws.on('error', onError)
+        ws.on('message', h.message)
+        ws.once('close', (...args) => {
+          if (this._wsPingInterval) {
+            clearInterval(this._wsPingInterval)
+            this._wsPingInterval = null
+          }
+          onClose(...args)
+        })
 
-        this._bunCleanup = () => {
-          for (let i = 0; i < offs.length; i++) offs[i]()
-        }
         this.ws = ws
-        return
+      } catch (err) {
+        this._isConnecting = false
+        this._emitError(`Failed to create WebSocket: ${_functions.errMsg(err)}`)
+        settle(false, err)
+        this._scheduleReconnect()
       }
-
-      const ws = new WebSocketImpl(this.wsUrl, {
-        headers: this._headers,
-        perMessageDeflate: false,
-        handshakeTimeout: this.timeout,
-        maxPayload: this.maxPayload,
-        skipUTF8Validation: this.skipUTF8Validation
-      })
-
-      ws.once('open', () => {
-        h.open()
-        this._wsPingInterval = setInterval(() => {
-          if (ws.readyState === WS_STATES.OPEN) ws.ping?.()
-        }, 30000)
-        this._wsPingInterval.unref?.()
-      })
-      ws.once('error', h.error)
-      ws.on('message', h.message)
-      ws.once('close', (...args) => {
-        if (this._wsPingInterval) {
-          clearInterval(this._wsPingInterval)
-          this._wsPingInterval = null
-        }
-        h.close(...args)
-      })
-
-      this.ws = ws
-    } catch (err) {
-      this._isConnecting = false
-      this._emitError(`Failed to create WebSocket: ${_functions.errMsg(err)}`)
-      this._scheduleReconnect()
-    }
+    })
+    this._connectPromise = connectPromise
+    return connectPromise
   }
 
   _cleanup() {
@@ -526,6 +586,7 @@ class Node {
       this._bunCleanup = null
     } else {
       ws.removeAllListeners?.()
+      ws.on?.('error', _functions.noop)
     }
 
     try {
@@ -546,8 +607,10 @@ class Node {
     if (this.isDestroyed) return
 
     this.isDestroyed = true
+    this._rejectConnect?.(new Error('Node destroyed while connecting'))
     this.state = NODE_STATE.IDLE
     this._isConnecting = false
+    this._connectPromise = null
     this._clearReconnectTimeout()
     this._cleanup()
 
@@ -807,7 +870,7 @@ class Node {
 
   _emitError(error) {
     const errorObj = error instanceof Error ? error : new Error(String(error))
-    this.aqua.emit(AqualinkEvents.Error, this, errorObj)
+    emitOperationalError(this.aqua, this, errorObj)
   }
 
   _emitDebug(message) {

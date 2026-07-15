@@ -11,10 +11,7 @@ const {
   zstdDecompressSync
 } = require('node:zlib')
 
-let autoplayModule = null
-try {
-  autoplayModule = require('../handlers/autoplay')
-} catch {}
+const { emitOperationalError } = require('./Reporting')
 
 const unrefTimer = (t) => {
   try {
@@ -208,21 +205,18 @@ class Rest {
     this.agent = new (node.ssl ? HttpsAgent : HttpAgent)(opts)
     this.request = node.ssl ? httpsRequest : httpRequest
 
-    if (autoplayModule?.setSharedAgent) {
-      if (node.ssl) {
-        this._autoplayAgent = this.agent
-      } else {
-        this._autoplayAgent = new HttpsAgent({
-          keepAlive: true,
-          maxSockets: node.maxSockets || 128,
-          maxFreeSockets: node.maxFreeSockets || 64,
-          freeSocketTimeout: node.freeSocketTimeout || 15000,
-          keepAliveMsecs: node.keepAliveMsecs || 500,
-          scheduling: 'lifo',
-          timeout: this.timeout
-        })
-      }
-      autoplayModule.setSharedAgent(this._autoplayAgent)
+    if (node.ssl) {
+      this._autoplayAgent = this.agent
+    } else {
+      this._autoplayAgent = new HttpsAgent({
+        keepAlive: true,
+        maxSockets: node.maxSockets || 128,
+        maxFreeSockets: node.maxFreeSockets || 64,
+        freeSocketTimeout: node.freeSocketTimeout || 15000,
+        keepAliveMsecs: node.keepAliveMsecs || 500,
+        scheduling: 'lifo',
+        timeout: this.timeout
+      })
     }
 
     const origCreate = this.agent.createConnection.bind(this.agent)
@@ -279,7 +273,7 @@ class Rest {
     }
   }
 
-  _collectBody(stream, preallocSize = 0) {
+  _collectBody(stream, preallocSize = 0, source = stream) {
     return new Promise((resolve, reject) => {
       let done = false
       let size = 0
@@ -312,7 +306,11 @@ class Rest {
           size += chunk.length
           chunks.push(chunk)
         }
-        if (size > MAX_RESPONSE_SIZE) finish(false, ERRORS.RESPONSE_TOO_LARGE)
+        if (size > MAX_RESPONSE_SIZE) {
+          stream.destroy?.(ERRORS.RESPONSE_TOO_LARGE)
+          if (source !== stream) source.destroy?.(ERRORS.RESPONSE_TOO_LARGE)
+          finish(false, ERRORS.RESPONSE_TOO_LARGE)
+        }
       })
 
       stream.once('error', (e) => finish(false, e))
@@ -422,7 +420,7 @@ class Rest {
 
           const clInt = cl ? parseInt(cl, 10) : 0
           if (clInt > MAX_RESPONSE_SIZE) {
-            res.resume()
+            res.destroy(ERRORS.RESPONSE_TOO_LARGE)
             return finish(false, ERRORS.RESPONSE_TOO_LARGE)
           }
 
@@ -480,7 +478,7 @@ class Rest {
             preallocSize = clInt
           }
 
-          this._collectBody(stream, preallocSize)
+          this._collectBody(stream, preallocSize, res)
             .then((buffer) => {
               if (!buffer) return finish(true, null)
               finalize(buffer)
@@ -506,13 +504,14 @@ class Rest {
   _getH2Session() {
     if (!this._h2 || this._h2.closed || this._h2.destroyed) {
       this._clearH2()
-      this._h2 = http2.connect(this.baseUrl, this._tlsOptions || undefined)
+      const session = http2.connect(this.baseUrl, this._tlsOptions || undefined)
+      this._h2 = session
       this._resetH2Timer()
 
-      const onEnd = () => this._clearH2()
-      this._h2.once('error', onEnd)
-      this._h2.once('close', onEnd)
-      this._h2.socket?.unref?.()
+      const onEnd = () => this._clearH2(session)
+      session.once('error', onEnd)
+      session.once('close', onEnd)
+      session.socket?.unref?.()
     }
     return this._h2
   }
@@ -523,12 +522,14 @@ class Rest {
       this._h2Timer = null
     }
     if (this._h2 && !this._h2.closed && !this._h2.destroyed) {
-      this._h2Timer = setTimeout(() => this._closeH2(), H2_TIMEOUT)
+      const session = this._h2
+      this._h2Timer = setTimeout(() => this._closeH2(session), H2_TIMEOUT)
       unrefTimer(this._h2Timer)
     }
   }
 
-  _clearH2() {
+  _clearH2(session = this._h2) {
+    if (session !== this._h2) return
     if (this._h2Timer) {
       clearTimeout(this._h2Timer)
       this._h2Timer = null
@@ -536,7 +537,8 @@ class Rest {
     this._h2 = null
   }
 
-  _closeH2() {
+  _closeH2(session = this._h2) {
+    if (session !== this._h2) return
     if (this._h2Timer) {
       clearTimeout(this._h2Timer)
       this._h2Timer = null
@@ -600,7 +602,7 @@ class Rest {
 
         const clInt = cl ? parseInt(cl, 10) : 0
         if (clInt > MAX_RESPONSE_SIZE) {
-          req.resume()
+          req.close(http2.constants.NGHTTP2_CANCEL)
           return finish(false, ERRORS.RESPONSE_TOO_LARGE)
         }
 
@@ -633,7 +635,7 @@ class Rest {
 
         if (decomp) decomp.once('error', (e) => finish(false, e))
         req.once('error', (e) => finish(false, e))
-        this._collectBody(stream, preallocSize)
+        this._collectBody(stream, preallocSize, req)
           .then((buffer) => {
             if (!buffer) return finish(true, null)
             finalize(buffer)
@@ -742,7 +744,7 @@ class Rest {
     const title = track?.info?.title
 
     if (!track || (!guildId && !hasEncoded && !title)) {
-      this.aqua?.emit?.('error', '[Aqua/Lyrics] Invalid track object')
+      emitOperationalError(this.aqua, this.node, 'Invalid lyrics track object')
       return null
     }
 
@@ -891,9 +893,6 @@ class Rest {
     }
     if (autoplayAgent && autoplayAgent !== primaryAgent) {
       autoplayAgent.destroy?.()
-    }
-    if (autoplayModule?.setSharedAgent && autoplayAgent) {
-      autoplayModule.setSharedAgent(null)
     }
     this._closeH2()
     if (this._headerPool) {

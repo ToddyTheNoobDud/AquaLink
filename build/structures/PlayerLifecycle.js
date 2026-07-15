@@ -242,7 +242,7 @@ class PlayerLifecycle {
 
     const code = payload?.code
     if (code === 4014) {
-      await new Promise((resolve) => setTimeout(resolve, 150))
+      await player._delay(150)
       if (player.destroyed) return
     }
 
@@ -460,6 +460,7 @@ class PlayerLifecycle {
         if (
           latestActivePlayer &&
           latestActivePlayer !== player &&
+          latestActivePlayer !== np &&
           !latestActivePlayer.destroyed
         ) {
           try {

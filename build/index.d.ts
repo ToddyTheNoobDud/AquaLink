@@ -62,18 +62,6 @@ declare module 'aqualink' {
     init(clientId: string): Promise<Aqua>
 
     /**
-     * Creates a new node connection
-     * @param options Modified node options
-     */
-    createNode(options: NodeOptions): Promise<Node>
-
-    /**
-     * Destroys a node by identifier
-     * @param identifier Node identifier (name or host)
-     */
-    destroyNode(identifier: string): void
-
-    /**
      * Updates the voice state of a player
      * @param data Voice state update packet
      */
@@ -134,7 +122,6 @@ declare module 'aqualink' {
 
     // Save/Load Methods
     savePlayer(filePath?: string): Promise<void>
-    savePlayerSync(filePath?: string): void
     loadPlayers(filePath?: string): Promise<void>
 
     // Failover and Migration Methods
@@ -156,18 +143,17 @@ declare module 'aqualink' {
     /**
      * Destroys the Aqua instance and all players
      */
-    destroy(): Promise<void>
+    destroy(): void
 
     getTrace(limit?: number): TraceEntry[]
 
     // Internal Methods
     _invalidateCache(): void
-    _getCachedNodeLoad(node: Node): number
-    _calculateNodeLoad(node: Node): number
+    _getNodeLoad(node: Node): number
     _createNode(options: NodeOptions): Promise<Node>
     _destroyNode(identifier: string): void
     _cleanupNode(nodeId: string): void
-    _storeBrokenPlayers(node: Node): void
+    _storeBrokenPlayers(node: Node): Promise<void>
     _rebuildBrokenPlayers(node: Node): Promise<void>
     _rebuildPlayer(
       brokenState: BrokenPlayerState,
@@ -199,15 +185,9 @@ declare module 'aqualink' {
     _performCleanup(): void
     _handlePlayerDestroy(player: Player): void
     _waitForFirstNode(timeout?: number): Promise<void>
-    _restorePlayer(data: SavedPlayerData): Promise<void>
-    _parseRequester(
-      requesterString: string | null
-    ): { id: string; username: string } | null
-    _loadPlugins(): Promise<void>
+    _restorePlayer(data: SavedPlayerData): Promise<boolean>
     _createDefaultSend(): (packet: Record<string, unknown>) => void
     _bindEventHandlers(): void
-    _startCleanupTimer(): void
-    _onNodeReady(node: Node, data: { resumed: boolean }): void
     _regionMatches(configuredRegion: string, extractedRegion: string): boolean
     _findBestNodeForRegion(region: string): Node | null
 
@@ -615,7 +595,7 @@ declare module 'aqualink' {
      * Sets the session ID for the REST connection
      * @param sessionId The session ID
      */
-    setSessionId(sessionId: string): void
+    setSessionId(sessionId: string | null): void
 
     /**
      * Makes a generic request to the Lavalink REST API

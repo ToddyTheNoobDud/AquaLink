@@ -26,7 +26,19 @@ function reportSuppressedError(target, scope, error, data = null) {
   return err
 }
 
+function emitOperationalError(target, source, error) {
+  const aqua = getAqua(target)
+  const err = normalizeError(error)
+  if (aqua?.listenerCount?.(AqualinkEvents.Error) > 0) {
+    aqua.emit(AqualinkEvents.Error, source, err)
+  } else if (aqua?.debugTrace) {
+    aqua._trace('aqua.error.unhandled', { error: err.message })
+  }
+  return err
+}
+
 module.exports = {
+  emitOperationalError,
   normalizeError,
   reportSuppressedError
 }

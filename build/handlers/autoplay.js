@@ -9,25 +9,7 @@ const AGENT_CONFIG = {
   freeSocketTimeout: 4000
 }
 
-// Shared agent reference - can be set from Rest module
-let sharedAgent = null
-const getAgent = () => {
-  if (!sharedAgent) {
-    sharedAgent = new https.Agent(AGENT_CONFIG)
-  }
-  return sharedAgent
-}
-
-// Allow Rest module to inject its agent
-const setSharedAgent = (agent) => {
-  if (!agent) {
-    sharedAgent = null
-    return
-  }
-  if (agent && typeof agent.addRequest === 'function') {
-    sharedAgent = agent
-  }
-}
+const defaultAgent = new https.Agent(AGENT_CONFIG)
 
 const SC_LINK_RE = /<a\s+itemprop="url"\s+href="(\/[^"]+)"/g
 const MAX_REDIRECTS = 3
@@ -36,22 +18,23 @@ const MAX_SC_LINKS = 50
 const _MAX_SP_RESULTS = 5
 const DEFAULT_TIMEOUT_MS = 8000
 
-const fastFetch = (url, depth = 0) =>
+const fastFetch = (url, agent, depth = 0) =>
   new Promise((resolve, reject) => {
     if (depth > MAX_REDIRECTS) return reject(new Error('Too many redirects'))
 
     const req = https.get(
       url,
-      { agent: getAgent(), timeout: DEFAULT_TIMEOUT_MS },
+      { agent: agent || defaultAgent, timeout: DEFAULT_TIMEOUT_MS },
       (res) => {
         const { statusCode, headers } = res
 
         if (statusCode >= 300 && statusCode < 400 && headers.location) {
           res.resume()
-          return fastFetch(new URL(headers.location, url).href, depth + 1).then(
-            resolve,
-            reject
-          )
+          return fastFetch(
+            new URL(headers.location, url).href,
+            agent,
+            depth + 1
+          ).then(resolve, reject)
         }
 
         if (statusCode !== 200) {
@@ -96,8 +79,8 @@ const shuffleInPlace = (arr) => {
   return arr
 }
 
-const scAutoPlay = async (baseUrl) => {
-  const html = await fastFetch(`${baseUrl}/recommended`)
+const scAutoPlay = async (baseUrl, agent) => {
+  const html = await fastFetch(`${baseUrl}/recommended`, agent)
   const links = []
   for (const m of html.matchAll(SC_LINK_RE)) {
     if (!m[1]) continue
@@ -170,6 +153,5 @@ const spAutoPlay = async (seed, player, requester, excludedIds = []) => {
 
 module.exports = {
   scAutoPlay,
-  spAutoPlay,
-  setSharedAgent
+  spAutoPlay
 }
