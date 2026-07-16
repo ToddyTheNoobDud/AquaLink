@@ -749,6 +749,16 @@ class Rest {
     }
 
     const skip = skipTrackSource ? 'true' : 'false'
+    // nl only suports encoded tracks
+    if (this.node.isNodelink && hasEncoded) {
+      try {
+        const lyrics = await this.makeRequest(
+          'GET',
+          `${this._apiBase}/loadlyrics?encodedTrack=${encodeURIComponent(encoded)}`
+        )
+        if (this._validLyrics(lyrics)) return lyrics
+      } catch {}
+    }
 
     if (guildId) {
       try {
