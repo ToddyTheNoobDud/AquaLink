@@ -1,4 +1,5 @@
-const { EventEmitter } = require('node:events')
+﻿const { EventEmitter } = require('node:events')
+const { VoiceReceiver } = require('./VoiceReceiver')
 const { AqualinkEvents } = require('./AqualinkEvents')
 const Connection = require('./Connection')
 const Filters = require('./Filters')
@@ -216,6 +217,7 @@ class Player extends EventEmitter {
     this._reconnectTimers = null
     this._reconnectNonce = 0
     this._dataStore = null
+    this.voice = null
 
     this.volume = _functions.clamp(options.defaultVolume || 100)
     this.loop = this._parseLoop(options.loop)
@@ -652,6 +654,7 @@ class Player extends EventEmitter {
     // ML-1: Clear _dataStore to prevent unbounded growth
     this._dataStore?.clear()
     this._dataStore = null
+    this.voice = null
 
     if (
       this.current?.dispose &&
@@ -1297,3 +1300,4 @@ class Player extends EventEmitter {
 }
 
 module.exports = Player
+
