@@ -403,18 +403,20 @@ class Filters {
     if (!this.player || !this._dirty.size) return this
 
     const dirtyKeys = [...this._dirty]
-    const dirtySet = new Set(dirtyKeys)
-    const payload = {
-      volume: this.filters.volume,
-      equalizer: this.filters.equalizer
-    }
+    const payload = {}
+    if (this.filters.volume !== 1) payload.volume = this.filters.volume
+    if (!_utils.eqIsEmpty(this.filters.equalizer))
+      payload.equalizer = this.filters.equalizer
     const filterNames = Object.keys(FILTER_DEFAULTS)
     for (let i = 0; i < filterNames.length; i++) {
       const key = filterNames[i]
       if (this.filters[key] !== null) payload[key] = this.filters[key]
-      else if (dirtySet.has(key)) payload[key] = null
     }
-    payload.pluginFilters = this.filters.pluginFilters || {}
+    if (
+      this.filters.pluginFilters &&
+      Object.keys(this.filters.pluginFilters).length
+    )
+      payload.pluginFilters = this.filters.pluginFilters
 
     for (const key of dirtyKeys) this._dirty.delete(key)
 
