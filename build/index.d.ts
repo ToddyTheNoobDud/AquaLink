@@ -819,7 +819,7 @@ declare module 'aqualink' {
     updateSequence(seq: number): void
     destroy(): void
     attemptResume(): Promise<boolean>
-    resendVoiceUpdate(): boolean
+    resendVoiceUpdate(force?: boolean): boolean
 
     // Internal Methods
     _extractRegion(endpoint: string): string | null

@@ -238,8 +238,12 @@ class Connection {
   }
 
   resendVoiceUpdate(force = false) {
-    if (this._destroyed || !this._hasValidVoiceData()) return false
+    if (this._destroyed) return false
     if (force) this._lastSentVoiceKey = ''
+    if (!this._hasValidVoiceData()) {
+      if (force) this._requestVoiceState()
+      return false
+    }
     this._scheduleVoiceUpdate()
     return true
   }
