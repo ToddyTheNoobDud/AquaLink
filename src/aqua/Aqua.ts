@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events'
+import pino, { type Logger } from 'pino'
 import Node from '../nodes/Node.ts'
 import type { AquaOptions, NodeOptions } from '../types/shared.ts'
 
@@ -17,7 +18,10 @@ export default class AquaManager extends EventEmitter {
   public options?: AquaOptions
   /** the clientId from init. */
   public clientId: string | null = null
+  /** logging system, uses pino internally. */
+  public logger: Logger
 
+  // biome-ignore lint/suspicious/noExplicitAny: I don't know what client the user will use, so let it be any,
   constructor(client: any, nodes: NodeOptions[], options?: AquaOptions) {
     super()
     if (!client) throw new Error('Aqua needs a client for the 1st arg.')
@@ -31,15 +35,24 @@ export default class AquaManager extends EventEmitter {
     this.nodesMap = new Map<string, Node>()
 
     this.clientId = null
+    this.logger = pino({
+      level: this.options?.logging.level,
+      transport: { target: 'pino-pretty' }
+    })
   }
 
   /**
    * Starts aqualink, connects to the node, thats it.
    *
+   * @example```ts
+   * client.on('clientReady', () => {
+   *    await client.aqua.init(client.id)
+   * })
+   * ```
+   *
    * @param clientId - the clientId from your discord client. SHOULD be used on the 'ready' event.
    */
   public async init(clientId: string) {
-    console.log('yo!')
     if (!clientId) {
       throw new Error(
         'clientId is required to start aqualink, please pass one.'
@@ -58,6 +71,10 @@ export default class AquaManager extends EventEmitter {
       await this.createNode()
     } else
       throw new Error('For now, aqualink is limited to 1 node per-instance.')
+
+    this.logger.info(
+      `Aqualink initiation was a sucess, in total, ${this.nodes.length} nodes were created.`
+    )
     return this
   }
 
@@ -68,32 +85,34 @@ export default class AquaManager extends EventEmitter {
    * @param nodes - the configured nodes on aqua manager.
    */
   public async createNode() {
-    console.log(this)
-
     // https://biomejs.dev/linter/rules/no-for-each/javascript/#description
 
     for (const nodeOptions of this.nodes) {
       const node = new Node(this, nodeOptions)
       if (!node.connected) await node.connect()
+      this.logger.debug('CreateNode recived, now trying to connect.')
     }
 
     return this
   }
 }
-/* 
+
 const client = 'mockclient'
 
 const nodes = [
   {
     name: 'toddynlmao',
     host: '127.0.0.1',
-    password: 'lolk',
-    port: 3000,
+    password: 'manialwaysforgettoupdatethisongithub',
+    port: 50166,
     ssl: false
   }
 ]
 
-const node = new AquaManager(client, nodes)
+const node = new AquaManager(client, nodes, {
+  logging: {
+    level: 'debug'
+  }
+})
 
 node.init('1202232935311495209')
- */

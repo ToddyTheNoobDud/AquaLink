@@ -1,9 +1,12 @@
 /**
  * shared modules for all, e.g: config, nodes, etc.
  */
+import type { Level } from 'pino'
 
 export interface AquaOptions {
-  none: string
+  logging: {
+    level: Level
+  }
 }
 
 export interface NodeOptions {

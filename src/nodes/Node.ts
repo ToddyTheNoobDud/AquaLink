@@ -59,7 +59,7 @@ export default class Node extends EventEmitter {
 
     const websocket = new WebSocket(websocketUrl, {
       headers: {
-        'Authorization': `${this.password}`,
+        Authorization: `${this.password}`,
         'User-Id': `${this.aqua.clientId}`,
         'Client-Name': this.clientName()
       }
@@ -68,7 +68,7 @@ export default class Node extends EventEmitter {
     websocket.addEventListener('message', (message) => {
       this.handleWebsocketMessages(message)
     })
-    
+
     return websocket
   }
 
@@ -77,16 +77,17 @@ export default class Node extends EventEmitter {
 
     switch (parsed.op) {
       case 'ready':
-        console.log('Aqualink connected.')
+        this.aqua.logger.info(
+          `Aqualink has connected to the node: ${this.name}`
+        )
         this.connected = true
-      break
+        break
+      default:
+        this.aqua.logger.debug(`Unknown message/event/op recived, you can extend this so you can use it if you want to.\nOP: ${parsed.op}, PARSED message: ${JSON.stringify(parsed)}`)
     }
-    
-    
   }
 
-  private async handleWebsocketOpen(websocket: WebSocket) { 
+  private async handleWebsocketOpen(websocket: WebSocket) {
     console.log(websocket)
-    
   }
 }
