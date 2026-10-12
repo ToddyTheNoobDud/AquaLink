@@ -18,6 +18,8 @@ const WEBSOCKET_STATES = {
 }
 
 export default class Node extends EventEmitter {
+  private clientName: string
+
   public aqua: AquaManager
   public name: string
   public host: string
@@ -49,10 +51,9 @@ export default class Node extends EventEmitter {
     this.rest = new Rest(this.aqua, this)
 
     this.connected = false
-  }
 
-  clientName() {
-    return 'Aqualink/4.0.0 (https://github.com/ToddyTheNoobDud/AquaLink'
+    this.clientName =
+      'Aqualink/4.0.0 (https://github.com/ToddyTheNoobDud/AquaLink'
   }
 
   /**
@@ -72,7 +73,7 @@ export default class Node extends EventEmitter {
     const headers: Record<string, string> = {
       Authorization: `${this.password}`,
       'User-Id': `${this.aqua.clientId}`,
-      'Client-Name': this.clientName()
+      'Client-Name': this.clientName
     }
 
     if (hasSessionId) {
@@ -115,9 +116,14 @@ export default class Node extends EventEmitter {
         this.aqua.logger.debug('recived stats')
         break
       case 'events':
-                // we let pino build the parsed stuff, because JS do the work before logging.
+        // we let pino build the parsed stuff, because JS do the work before logging.
         this.aqua.logger.debug(
-          { node: this.name, type: parsed.type, guildId: parsed.guildId, payload: parsed},
+          {
+            node: this.name,
+            type: parsed.type,
+            guildId: parsed.guildId,
+            payload: parsed
+          },
           `recived an event.`
         )
         break
