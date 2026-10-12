@@ -29,3 +29,22 @@ export interface NodeOptions {
   /** port of the host you want to connect */
   port: number
 }
+
+export interface TrackAPI {
+  track: {
+    encoded: string,
+    info: {
+      identifier: string,
+      isSeekable: boolean,
+      author: string,
+      length: number,
+      isStream: boolean,
+      position: number,
+      title: string,
+      uri: string,
+      artworkUrl: string,
+      isrc: string,
+      sourceName: string
+    }
+  }
+}

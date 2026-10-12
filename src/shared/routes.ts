@@ -5,7 +5,8 @@ export const RoutesForWebsocket = Object.freeze({
 
 export const RoutesForRest = Object.freeze({
   VersionRoute: '/version',
-  InfoRoute: '/v4/info'
+  InfoRoute: '/v4/info',
+  LoadTracksRoute: '/v4/loadtracks'
 })
 
 /* 

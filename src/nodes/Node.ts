@@ -201,17 +201,18 @@ export default class Node extends EventEmitter {
     if (open.currentTarget.readyState === WEBSOCKET_STATES.Established) {
       const info = await this.rest.getInfo()
 
-      if (info)
-        this.isNodelink = 'isNodelink' in info && info.isNodelink === true
-
-      this.reconnectRetries = 0
-
-      this.connected = true
-      this.nodeState = NODE_STATES.Connected
-
-      this.aqua.logger.info(
-        `Aqualink has connected to the node: ${this.name}, isNodelink: ${this.isNodelink}`
-      )
+        if (info)
+          this.isNodelink = 'isNodelink' in info && info.isNodelink === true
+  
+        this.reconnectRetries = 0
+  
+        this.connected = true
+        this.nodeState = NODE_STATES.Connected
+  
+        this.aqua.logger.info(
+          `Aqualink has connected to the node: ${this.name}, isNodelink: ${this.isNodelink}`
+        )
+      
     }
   }
 

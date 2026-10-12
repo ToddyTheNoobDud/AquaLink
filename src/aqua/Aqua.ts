@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events'
 import pino, { type Logger } from 'pino'
 import Node from '../nodes/Node.ts'
+import Track from '../shared/Track.ts'
 import type { AquaOptions, NodeOptions } from '../types/shared.ts'
 
 /**
@@ -12,6 +13,8 @@ export default class AquaManager extends EventEmitter {
   public client: undefined
   /** Array of the configured nodes. */
   public nodes: NodeOptions[]
+
+  public nodesMap: Map<string, Node>
   /** Options (soon) */
   public options?: AquaOptions
   /** the clientId from init. */
@@ -31,6 +34,8 @@ export default class AquaManager extends EventEmitter {
 
     this.client = client
     this.nodes = nodes
+
+    this.nodesMap = new Map()
 
     if (options) this.options = options
 
@@ -92,11 +97,39 @@ export default class AquaManager extends EventEmitter {
 
     for (const nodeOptions of this.nodes) {
       const node = new Node(this, nodeOptions)
+      this.nodesMap.set(nodeOptions.name, node)
       if (!node.connected) await node.connect()
       this.logger.debug('CreateNode recived, now trying to connect.')
     }
 
     return this
+  }
+
+  private async handleTrackLoading(res: any) {
+    const data = res.data
+
+    switch (res.loadType) {
+      case 'search': {
+        if (!Array.isArray(data)) return
+
+        const tracks = data.map((trackData) => new Track(trackData))
+
+        return tracks
+      }
+    }
+  }
+
+  public async resolve(query: string, source: string, node?: Node) {
+    // i will do auto node select soon.
+    //
+    const nodes = this.nodesMap.get(this.nodes[0]?.name as string)
+    const res = await nodes?.rest.loadTracks(query, source)
+
+    if (res) {
+      const tracks = await this.handleTrackLoading(res)
+
+      return tracks
+    }
   }
 }
 
@@ -123,3 +156,8 @@ const node = new AquaManager(client, nodes, {
 })
 
 node.init('1202232935311495209')
+
+setTimeout(async () => {
+  const res = await node.resolve('brand new slayr', 'ytsearch')
+  if (res)  console.log(res[0]?.info.uri)
+}, 3000)

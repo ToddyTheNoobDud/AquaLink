@@ -83,4 +83,10 @@ export default class Rest {
     const res = await this.makeRequest(RoutesForRest.InfoRoute)
     return res as NodelinkInfo | LavalinkInfo | null | undefined
   }
+
+  async loadTracks(query: string, source: string) {
+    if (!source || !query) return null
+    const res = await this.makeRequest(`${RoutesForRest.LoadTracksRoute}?identifier=${source}:${encodeURIComponent(query)}`)
+    return res
+  }
 }
