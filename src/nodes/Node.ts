@@ -33,12 +33,16 @@ export default class Node extends EventEmitter {
 
   public rest: Rest
 
+  public stats: object
+
+  public isNodelink: boolean
   constructor(
     aqua: AquaManager,
     nodeOptions: NodeOptions,
-    options?: AquaOptions
+    _options?: AquaOptions
   ) {
     super()
+
     this.aqua = aqua
     this.host = nodeOptions.host
     this.ssl = nodeOptions.ssl //?? this.secure = nodeOptions.secure
@@ -52,8 +56,32 @@ export default class Node extends EventEmitter {
 
     this.connected = false
 
+    this.isNodelink = false
+
     this.clientName =
       'Aqualink/4.0.0 (https://github.com/ToddyTheNoobDud/AquaLink'
+
+    this.stats = {
+      players: 0,
+      playingPlayers: 0,
+      uptime: 0,
+      memory: {
+        free: 0,
+        used: 0,
+        allocated: 0,
+        reservable: 0
+      },
+      cpu: {
+        cores: 0,
+        systemLoad: 0,
+        lavalinkLoad: 0
+      },
+      frameStats: {
+        sent: 0,
+        nulled: 0,
+        deficit: 0
+      }
+    }
   }
 
   /**
@@ -108,12 +136,9 @@ export default class Node extends EventEmitter {
         this.connected = true
         this.sessionId = parsed.sessionId
 
-        const ver = await this.rest.getVersion()
-        console.log(ver)
         break
       }
       case 'stats':
-        this.aqua.logger.debug('recived stats')
         break
       case 'events':
         // we let pino build the parsed stuff, because JS do the work before logging.
@@ -138,7 +163,15 @@ export default class Node extends EventEmitter {
 
   // biome-ignore lint/suspicious/noExplicitAny: The code itself returns any. i think.
   private async handleWebsocketOpen(open: any) {
-    if (open.currentTarget.readyState === WEBSOCKET_STATES.Established)
-      this.aqua.logger.info(`Aqualink has connected to the node: ${this.name}`)
+    if (open.currentTarget.readyState === WEBSOCKET_STATES.Established) {
+      const info = await this.rest.getInfo()
+
+      if (info)
+        this.isNodelink = 'isNodelink' in info && info.isNodelink === true
+
+      this.aqua.logger.info(
+        `Aqualink has connected to the node: ${this.name}, isNodelink: ${this.isNodelink}`
+      )
+    }
   }
 }

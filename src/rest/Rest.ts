@@ -5,6 +5,10 @@ import type { RequestInit } from 'undici-types'
 import type AquaManager from '../aqua/Aqua.ts'
 import type Node from '../nodes/Node.ts'
 import { RoutesForRest } from '../shared/routes.ts'
+import type {
+  LavalinkInfo,
+  NodelinkInfo
+} from '../types/Rest/endpoints/info.ts'
 
 export default class Rest {
   /** the Aqua manager instance */
@@ -54,7 +58,7 @@ export default class Rest {
       })
 
       // https://www.freecodecamp.org/news/when-to-use-asyncawait-vs-promises-in-javascript/#heading-practical-examples-promises-vs-asyncawait
-      // i will use async/await code here because i find it more readable than using .then/.close
+      // i will use async/await code here because i find it more readable than using .then/.catch
       // and both also returns a Promise so we good.
 
       if (!response.ok) return null
@@ -73,5 +77,10 @@ export default class Rest {
   async getVersion() {
     const res = await this.makeRequest(RoutesForRest.VersionRoute)
     return res
+  }
+
+  async getInfo(): Promise<NodelinkInfo | LavalinkInfo | null | undefined> {
+    const res = await this.makeRequest(RoutesForRest.InfoRoute)
+    return res as NodelinkInfo | LavalinkInfo | null | undefined
   }
 }
