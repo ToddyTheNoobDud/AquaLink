@@ -20,6 +20,8 @@ export default class AquaManager extends EventEmitter {
   public clientId: string | null = null
   /** logging system, uses pino internally. */
   public logger: Logger
+  /** check if the aqua instance has started. */
+  public initiated: boolean
 
   // biome-ignore lint/suspicious/noExplicitAny: I don't know what client the user will use, so let it be any,
   constructor(client: any, nodes: NodeOptions[], options?: AquaOptions) {
@@ -35,6 +37,7 @@ export default class AquaManager extends EventEmitter {
     this.nodesMap = new Map<string, Node>()
 
     this.clientId = null
+    this.initiated = false
     this.logger = pino({
       level: this.options?.logging.level,
       transport: { target: 'pino-pretty' }
@@ -75,6 +78,8 @@ export default class AquaManager extends EventEmitter {
     this.logger.info(
       `Aqualink initiation was a sucess, in total, ${this.nodes.length} nodes were created.`
     )
+
+    this.initiated = true
     return this
   }
 

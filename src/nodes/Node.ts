@@ -1,6 +1,7 @@
 import EventEmitter from 'node:events'
 import { WebSocket } from 'node:http'
-import type AquaManager from '../aqua/Aqua'
+import type AquaManager from '../aqua/Aqua.ts'
+import Rest from '../rest/Rest.ts'
 import { RoutesForWebsocket } from '../shared/routes.ts'
 import type { AquaOptions, NodeOptions } from '../types/shared.ts'
 
@@ -17,16 +18,18 @@ const WEBSOCKET_STATES = {
 }
 
 export default class Node extends EventEmitter {
-  private aqua: AquaManager
-  private name: string
-  private host: string
-  private ssl: boolean
-  private port: number
-  private password: string
-  private sessionId: string | null
+  public aqua: AquaManager
+  public name: string
+  public host: string
+  public ssl: boolean
+  public port: number
+  public password: string
+  public sessionId: string | null
 
   // node related stuff
   public connected: boolean
+
+  public rest: Rest
 
   constructor(
     aqua: AquaManager,
@@ -42,6 +45,8 @@ export default class Node extends EventEmitter {
     this.name = nodeOptions.name
 
     this.sessionId = null
+
+    this.rest = new Rest(this.aqua, this)
 
     this.connected = false
   }
@@ -79,7 +84,7 @@ export default class Node extends EventEmitter {
     })
 
     websocket.addEventListener('message', (message) => {
-      this.handleWebsocketMessages(message)
+      this.handleWebsocketMessages(message as MessageEvent)
     })
 
     websocket.addEventListener(
@@ -93,21 +98,34 @@ export default class Node extends EventEmitter {
     return websocket
   }
 
-  private async handleWebsocketMessages(message: any) {
+  private async handleWebsocketMessages(message: MessageEvent) {
     const parsed = JSON.parse(message.data)
 
     switch (parsed.op) {
-      case 'ready':
+      case 'ready': {
         this.aqua.logger.info(`Node is ready: ${this.name}`)
         this.connected = true
         this.sessionId = parsed.sessionId
+
+        const ver = await this.rest.getVersion()
+        console.log(ver)
         break
+      }
       case 'stats':
         this.aqua.logger.debug('recived stats')
         break
-      default:
+      case 'events':
+                // we let pino build the parsed stuff, because JS do the work before logging.
         this.aqua.logger.debug(
-          `Unknown message/event/op recived, you can extend this so you can use it if you want to.\nOP: ${parsed.op}, PARSED message: ${JSON.stringify(parsed)}`
+          { node: this.name, type: parsed.type, guildId: parsed.guildId, payload: parsed},
+          `recived an event.`
+        )
+        break
+      default:
+        // we let pino build the parsed stuff, because JS do the work before logging.
+        this.aqua.logger.debug(
+          { node: this.name, op: parsed.op, payload: parsed },
+          `Unknown message/event/op recived, you can extend this so you can use it if you want to.`
         )
     }
   }
