@@ -18,23 +18,30 @@ const WEBSOCKET_STATES = {
 }
 
 export default class Node extends EventEmitter {
+  /** Aqualink's internal client name (CLIENT/VERSION format) */
   private clientName: string
-
+  /** current aqua instance running */
   public aqua: AquaManager
+  /** name of the configured node */
   public name: string
+  /** host of the configured node */
   public host: string
+  /** checks if the configured host is a secure connection or not */
   public ssl: boolean
+  /** the configured port */
   public port: number
+  /** the configured password */
   public password: string
+  /** the returned sessionId from the ready payload */
   public sessionId: string | null
-
-  // node related stuff
+  /** checks if the current selected node is connected */
   public connected: boolean
-
+  /** the rest instance */
   public rest: Rest
-
+  /** stats object (only proprieties) */
   public stats: object
-
+  /** check if the current node is running an nodelink connection */
+  
   public isNodelink: boolean
   constructor(
     aqua: AquaManager,
