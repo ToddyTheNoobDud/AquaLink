@@ -7,6 +7,14 @@ export interface AquaOptions {
   logging: {
     level: Level
   }
+  nodeConfigs: {
+    /** if the node goes down, keep retrying infinitely until it reconnects */
+    infiniteReconnects: boolean
+    /** Disabled when infiniteReconnects is true. If the node goes down, how much tries
+     *  to reconnect to a node until it stops.
+     */
+    maxRetries: number
+  }
 }
 
 export interface NodeOptions {

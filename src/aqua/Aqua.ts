@@ -12,8 +12,6 @@ export default class AquaManager extends EventEmitter {
   public client: undefined
   /** Array of the configured nodes. */
   public nodes: NodeOptions[]
-  /** Maps of the node, for get/identificatio/set usage */
-  public nodesMap: Map<string, Node>
   /** Options (soon) */
   public options?: AquaOptions
   /** the clientId from init. */
@@ -26,15 +24,15 @@ export default class AquaManager extends EventEmitter {
   // biome-ignore lint/suspicious/noExplicitAny: I don't know what client the user will use, so let it be any,
   constructor(client: any, nodes: NodeOptions[], options?: AquaOptions) {
     super()
+
     if (!client) throw new Error('Aqua needs a client for the 1st arg.')
     if (!Array.isArray(nodes) || !nodes.length)
       throw new Error('Aqua needs the nodes for the 2nd args.')
 
     this.client = client
     this.nodes = nodes
+
     if (options) this.options = options
-    // id is key for finding the node, then the value is the node array
-    this.nodesMap = new Map<string, Node>()
 
     this.clientId = null
     this.initiated = false
@@ -117,6 +115,10 @@ const nodes = [
 const node = new AquaManager(client, nodes, {
   logging: {
     level: 'debug'
+  },
+  nodeConfigs: {
+    infiniteReconnects: true,
+    maxRetries: 10
   }
 })
 

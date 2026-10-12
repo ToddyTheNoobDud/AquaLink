@@ -3,6 +3,10 @@ import { WebSocket } from 'node:http'
 import type AquaManager from '../aqua/Aqua.ts'
 import Rest from '../rest/Rest.ts'
 import { RoutesForWebsocket } from '../shared/routes.ts'
+import type {
+  StatsLavalink,
+  StatsNodelink
+} from '../types/Rest/endpoints/stats.ts'
 import type { AquaOptions, NodeOptions } from '../types/shared.ts'
 
 // https://bun.sh/reference/bun/Socket/readyState
@@ -17,7 +21,25 @@ const WEBSOCKET_STATES = {
   Else: 2
 }
 
+const NODE_STATES = {
+  Connecting: 'CONNECTING',
+  Connected: 'CONNECTED',
+  Reconnecting: 'RECONNECTING',
+  Disconnected: 'DISCONNECTED',
+  Destroyed: 'DESTROYED',
+  None: 'NONE'
+}
+
+// 5 seconds
+const BASE_BACKOFF = 5000
+// 7 minutes, 420 seconds
+const MAX_BACKOFF = 420000
+
 export default class Node extends EventEmitter {
+  private infiniteReconnects: boolean
+  private maxRetries: number
+  private reconnectRetries: number
+
   /** Aqualink's internal client name (CLIENT/VERSION format) */
   private clientName: string
   /** current aqua instance running */
@@ -39,10 +61,12 @@ export default class Node extends EventEmitter {
   /** the rest instance */
   public rest: Rest
   /** stats object (only proprieties) */
-  public stats: object
+  public stats: StatsNodelink | StatsLavalink | object
   /** check if the current node is running an nodelink connection */
-
   public isNodelink: boolean
+
+  public nodeState: string
+
   constructor(
     aqua: AquaManager,
     nodeOptions: NodeOptions,
@@ -57,6 +81,12 @@ export default class Node extends EventEmitter {
     this.password = nodeOptions.password
     this.name = nodeOptions.name
 
+    this.infiniteReconnects =
+      this.aqua.options?.nodeConfigs.infiniteReconnects === true
+    this.maxRetries = this.aqua.options?.nodeConfigs.maxRetries ?? 10
+
+    this.reconnectRetries = 0
+
     this.sessionId = null
 
     this.rest = new Rest(this.aqua, this)
@@ -65,30 +95,12 @@ export default class Node extends EventEmitter {
 
     this.isNodelink = false
 
+    this.nodeState = NODE_STATES.None
+
     this.clientName =
       'Aqualink/4.0.0 (https://github.com/ToddyTheNoobDud/AquaLink'
 
-    this.stats = {
-      players: 0,
-      playingPlayers: 0,
-      uptime: 0,
-      memory: {
-        free: 0,
-        used: 0,
-        allocated: 0,
-        reservable: 0
-      },
-      cpu: {
-        cores: 0,
-        systemLoad: 0,
-        lavalinkLoad: 0
-      },
-      frameStats: {
-        sent: 0,
-        nulled: 0,
-        deficit: 0
-      }
-    }
+    this.stats = {}
   }
 
   /**
@@ -97,7 +109,7 @@ export default class Node extends EventEmitter {
    */
   public async connect() {
     if (this.connected) {
-      return
+      return this.aqua.logger.error('this node is already connected')
     }
 
     const protocol = this.ssl ? 'wss' : 'ws'
@@ -119,6 +131,8 @@ export default class Node extends EventEmitter {
       headers
     })
 
+    this.nodeState = NODE_STATES.Connecting
+
     websocket.addEventListener('message', (message) => {
       this.handleWebsocketMessages(message as MessageEvent)
     })
@@ -130,6 +144,10 @@ export default class Node extends EventEmitter {
       },
       true
     )
+
+    websocket.addEventListener('close', (close) => {
+      this.handleWebsocketClose(close, websocket)
+    })
 
     return websocket
   }
@@ -151,7 +169,6 @@ export default class Node extends EventEmitter {
         if ('op' in parsed) delete parsed.op
 
         if ('nodelinkLoad' in parsed.cpu) {
-          console.log(parsed)
           delete parsed.cpu.lavalinkLoad
         }
 
@@ -187,9 +204,75 @@ export default class Node extends EventEmitter {
       if (info)
         this.isNodelink = 'isNodelink' in info && info.isNodelink === true
 
+      this.reconnectRetries = 0
+
+      this.connected = true
+      this.nodeState = NODE_STATES.Connected
+
       this.aqua.logger.info(
         `Aqualink has connected to the node: ${this.name}, isNodelink: ${this.isNodelink}`
       )
+    }
+  }
+
+  private async handleWebsocketClose(close: any, websocket: any) {
+    this.connected = false
+    this.nodeState = NODE_STATES.Disconnected
+
+    // bigger than 0 means an reconnection is happening
+    if (this.reconnectRetries > 0)
+      this.aqua.logger.info('Reconnection in progress')
+
+    if (close.code === 1006 && this.nodeState !== NODE_STATES.Reconnecting)
+      this.aqua.logger.info(
+        '1006 close clode, probaly the node got force-killed.'
+      )
+
+    this.manageBackoff(websocket)
+  }
+
+  private async manageBackoff(websocket: any) {
+    if (websocket.readyState === WEBSOCKET_STATES.Established || this.connected)
+      return this.aqua.logger.info(
+        'WEBSOCKET is already connected, why a backoff would happen?'
+      )
+
+    let time = BASE_BACKOFF
+
+    if (this.maxRetries && !this.infiniteReconnects) {
+      if (this.reconnectRetries < this.maxRetries) {
+        this.nodeState = NODE_STATES.Reconnecting
+
+        if (this.reconnectRetries >= 2)
+          time = Math.min(
+            BASE_BACKOFF * (this.reconnectRetries + 0.5),
+            MAX_BACKOFF
+          )
+        setTimeout(async () => {
+          this.reconnectRetries++
+
+          await this.connect()
+        }, time)
+      } else if (this.reconnectRetries >= this.maxRetries) {
+        this.aqua.logger.info(
+          'Max retries reached, in the future, the node will be deleted/destroyed when this happens.'
+        )
+      }
+    }
+
+    if (this.infiniteReconnects) {
+      this.nodeState = NODE_STATES.Reconnecting
+
+      if (this.reconnectRetries >= 2)
+        time = Math.min(
+          BASE_BACKOFF * (this.reconnectRetries + 0.5),
+          MAX_BACKOFF
+        )
+      setTimeout(async () => {
+        this.reconnectRetries++
+
+        await this.connect()
+      }, time)
     }
   }
 }
