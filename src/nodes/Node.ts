@@ -41,7 +41,7 @@ export default class Node extends EventEmitter {
   /** stats object (only proprieties) */
   public stats: object
   /** check if the current node is running an nodelink connection */
-  
+
   public isNodelink: boolean
   constructor(
     aqua: AquaManager,
@@ -146,6 +146,17 @@ export default class Node extends EventEmitter {
         break
       }
       case 'stats':
+        this.aqua.logger.debug('got an stats')
+
+        if ('op' in parsed) delete parsed.op
+
+        if ('nodelinkLoad' in parsed.cpu) {
+          console.log(parsed)
+          delete parsed.cpu.lavalinkLoad
+        }
+
+        this.stats = parsed
+
         break
       case 'events':
         // we let pino build the parsed stuff, because JS do the work before logging.
