@@ -9,6 +9,7 @@ import type {
   LavalinkInfo,
   NodelinkInfo
 } from '../types/Rest/endpoints/info.ts'
+import type { LoadResult, PlayerUpdate } from '../types/shared.ts'
 
 export default class Rest {
   /** the Aqua manager instance */
@@ -36,11 +37,12 @@ export default class Rest {
    * @param url obrigatory URL to fetch
    * @param method method in HTTP, defaults to GET
    * @returns Promise<Response>, the response of the fetched url.
-   * null if the request failed, undefined for requests which returns 204.
+   * undefined if the request failed, null for responses with status 204.
    */
   public async makeRequest(
     url: string,
-    method?: RequestInit['method']
+    method?: RequestInit['method'],
+    body?: object
   ): Promise<unknown> {
     try {
       if (!url) {
@@ -52,12 +54,17 @@ export default class Rest {
       const serverHost = `${secureServer}://${this.nodes.host}:${this.nodes.port}`
 
       const fetchUrl = serverHost + url
+      const headers: Record<string, string> = {
+        Authorization: this.nodes.password
+      }
+      if (body !== undefined) {
+        headers['Content-Type'] = 'application/json'
+      }
 
       const response = await fetch(fetchUrl, {
         method: method ? method : 'GET',
-        headers: {
-          Authorization: `${this.nodes.password}`
-        }
+        headers,
+        body: body === undefined ? undefined : JSON.stringify(body)
       })
 
       // https://www.freecodecamp.org/news/when-to-use-asyncawait-vs-promises-in-javascript/#heading-practical-examples-promises-vs-asyncawait
@@ -93,13 +100,32 @@ export default class Rest {
     return res as NodelinkInfo | LavalinkInfo | null | undefined
   }
 
-  async loadTracks(query: string, source: string) {
+  async loadTracks(
+    query: string,
+    source: string
+  ): Promise<LoadResult | null | undefined> {
     if (!source || !query) {
       return undefined
     }
     const res = await this.makeRequest(
       `${RoutesForRest.LoadTracksRoute}?identifier=${source}:${encodeURIComponent(query)}`
     )
+    return res as LoadResult | null | undefined
+  }
+
+  public async updatePlayers(guildId: string, data?: PlayerUpdate) {
+    if (!guildId) {
+      return undefined
+    }
+
+    const sessionId = this.getSessionId()
+
+    if (sessionId === undefined) {
+      return undefined
+    }
+
+    const url = `/v4/sessions/${sessionId}/players/${guildId}?noReplace=true`
+    const res = await this.makeRequest(url, 'PATCH', data)
     return res
   }
 }

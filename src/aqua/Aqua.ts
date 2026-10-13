@@ -1,8 +1,23 @@
 import { EventEmitter } from 'node:events'
 import pino, { type Logger } from 'pino'
 import Node from '../nodes/Node.ts'
+import Player from '../player/Player.ts'
 import Track from '../shared/Track.ts'
-import type { AquaOptions, LoadResult, NodeOptions } from '../types/shared.ts'
+import type {
+  AquaOptions,
+  LoadResult,
+  NodeOptions,
+  VoicePacket,
+  VoiceUpdatePayload
+} from '../types/shared.ts'
+
+export type ConnectionOptions = {
+  guildId: string
+  voiceChannel: string
+  textChannel: string
+  deaf?: boolean
+  mute?: boolean
+}
 
 /**
  * Here is what happens most of the stuff. For example, getting the configured
@@ -10,10 +25,10 @@ import type { AquaOptions, LoadResult, NodeOptions } from '../types/shared.ts'
  */
 export default class AquaManager extends EventEmitter {
   /** the client instance from your discord lib */
-  public client: undefined
+  public client: unknown
   /** Array of the configured nodes. */
   public nodes: NodeOptions[]
-
+  /** the nodes as a Map */
   public nodesMap: Map<string, Node>
   /** Options (soon) */
   public options?: AquaOptions
@@ -23,9 +38,10 @@ export default class AquaManager extends EventEmitter {
   public logger: Logger
   /** check if the aqua instance has started. */
   public initiated: boolean
+  /** current registered players in aqua */
+  public players: Map<string, Player>
 
-  // biome-ignore lint/suspicious/noExplicitAny: I don't know what client the user will use, so let it be any,
-  constructor(client: any, nodes: NodeOptions[], options?: AquaOptions) {
+  constructor(client: unknown, nodes: NodeOptions[], options?: AquaOptions) {
     super()
 
     if (!client) {
@@ -39,6 +55,7 @@ export default class AquaManager extends EventEmitter {
     this.nodes = nodes
 
     this.nodesMap = new Map()
+    this.players = new Map()
 
     if (options) {
       this.options = options
@@ -50,6 +67,80 @@ export default class AquaManager extends EventEmitter {
       level: this.options?.logging.level,
       transport: { target: 'pino-pretty' }
     })
+  }
+
+  /**
+   * gets an existing player
+   *
+   * @param guildid: the guildId
+   * @returns the player registered on the Map
+   */
+  public get(guildid: string) {
+    const player = this.players.get(guildid)
+    if (!player) {
+      return null
+    }
+    return player
+  }
+
+  /** Sends a voice update using the Discord adapter provided in options. */
+  public async send(data: VoiceUpdatePayload) {
+    if (!this.options?.send) {
+      throw new Error(
+        'Configure options.send to connect a player to Discord voice.'
+      )
+    }
+    await this.options.send(data)
+  }
+
+  /** ... */
+  public async updateVoiceState(packet: VoicePacket) {
+    const guildId = packet.d.guild_id
+    if (!guildId) {
+      return
+    }
+    const player = this.players.get(guildId)
+    if (!player) {
+      return
+    }
+    switch (packet.t) {
+      case 'VOICE_STATE_UPDATE':
+        if (packet.d.user_id !== this.clientId) {
+          return
+        }
+        await player.connection.setStateUpdate(packet.d)
+        break
+      case 'VOICE_SERVER_UPDATE':
+        await player.connection.setSeverUpdate(packet.d)
+        break
+    }
+  }
+
+  public async createConnection(options: ConnectionOptions) {
+    const player = this.players.get(options.guildId)
+
+    if (player) {
+      return player
+    }
+
+    return await this.createPlayer(options)
+  }
+
+  public async createPlayer(options: ConnectionOptions) {
+    const existing = this.players.get(options.guildId)
+    if (existing) {
+      return existing
+    }
+    const player = new Player(this)
+    // Register before joining: Discord may send voice packets immediately.
+    this.players.set(options.guildId, player)
+    try {
+      await player.connect(options)
+      return player
+    } catch (error) {
+      this.players.delete(options.guildId)
+      throw error
+    }
   }
 
   /**
@@ -114,15 +205,13 @@ export default class AquaManager extends EventEmitter {
   }
 
   private handleTrackLoading(res: LoadResult) {
-    const data = res.data
-
     switch (res.loadType) {
       case 'search': {
-        if (!Array.isArray(data)) {
+        if (!Array.isArray(res.data)) {
           return
         }
 
-        const tracks = data.map((trackData) => new Track(trackData))
+        const tracks = res.data.map((trackData) => new Track(trackData))
 
         return tracks
       }
@@ -149,7 +238,7 @@ export default class AquaManager extends EventEmitter {
   }
 }
 
-const client = 'mockclient'
+/* const client = 'mockclient'
 
 const nodes = [
   {
@@ -179,3 +268,4 @@ setTimeout(async () => {
     console.log(res[0]?.info.uri)
   }
 }, 3000)
+ */

@@ -22,8 +22,19 @@ const WEBSOCKET_STATES = {
 
 // 5 seconds
 const BASE_BACKOFF = 5000
+
 // 7 minutes, 420 seconds
 const MAX_BACKOFF = 420000
+
+interface WebsocketPayload {
+  op?: string
+  sessionId?: string
+  guildId?: string
+  type?: string
+  track?: { encoded: string }
+  cpu?: { nodelinkLoad?: number; lavalinkLoad?: number }
+  [field: string]: unknown
+}
 
 export default class Node extends EventEmitter {
   private infiniteReconnects: boolean
@@ -122,16 +133,12 @@ export default class Node extends EventEmitter {
     })
 
     websocket.addEventListener('message', (message) => {
-      this.handleWebsocketMessages(message as MessageEvent)
+      this.handleWebsocketMessages(message as MessageEvent<string>)
     })
 
-    websocket.addEventListener(
-      'open',
-      (open) => {
-        this.handleWebsocketOpen(open)
-      },
-      true
-    )
+    websocket.addEventListener('open', (open) => {
+      this.handleWebsocketOpen(open)
+    })
 
     websocket.addEventListener('close', (close) => {
       this.handleWebsocketClose(close, websocket)
@@ -141,13 +148,14 @@ export default class Node extends EventEmitter {
     return websocket
   }
 
-  private async handleWebsocketMessages(message: MessageEvent) {
-    const parsed = JSON.parse(message.data)
+  private async handleWebsocketMessages(message: MessageEvent<string>) {
+    const parsed = JSON.parse(message.data) as WebsocketPayload
 
     switch (parsed.op) {
       case 'ready': {
         this.aqua.logger.info(`Node is ready: ${this.name}`)
-        this.sessionId = parsed.sessionId
+        this.sessionId = parsed.sessionId ?? null
+        this.connected = this.sessionId !== null
 
         break
       }
@@ -158,14 +166,27 @@ export default class Node extends EventEmitter {
           delete parsed.op
         }
 
-        if ('nodelinkLoad' in parsed.cpu) {
+        if (parsed.cpu && 'nodelinkLoad' in parsed.cpu) {
           delete parsed.cpu.lavalinkLoad
         }
 
         this.stats = parsed
 
         break
-      case 'events':
+      case 'playerUpdate':
+        this.aqua.logger.info('i got a playerUpdate')
+        break
+      case 'event':
+      case 'events': {
+        const player = this.aqua.get(parsed.guildId ?? '')
+        if (
+          player?.node === this &&
+          player.current?.encoded === parsed.track?.encoded &&
+          parsed.type === 'TrackEndEvent'
+        ) {
+          player.playing = false
+          player.current = null
+        }
         // we let pino build the parsed stuff, because JS do the work before logging.
         this.aqua.logger.debug(
           {
@@ -177,6 +198,7 @@ export default class Node extends EventEmitter {
           `recived an event.`
         )
         break
+      }
       default:
         // we let pino build the parsed stuff, because JS do the work before logging.
         this.aqua.logger.debug(
@@ -190,7 +212,7 @@ export default class Node extends EventEmitter {
     const socket = open.currentTarget as WebSocket | null
     if (
       socket?.readyState !== WEBSOCKET_STATES.Established ||
-      open.currentTarget !== this.websocket
+      socket !== this.websocket
     ) {
       return
     }
@@ -198,10 +220,10 @@ export default class Node extends EventEmitter {
     try {
       const info = await this.rest.getInfo()
 
-      // we check again, because an late info response can come even after a socket was closed.
+      // we check again, because an late info response can come even after a socket was closed
       if (
-        socket?.readyState !== WEBSOCKET_STATES.Established ||
-        open.currentTarget !== this.websocket
+        socket.readyState !== WEBSOCKET_STATES.Established ||
+        socket !== this.websocket
       ) {
         return
       }
@@ -217,7 +239,7 @@ export default class Node extends EventEmitter {
         `Aqualink has connected to the node: ${this.name}, isNodelink: ${this.isNodelink}`
       )
     } catch (error) {
-      if (this.websocket === open.currentTarget) {
+      if (this.websocket === socket) {
         this.connected = false
         this.reconnectRetries = 0
       }

@@ -4,6 +4,8 @@
 import type { Level } from 'pino'
 
 export interface AquaOptions {
+  /** Sends a Discord gateway voice update through the consumer's Discord client. */
+  send?: (payload: VoiceUpdatePayload) => void | Promise<void>
   logging: {
     level: Level
   }
@@ -15,6 +17,45 @@ export interface AquaOptions {
      */
     maxRetries: number
   }
+}
+
+export interface VoiceUpdatePayload {
+  op: 4
+  d: {
+    guild_id: string
+    channel_id: string | null
+    self_deaf: boolean
+    self_mute: boolean
+  }
+}
+
+export interface VoiceStateUpdate {
+  guild_id?: string
+  user_id: string
+  session_id: string
+  channel_id: string | null
+}
+
+export interface VoiceServerUpdate {
+  guild_id: string
+  token: string
+  endpoint: string | null
+}
+
+export type VoicePacket =
+  | { t: 'VOICE_STATE_UPDATE'; d: VoiceStateUpdate }
+  | { t: 'VOICE_SERVER_UPDATE'; d: VoiceServerUpdate }
+
+export interface VoiceInfo {
+  token: string
+  endpoint: string
+  sessionId: string
+  channelId: string
+}
+
+export interface PlayerUpdate {
+  voice?: VoiceInfo
+  track?: { encoded: string | null }
 }
 
 export interface NodeOptions {
