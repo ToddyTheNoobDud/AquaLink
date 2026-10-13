@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events'
 import pino, { type Logger } from 'pino'
 import Node from '../nodes/Node.ts'
 import Track from '../shared/Track.ts'
-import type { AquaOptions, NodeOptions } from '../types/shared.ts'
+import type { AquaOptions, LoadResult, NodeOptions } from '../types/shared.ts'
 
 /**
  * Here is what happens most of the stuff. For example, getting the configured
@@ -28,16 +28,21 @@ export default class AquaManager extends EventEmitter {
   constructor(client: any, nodes: NodeOptions[], options?: AquaOptions) {
     super()
 
-    if (!client) throw new Error('Aqua needs a client for the 1st arg.')
-    if (!Array.isArray(nodes) || !nodes.length)
+    if (!client) {
+      throw new Error('Aqua needs a client for the 1st arg.')
+    }
+    if (!Array.isArray(nodes) || !nodes.length) {
       throw new Error('Aqua needs the nodes for the 2nd args.')
+    }
 
     this.client = client
     this.nodes = nodes
 
     this.nodesMap = new Map()
 
-    if (options) this.options = options
+    if (options) {
+      this.options = options
+    }
 
     this.clientId = null
     this.initiated = false
@@ -75,8 +80,9 @@ export default class AquaManager extends EventEmitter {
 
     if (this.nodes.length === 1) {
       await this.createNode()
-    } else
+    } else {
       throw new Error('For now, aqualink is limited to 1 node per-instance.')
+    }
 
     this.logger.info(
       `Aqualink initiation was a sucess, in total, ${this.nodes.length} nodes were created.`
@@ -98,19 +104,23 @@ export default class AquaManager extends EventEmitter {
     for (const nodeOptions of this.nodes) {
       const node = new Node(this, nodeOptions)
       this.nodesMap.set(nodeOptions.name, node)
-      if (!node.connected) await node.connect()
+      if (!node.connected) {
+        await node.connect()
+      }
       this.logger.debug('CreateNode recived, now trying to connect.')
     }
 
     return this
   }
 
-  private handleTrackLoading(res: any) {
+  private handleTrackLoading(res: LoadResult) {
     const data = res.data
 
     switch (res.loadType) {
       case 'search': {
-        if (!Array.isArray(data)) return
+        if (!Array.isArray(data)) {
+          return
+        }
 
         const tracks = data.map((trackData) => new Track(trackData))
 
@@ -121,13 +131,18 @@ export default class AquaManager extends EventEmitter {
 
   public async resolve(query: string, source: string, _node?: Node) {
     // i will do auto node select soon.
-    //
     const nodes = this.nodesMap.get(this.nodes[0]?.name as string)
-    if (!nodes?.connected) return this.logger.error('You cannot resolve a song while the NODE is offline/not connected.')
+
+    if (!nodes?.connected) {
+      return this.logger.error(
+        'You cannot resolve a song while the NODE is offline/not connected.'
+      )
+    }
+
     const res = await nodes?.rest.loadTracks(query, source)
 
     if (res) {
-      const tracks = this.handleTrackLoading(res)
+      const tracks = this.handleTrackLoading(res as LoadResult)
 
       return tracks
     }
@@ -160,5 +175,7 @@ node.init('1202232935311495209')
 
 setTimeout(async () => {
   const res = await node.resolve('brand new slayr', 'ytsearch')
-  if (res) console.log(res[0]?.info.uri)
+  if (res) {
+    console.log(res[0]?.info.uri)
+  }
 }, 3000)

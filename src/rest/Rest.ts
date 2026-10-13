@@ -23,8 +23,11 @@ export default class Rest {
 
   /** Gets the Node instance sessionId, returns undefined if it does not have a value */
   getSessionId() {
-    if (this.nodes.sessionId) return this.nodes.sessionId
-    else return undefined // basic js stuff: undefined means a value should be here but its not, null would mean its actually meant to be null.
+    if (this.nodes.sessionId) {
+      return this.nodes.sessionId
+    } else {
+      return undefined // basic js stuff: undefined means a value should be here but its not, null would mean its actually meant to be null.
+    }
   }
 
   /**
@@ -61,13 +64,19 @@ export default class Rest {
       // i will use async/await code here because i find it more readable than using .then/.catch
       // and both also returns a Promise so we good.
 
-      if (!response.ok) return null
+      if (!response.ok) {
+        return null
+      }
 
-      if (response.status === 204) return undefined
+      if (response.status === 204) {
+        return undefined
+      }
 
-      if (response.headers.get('content-type')?.includes('text/plain'))
+      if (response.headers.get('content-type')?.includes('text/plain')) {
         return await response.text()
-      else return await response.json()
+      } else {
+        return await response.json()
+      }
     } catch (error) {
       this.aqua.logger.error(`Fetch just got a error: ${error}, in url: ${url}`)
       return null
@@ -85,7 +94,9 @@ export default class Rest {
   }
 
   async loadTracks(query: string, source: string) {
-    if (!source || !query) return null
+    if (!source || !query) {
+      return null
+    }
     const res = await this.makeRequest(
       `${RoutesForRest.LoadTracksRoute}?identifier=${source}:${encodeURIComponent(query)}`
     )

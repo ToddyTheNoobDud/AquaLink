@@ -154,7 +154,9 @@ export default class Node extends EventEmitter {
       case 'stats':
         this.aqua.logger.debug('got an stats')
 
-        if ('op' in parsed) delete parsed.op
+        if ('op' in parsed) {
+          delete parsed.op
+        }
 
         if ('nodelinkLoad' in parsed.cpu) {
           delete parsed.cpu.lavalinkLoad
@@ -203,8 +205,9 @@ export default class Node extends EventEmitter {
       ) {
         return
       }
-      if (info)
+      if (info) {
         this.isNodelink = 'isNodelink' in info && info.isNodelink === true
+      }
 
       this.reconnectRetries = 0
 
@@ -228,31 +231,38 @@ export default class Node extends EventEmitter {
     this.connected = false
 
     // bigger than 0 means an reconnection is happening
-    if (this.reconnectRetries > 0)
+    if (this.reconnectRetries > 0) {
       this.aqua.logger.info('Reconnection in progress')
+    }
 
-    if (close.code === 1006 && this.reconnectRetries === 0)
+    if (close.code === 1006 && this.reconnectRetries === 0) {
       this.aqua.logger.info(
         '1006 close clode, probaly the node got force-killed.'
       )
+    }
 
     this.manageBackoff(websocket)
   }
 
   private manageBackoff(websocket: WebSocket) {
-    if (websocket.readyState === WEBSOCKET_STATES.Established || this.connected)
+    if (
+      websocket.readyState === WEBSOCKET_STATES.Established ||
+      this.connected
+    ) {
       return this.aqua.logger.info(
         'WEBSOCKET is already connected, why a backoff would happen?'
       )
+    }
 
     let time = BASE_BACKOFF
 
     const backoff = () => {
-      if (this.reconnectRetries >= 2)
+      if (this.reconnectRetries >= 2) {
         time = Math.min(
           BASE_BACKOFF * (this.reconnectRetries + 0.5),
           MAX_BACKOFF
         )
+      }
       setTimeout(async () => {
         this.reconnectRetries++
 

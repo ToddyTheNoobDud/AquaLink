@@ -48,3 +48,13 @@ export interface TrackAPI {
     }
   }
 }
+
+export type LoadResult =
+  | {
+      loadType: 'search'
+      data: TrackAPI['track'][]
+    }
+  | {
+      loadType: 'track' | 'playlist' | 'empty' | 'error'
+      data: unknown
+    }
