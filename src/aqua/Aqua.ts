@@ -105,7 +105,7 @@ export default class AquaManager extends EventEmitter {
     return this
   }
 
-  private async handleTrackLoading(res: any) {
+  private handleTrackLoading(res: any) {
     const data = res.data
 
     switch (res.loadType) {
@@ -119,14 +119,15 @@ export default class AquaManager extends EventEmitter {
     }
   }
 
-  public async resolve(query: string, source: string, node?: Node) {
+  public async resolve(query: string, source: string, _node?: Node) {
     // i will do auto node select soon.
     //
     const nodes = this.nodesMap.get(this.nodes[0]?.name as string)
+    if (!nodes?.connected) return this.logger.error('You cannot resolve a song while the NODE is offline/not connected.')
     const res = await nodes?.rest.loadTracks(query, source)
 
     if (res) {
-      const tracks = await this.handleTrackLoading(res)
+      const tracks = this.handleTrackLoading(res)
 
       return tracks
     }
@@ -159,5 +160,5 @@ node.init('1202232935311495209')
 
 setTimeout(async () => {
   const res = await node.resolve('brand new slayr', 'ytsearch')
-  if (res)  console.log(res[0]?.info.uri)
+  if (res) console.log(res[0]?.info.uri)
 }, 3000)

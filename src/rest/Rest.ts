@@ -69,7 +69,7 @@ export default class Rest {
         return await response.text()
       else return await response.json()
     } catch (error) {
-      this.aqua.logger.error(`Fetch just got a error: ${error}`)
+      this.aqua.logger.error(`Fetch just got a error: ${error}, in url: ${url}`)
       return null
     }
   }
@@ -86,7 +86,9 @@ export default class Rest {
 
   async loadTracks(query: string, source: string) {
     if (!source || !query) return null
-    const res = await this.makeRequest(`${RoutesForRest.LoadTracksRoute}?identifier=${source}:${encodeURIComponent(query)}`)
+    const res = await this.makeRequest(
+      `${RoutesForRest.LoadTracksRoute}?identifier=${source}:${encodeURIComponent(query)}`
+    )
     return res
   }
 }

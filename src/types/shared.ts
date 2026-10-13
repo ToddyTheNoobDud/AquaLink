@@ -32,18 +32,18 @@ export interface NodeOptions {
 
 export interface TrackAPI {
   track: {
-    encoded: string,
+    encoded: string
     info: {
-      identifier: string,
-      isSeekable: boolean,
-      author: string,
-      length: number,
-      isStream: boolean,
-      position: number,
-      title: string,
-      uri: string,
-      artworkUrl: string,
-      isrc: string,
+      identifier: string
+      isSeekable: boolean
+      author: string
+      length: number
+      isStream: boolean
+      position: number
+      title: string
+      uri: string
+      artworkUrl: string
+      isrc: string
       sourceName: string
     }
   }

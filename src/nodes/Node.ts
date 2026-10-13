@@ -1,5 +1,4 @@
 import EventEmitter from 'node:events'
-import { WebSocket } from 'node:http'
 import type AquaManager from '../aqua/Aqua.ts'
 import Rest from '../rest/Rest.ts'
 import { RoutesForWebsocket } from '../shared/routes.ts'
@@ -19,15 +18,6 @@ const WEBSOCKET_STATES = {
   Closed: 0,
   Established: 1,
   Else: 2
-}
-
-const NODE_STATES = {
-  Connecting: 'CONNECTING',
-  Connected: 'CONNECTED',
-  Reconnecting: 'RECONNECTING',
-  Disconnected: 'DISCONNECTED',
-  Destroyed: 'DESTROYED',
-  None: 'NONE'
 }
 
 // 5 seconds
@@ -64,8 +54,8 @@ export default class Node extends EventEmitter {
   public stats: StatsNodelink | StatsLavalink | object
   /** check if the current node is running an nodelink connection */
   public isNodelink: boolean
-
-  public nodeState: string
+  /** current websocket in the Node. */
+  public websocket: WebSocket | null = null
 
   constructor(
     aqua: AquaManager,
@@ -95,10 +85,10 @@ export default class Node extends EventEmitter {
 
     this.isNodelink = false
 
-    this.nodeState = NODE_STATES.None
-
     this.clientName =
       'Aqualink/4.0.0 (https://github.com/ToddyTheNoobDud/AquaLink'
+
+    this.websocket = null
 
     this.stats = {}
   }
@@ -131,8 +121,6 @@ export default class Node extends EventEmitter {
       headers
     })
 
-    this.nodeState = NODE_STATES.Connecting
-
     websocket.addEventListener('message', (message) => {
       this.handleWebsocketMessages(message as MessageEvent)
     })
@@ -149,6 +137,7 @@ export default class Node extends EventEmitter {
       this.handleWebsocketClose(close, websocket)
     })
 
+    this.websocket = websocket
     return websocket
   }
 
@@ -158,7 +147,6 @@ export default class Node extends EventEmitter {
     switch (parsed.op) {
       case 'ready': {
         this.aqua.logger.info(`Node is ready: ${this.name}`)
-        this.connected = true
         this.sessionId = parsed.sessionId
 
         break
@@ -196,35 +184,54 @@ export default class Node extends EventEmitter {
     }
   }
 
-  // biome-ignore lint/suspicious/noExplicitAny: The code itself returns any. i think.
-  private async handleWebsocketOpen(open: any) {
-    if (open.currentTarget.readyState === WEBSOCKET_STATES.Established) {
+  private async handleWebsocketOpen(open: Event): Promise<void> {
+    const socket = open.currentTarget as WebSocket | null
+    if (
+      socket?.readyState !== WEBSOCKET_STATES.Established ||
+      open.currentTarget !== this.websocket
+    ) {
+      return
+    }
+
+    try {
       const info = await this.rest.getInfo()
 
-        if (info)
-          this.isNodelink = 'isNodelink' in info && info.isNodelink === true
-  
+      // we check again, because an late info response can come even after a socket was closed.
+      if (
+        socket?.readyState !== WEBSOCKET_STATES.Established ||
+        open.currentTarget !== this.websocket
+      ) {
+        return
+      }
+      if (info)
+        this.isNodelink = 'isNodelink' in info && info.isNodelink === true
+
+      this.reconnectRetries = 0
+
+      this.connected = true
+
+      this.aqua.logger.info(
+        `Aqualink has connected to the node: ${this.name}, isNodelink: ${this.isNodelink}`
+      )
+    } catch (error) {
+      if (this.websocket === open.currentTarget) {
+        this.connected = false
         this.reconnectRetries = 0
-  
-        this.connected = true
-        this.nodeState = NODE_STATES.Connected
-  
-        this.aqua.logger.info(
-          `Aqualink has connected to the node: ${this.name}, isNodelink: ${this.isNodelink}`
-        )
-      
+      }
+      this.aqua.logger.error(
+        `there was an error during info fetching (node connect): ${error}`
+      )
     }
   }
 
-  private async handleWebsocketClose(close: any, websocket: any) {
+  private handleWebsocketClose(close: CloseEvent, websocket: WebSocket) {
     this.connected = false
-    this.nodeState = NODE_STATES.Disconnected
 
     // bigger than 0 means an reconnection is happening
     if (this.reconnectRetries > 0)
       this.aqua.logger.info('Reconnection in progress')
 
-    if (close.code === 1006 && this.nodeState !== NODE_STATES.Reconnecting)
+    if (close.code === 1006 && this.reconnectRetries === 0)
       this.aqua.logger.info(
         '1006 close clode, probaly the node got force-killed.'
       )
@@ -232,7 +239,7 @@ export default class Node extends EventEmitter {
     this.manageBackoff(websocket)
   }
 
-  private async manageBackoff(websocket: any) {
+  private manageBackoff(websocket: WebSocket) {
     if (websocket.readyState === WEBSOCKET_STATES.Established || this.connected)
       return this.aqua.logger.info(
         'WEBSOCKET is already connected, why a backoff would happen?'
@@ -240,30 +247,7 @@ export default class Node extends EventEmitter {
 
     let time = BASE_BACKOFF
 
-    if (this.maxRetries && !this.infiniteReconnects) {
-      if (this.reconnectRetries < this.maxRetries) {
-        this.nodeState = NODE_STATES.Reconnecting
-
-        if (this.reconnectRetries >= 2)
-          time = Math.min(
-            BASE_BACKOFF * (this.reconnectRetries + 0.5),
-            MAX_BACKOFF
-          )
-        setTimeout(async () => {
-          this.reconnectRetries++
-
-          await this.connect()
-        }, time)
-      } else if (this.reconnectRetries >= this.maxRetries) {
-        this.aqua.logger.info(
-          'Max retries reached, in the future, the node will be deleted/destroyed when this happens.'
-        )
-      }
-    }
-
-    if (this.infiniteReconnects) {
-      this.nodeState = NODE_STATES.Reconnecting
-
+    const backoff = () => {
       if (this.reconnectRetries >= 2)
         time = Math.min(
           BASE_BACKOFF * (this.reconnectRetries + 0.5),
@@ -274,6 +258,20 @@ export default class Node extends EventEmitter {
 
         await this.connect()
       }, time)
+    }
+
+    if (this.maxRetries && !this.infiniteReconnects) {
+      if (this.reconnectRetries < this.maxRetries) {
+        backoff()
+      } else if (this.reconnectRetries >= this.maxRetries) {
+        this.aqua.logger.info(
+          'Max retries reached, in the future, the node will be deleted/destroyed when this happens.'
+        )
+      }
+    }
+
+    if (this.infiniteReconnects) {
+      backoff()
     }
   }
 }
