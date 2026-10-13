@@ -26,16 +26,39 @@ const BASE_BACKOFF = 5000
 // 7 minutes, 420 seconds
 const MAX_BACKOFF = 420000
 
+/**
+ * Fields the current WebSocket handler reads. Extra plugin fields stay unknown.
+ * This is a draft view of a parsed payload, not validation of incoming JSON.
+ * @example A ready payload is { op: 'ready', sessionId: 'node-session' }.
+ */
 interface WebsocketPayload {
+  /** Server operation, for example ready, stats or event. */
   op?: string
+  /** Node session carried by ready. */
   sessionId?: string
+  /** Guild related to a player update/event, when present. */
   guildId?: string
+  /** Event name, for example TrackEndEvent. */
   type?: string
+  /** Encoded track used to match an end event to the local current track. */
   track?: { encoded: string }
+  /** Stats loads read by the handler; some NodeLink payloads don't include cpu. */
   cpu?: { nodelinkLoad?: number; lavalinkLoad?: number }
+  /** Other server/plugin fields, without assuming their shape yet. */
   [field: string]: unknown
 }
 
+/**
+ * One Lavalink/NodeLink server: WebSocket messages, REST and reconnect attempts.
+ * Aqua normally creates/registers it. Custom ops/events are still logged only;
+ * public forwarding hooks aren't implemented yet.
+ *
+ * @example
+ * ```ts
+ * const node = aqua.getNode()
+ * if (node) console.log(node.name, node.isNodelink)
+ * ```
+ */
 export default class Node extends EventEmitter {
   private infiniteReconnects: boolean
   private maxRetries: number
@@ -55,19 +78,31 @@ export default class Node extends EventEmitter {
   public port: number
   /** the configured password */
   public password: string
-  /** the returned sessionId from the ready payload */
+  /** Node session from ready; null before one arrives. Not a Discord voice session. */
   public sessionId: string | null
-  /** checks if the current selected node is connected */
+  /** Local connection flag; also check sessionId before using player REST routes. */
   public connected: boolean
   /** the rest instance */
   public rest: Rest
-  /** stats object (only proprieties) */
+  /** Latest stats without op; starts as {} and depends on what the server sends. */
   public stats: StatsNodelink | StatsLavalink | object
-  /** check if the current node is running an nodelink connection */
+  /** Detected from /v4/info; false initially, so false alone isn't proof of Lavalink. */
   public isNodelink: boolean
   /** current websocket in the Node. */
   public websocket: WebSocket | null = null
 
+  /**
+   * Stores the server config and creates its REST instance, without opening a socket.
+   * Reconnect settings come from aqua.options.nodeConfigs, not the _options argument.
+   *
+   * @param aqua - The owning manager, supplying logging and the bot's user ID.
+   * @param nodeOptions - Host, port, password, name and whether to use TLS.
+   * @param _options - Unused draft argument; configure retries on Aqua instead.
+   * @example
+   * ```ts
+   * const node = new Node(aqua, nodeOptions)
+   * ```
+   */
   constructor(
     aqua: AquaManager,
     nodeOptions: NodeOptions,
@@ -105,8 +140,17 @@ export default class Node extends EventEmitter {
   }
 
   /**
-   * connects to a given node
+   * Starts the WebSocket with this node's password and Aqua's bot user ID.
+   * Aqua should already have its clientId set, normally by init.
+   * Sends Session-Id if there's a stored session; the server decides if it can resume.
+   * This method returns after creating the socket, before open/ready messages arrive.
    *
+   * @returns The new WebSocket, or undefined after logging that we're already connected.
+   * @throws If constructing the WebSocket fails; asynchronous socket errors happen later.
+   * @example
+   * ```ts
+   * await node.connect() // starts connecting; this isn't a readiness promise
+   * ```
    */
   public async connect() {
     if (this.connected) {
@@ -148,6 +192,13 @@ export default class Node extends EventEmitter {
     return websocket
   }
 
+  /**
+   * Parses a server message: ready stores the session, stats replaces the snapshot,
+   * and a matching TrackEnd clears local playback. playerUpdate is only logged so far.
+   * Unknown ops/events are logged rather than forwarded to public listeners.
+   * @throws If message.data isn't valid JSON; payload fields aren't schema-validated.
+   * @example Incoming { op: 'ready', sessionId: 'node-session' } stores the session ID.
+   */
   private async handleWebsocketMessages(message: MessageEvent<string>) {
     const parsed = JSON.parse(message.data) as WebsocketPayload
 
@@ -208,6 +259,11 @@ export default class Node extends EventEmitter {
     }
   }
 
+  /**
+   * Fetches info to detect NodeLink, then resets retries and marks the socket connected.
+   * Checks socket identity/state around the request so a late result can't revive it.
+   * @example A WebSocket open event calls this; a delayed response from an old socket is ignored.
+   */
   private async handleWebsocketOpen(open: Event): Promise<void> {
     const socket = open.currentTarget as WebSocket | null
     if (
@@ -249,6 +305,11 @@ export default class Node extends EventEmitter {
     }
   }
 
+  /**
+   * Marks the node disconnected, logs the close and schedules retries through backoff.
+   * The stored sessionId is kept for the next connection's Session-Id header.
+   * @example Closing a socket triggers this automatically; users don't call it directly.
+   */
   private handleWebsocketClose(close: CloseEvent, websocket: WebSocket) {
     this.connected = false
 
@@ -266,6 +327,13 @@ export default class Node extends EventEmitter {
     this.manageBackoff(websocket)
   }
 
+  /**
+   * Schedules a retry if the socket is closed and retry settings allow it.
+   * Starts at 5 seconds, then grows with the retry count up to 420 seconds.
+   * maxRetries=0 disables finite retries; infiniteReconnects ignores that limit.
+   * Successful open/info handling resets the retry count.
+   * @example With maxRetries=3 and no successful reconnect, delays are 5s, 5s, 12.5s.
+   */
   private manageBackoff(websocket: WebSocket) {
     if (
       websocket.readyState === WEBSOCKET_STATES.Established ||
