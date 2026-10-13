@@ -20,9 +20,8 @@ export default class Player extends EventEmitter {
   private connecting: Promise<Connection> | null = null
   private starting: Promise<this> | null = null
 
-  constructor(aqua: AquaManager) {
+  constructor(aqua: AquaManager, node: Node | null = aqua.getNode()) {
     super()
-    const node = aqua.nodesMap.get(aqua.nodes[0]?.name ?? '')
     if (!node?.connected || !node.sessionId) {
       throw new Error(
         'A connected node with a ready session is required to create a player.'

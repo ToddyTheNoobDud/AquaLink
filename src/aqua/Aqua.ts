@@ -83,6 +83,16 @@ export default class AquaManager extends EventEmitter {
     return player
   }
 
+  /** Returns the first connected node with a ready session, or null. */
+  public getNode(): Node | null {
+    for (const node of this.nodesMap.values()) {
+      if (node.connected && node.sessionId) {
+        return node
+      }
+    }
+    return null
+  }
+
   /** Sends a voice update using the Discord adapter provided in options. */
   public async send(data: VoiceUpdatePayload) {
     if (!this.options?.send) {
@@ -131,7 +141,7 @@ export default class AquaManager extends EventEmitter {
     if (existing) {
       return existing
     }
-    const player = new Player(this)
+    const player = new Player(this, this.getNode())
     // Register before joining: Discord may send voice packets immediately.
     this.players.set(options.guildId, player)
     try {
