@@ -45,7 +45,7 @@ export default class Rest {
     try {
       if (!url) {
         this.aqua.logger.error('You used makeRequest without a URL.')
-        return null
+        return undefined
       }
 
       const secureServer = this.nodes.ssl ? `https` : `http`
@@ -65,11 +65,11 @@ export default class Rest {
       // and both also returns a Promise so we good.
 
       if (!response.ok) {
-        return null
+        return undefined
       }
 
       if (response.status === 204) {
-        return undefined
+        return null
       }
 
       if (response.headers.get('content-type')?.includes('text/plain')) {
@@ -79,7 +79,7 @@ export default class Rest {
       }
     } catch (error) {
       this.aqua.logger.error(`Fetch just got a error: ${error}, in url: ${url}`)
-      return null
+      return undefined
     }
   }
 
@@ -95,7 +95,7 @@ export default class Rest {
 
   async loadTracks(query: string, source: string) {
     if (!source || !query) {
-      return null
+      return undefined
     }
     const res = await this.makeRequest(
       `${RoutesForRest.LoadTracksRoute}?identifier=${source}:${encodeURIComponent(query)}`
