@@ -12,9 +12,8 @@ import type {
 } from '../types/shared.ts'
 
 /**
- * Where the player should join and where your bot handles text commands.
- * These are Discord IDs, so keep them as strings. Deaf defaults to true,
- * mute defaults to false when Connection sends the voice update.
+ * Guild and channel IDs for joining voice. Keep Discord IDs as strings.
+ * Connection sends deaf=true and mute=false unless you override them.
  *
  * @example
  * ```ts
@@ -38,8 +37,8 @@ export type ConnectionOptions = {
 }
 
 /**
- * Here is where most of the stuff starts: nodes, players and your Discord adapter.
- * Creating Aqua doesn't connect anything yet; call init with the bot's user ID.
+ * Manages nodes, players and your Discord adapter.
+ * Call init with the bot's user ID to start connecting.
  *
  * @example
  * ```ts
@@ -54,23 +53,23 @@ export default class AquaManager extends EventEmitter {
   public nodes: NodeOptions[]
   /** the nodes as a Map */
   public nodesMap: Map<string, Node>
-  /** Logging, retry settings and the adapter used to send Discord voice updates. */
+  /** Logger/retry settings and your Discord voice adapter. */
   public options?: AquaOptions
   /** the clientId from init. */
   public clientId: string | null = null
   /** logging system, uses pino internally. */
   public logger: Logger
-  /** init finished creating nodes; this doesn't mean their sessions are ready. */
+  /** init finished creating nodes. Check getNode() for a ready session. */
   public initiated: boolean
   /** current registered players in aqua */
   public players: Map<string, Player>
 
   /**
-   * Keeps your client/config and creates the logger and maps. No sockets yet.
+   * Stores your client/config and creates the logger/maps. Sockets start in init.
    *
-   * @param client - Your Discord client. Aqua stores it without assuming a library.
-   * @param nodes - Node configs; init currently supports one node per Aqua.
-   * @param options - Logging/retry settings and options.send for voice connections.
+   * @param client - Your client, from any Discord library.
+   * @param nodes - Node configs; init supports one node per Aqua for now.
+   * @param options - Logger/retry settings and options.send for voice.
    * @example
    * ```ts
    * const aqua = new AquaManager(client, [nodeOptions], aquaOptions)
@@ -105,10 +104,10 @@ export default class AquaManager extends EventEmitter {
   }
 
   /**
-   * Gets an existing player for a guild. Doesn't create one if it's missing.
+   * Looks up a guild's existing player.
    *
-   * @param guildid - The Discord guild ID.
-   * @returns The same player stored in the map, or null if there's none.
+   * @param guildid - Discord guild ID.
+   * @returns The stored player, or null if none exists.
    * @example
    * ```ts
    * const player = aqua.get('123')
@@ -124,11 +123,10 @@ export default class AquaManager extends EventEmitter {
   }
 
   /**
-   * Gets the first connected node that already has a sessionId.
-   * Map insertion order decides which one comes first; no load balancing here.
-   * This lookup doesn't change the node assigned to an existing player.
+   * Gets the first connected node with a sessionId, in map insertion order.
+   * Doesn't balance load or change existing players' assigned nodes.
    *
-   * @returns A ready node, or null while none is ready.
+   * @returns A ready node, or null.
    * @example
    * ```ts
    * const node = aqua.getNode()
@@ -145,11 +143,10 @@ export default class AquaManager extends EventEmitter {
   }
 
   /**
-   * Sends a gateway payload through your options.send adapter, thats it.
-   * The adapter needs to send it to the shard responsible for this guild.
+   * Sends through options.send. Your adapter must pick the guild's shard.
    *
-   * @param data - The outgoing Discord opcode 4 payload.
-   * @throws If options.send is missing, or if your adapter throws/rejects.
+   * @param data - Outgoing Discord opcode 4 payload.
+   * @throws If options.send is missing or fails.
    * @example
    * ```ts
    * await aqua.send({
@@ -168,11 +165,10 @@ export default class AquaManager extends EventEmitter {
   }
 
   /**
-   * Receives the two Discord voice packets and routes them to the guild's player.
-   * Feed both packet types here. They can arrive in either order.
-   * Voice states from other users and packets without a registered player are ignored.
+   * Routes both Discord voice packet types to the guild's player, in either order.
+   * Ignores other users' voice states and packets without a guild/registered player.
    *
-   * @param packet - A VOICE_STATE_UPDATE or VOICE_SERVER_UPDATE gateway packet.
+   * @param packet - VOICE_STATE_UPDATE or VOICE_SERVER_UPDATE gateway packet.
    * @example
    * ```ts
    * await aqua.updateVoiceState({
@@ -204,13 +200,12 @@ export default class AquaManager extends EventEmitter {
   }
 
   /**
-   * Gets the guild's player, or creates one and waits for its voice connection.
-   * An existing player is returned as-is, even if it's still connecting.
-   * Changing options here doesn't move an existing player to another channel.
+   * Returns the guild's player as-is, even while it's connecting. If none exists,
+   * calls createPlayer and waits for voice. New options don't move an existing player.
    *
-   * @param options - Guild, voice/text channel IDs and optional deaf/mute settings.
-   * @returns The registered player, rather than its Connection object.
-   * @throws If a new player cannot connect; see createPlayer for the requirements.
+   * @param options - Guild/channel IDs and optional deaf/mute flags.
+   * @returns The registered Player.
+   * @throws If creating/connecting a new player fails; see createPlayer.
    * @example
    * ```ts
    * const player = await aqua.createConnection({
@@ -229,14 +224,12 @@ export default class AquaManager extends EventEmitter {
   }
 
   /**
-   * Picks a ready node, registers the player, then joins Discord voice.
-   * Registration happens first so incoming voice packets can find the player.
-   * If joining fails, the new player is removed from the map and the error is rethrown.
-   * An existing player is returned straight away; it isn't created or connected again.
+   * Picks a ready node, registers the player so voice packets can find it, then joins.
+   * Failed joins remove the new player and rethrow. Existing players return as-is.
    *
-   * @param options - The Discord guild/channel IDs used by this player.
-   * @returns The player; a new one waits for the node to accept its voice data.
-   * @throws If no node is ready, options.send is missing, or voice joining fails/times out.
+   * @param options - Discord guild/channel IDs and deaf/mute flags.
+   * @returns Player; new players wait for the node to accept voice data.
+   * @throws If no node is ready, options.send is missing, or joining fails/times out.
    * @example
    * ```ts
    * const player = await aqua.createPlayer({
@@ -262,18 +255,17 @@ export default class AquaManager extends EventEmitter {
   }
 
   /**
-   * Starts Aqua with the bot's user ID and creates the configured node.
-   * This starts the WebSocket connection, but doesn't wait for the ready payload.
-   * Use getNode() to check whether a node has a usable session before creating players.
+   * Starts the configured node with the bot's user ID without waiting for WebSocket ready.
+   * Check getNode() for a usable session before creating players.
    *
    * @example
    * ```ts
    * await aqua.init(client.id) // call this once your Discord client is ready
    * ```
    *
-   * @param clientId - The bot's Discord user ID, used in the WebSocket User-Id header.
-   * @returns This Aqua instance, so you can keep using the same one.
-   * @throws If the ID is empty or more than one node is configured.
+   * @param clientId - Bot's Discord user ID for the WebSocket User-Id header.
+   * @returns This Aqua instance.
+   * @throws If the ID is empty or multiple nodes are configured.
    */
   public async init(clientId: string) {
     if (!clientId) {
@@ -305,11 +297,10 @@ export default class AquaManager extends EventEmitter {
   }
 
   /**
-   * Creates/registers nodes from this.nodes and starts their sockets.
-   * Usually init calls this for you. Calling it again replaces map entries
-   * with new Node instances; it doesn't clean up the old ones.
+   * Creates/registers this.nodes and starts their sockets. init calls this for you.
+   * Calling it again replaces map entries without cleaning up old instances.
    *
-   * @returns This Aqua instance; socket readiness still happens later.
+   * @returns This Aqua instance; doesn't wait for socket readiness.
    * @example
    * ```ts
    * await aqua.init(client.id) // init calls createNode internally
@@ -331,8 +322,7 @@ export default class AquaManager extends EventEmitter {
   }
 
   /**
-   * Turns search payloads into Track instances for resolve.
-   * Other load types aren't converted yet, so they return undefined.
+   * Wraps search payloads as Tracks for resolve. Other load types return undefined.
    * @example A search response with two payloads becomes an array of two Tracks.
    */
   private handleTrackLoading(res: LoadResult) {
@@ -350,15 +340,14 @@ export default class AquaManager extends EventEmitter {
   }
 
   /**
-   * Searches on the first configured node and wraps search results as Tracks.
-   * This currently handles loadType='search' only; other results return undefined.
-   * The _node argument isn't used yet, and this doesn't use getNode() for selection.
+   * Searches the first configured node and wraps loadType='search' results as Tracks.
+   * Uses its own lookup; _node and getNode() don't affect selection yet.
    *
-   * @param query - What you want to search for.
-   * @param source - Search prefix without the colon, for example ytsearch or scsearch.
-   * @param _node - Reserved argument; passing a node doesn't select it right now.
-   * @returns A Track array, or undefined if the node is offline, loading fails,
-   * or the response isn't a supported search result. An empty search array stays [].
+   * @param query - Search text.
+   * @param source - Prefix without :, for example ytsearch or scsearch.
+   * @param _node - Unused for now.
+   * @returns Track[]; an empty search stays []. Returns undefined if offline,
+   * loading fails or the response isn't a search result.
    * @example
    * ```ts
    * const tracks = await aqua.resolve('slayr eyesight', 'ytsearch')

@@ -4,8 +4,8 @@
 import type { Level } from 'pino'
 
 /**
- * Aqua's logging/retry settings and the bridge to your Discord library.
- * If you pass options, logging and nodeConfigs are required by this type.
+ * Logger/retry settings and your Discord adapter.
+ * logging and nodeConfigs are required when you pass options.
  *
  * @example
  * ```ts
@@ -19,18 +19,15 @@ import type { Level } from 'pino'
  */
 export interface AquaOptions {
   /**
-   * Creates the player's Queue only when it's needed, instead of in the constructor.
-   * play(track) can set current without a Queue. Tracks waiting behind other work
-   * need one. Once created, the same queue is reused even after it becomes empty.
-   * Accessing player.queue also creates it, including reads like queue.size;
-   * player.hasQueue and player.current don't allocate a queue.
+   * true delays Queue creation; false or omitted creates it with the Player.
+   * play(track) can keep only current. Waiting tracks or any player.queue access
+   * (even queue.size) create the queue. current/hasQueue reads don't.
+   * Created queues are reused, even when empty.
    *
-   * true enables lazy queue creation; false or omitted keeps immediate creation.
-   * This only changes Queue allocation: Player and Connection are still created
-   * normally. It doesn't load modules with import() or start playback by itself.
-   * The first queue use pays the creation cost, so savings depend on actual usage.
-   * The flag is read when each player is constructed; changing it later doesn't
-   * reconfigure existing players. Default is false.
+   * Only Queue allocation is delayed; Player/Connection creation stays the same.
+   * The first queue use pays the cost, so savings depend on usage. Each player reads
+   * this flag once at creation; later changes affect new players only.
+   * It doesn't trigger import() or playback.
    *
    * @example
    * ```ts
@@ -43,7 +40,7 @@ export interface AquaOptions {
    * ```
    */
   lazyloadPlayer?: boolean
-  /** Your adapter: send opcode 4 to the guild's shard. Required when joining voice. */
+  /** Sends opcode 4 to the guild's shard. Required for voice joining. */
   send?: (payload: VoiceUpdatePayload) => void | Promise<void>
   /** Pino settings used by Aqua's shared logger. */
   logging: {
@@ -55,16 +52,16 @@ export interface AquaOptions {
     /** Keep retrying while the node is down, ignoring maxRetries when true. */
     infiniteReconnects: boolean
     /**
-     * Finite retry limit; 0 disables retries. Ignored if infiniteReconnects is true.
-     * Node uses 10 if this setting is absent, though this type requires it in options.
+     * Retry limit; 0 disables finite retries. Ignored with infiniteReconnects=true.
+     * Node falls back to 10 if absent; this type requires it when you pass options.
      */
     maxRetries: number
   }
 }
 
 /**
- * Outgoing Discord gateway voice update, sent through AquaOptions.send.
- * channel_id=null leaves voice; a channel ID joins voice.
+ * Outgoing voice update for AquaOptions.send. channel_id=null leaves voice;
+ * a channel ID joins it.
  *
  * @example
  * ```ts
@@ -92,8 +89,8 @@ export interface VoiceUpdatePayload {
 }
 
 /**
- * Incoming Discord VOICE_STATE_UPDATE data; Aqua needs the bot's own update.
- * guild_id is optional in this type; Aqua ignores packets without one.
+ * Incoming VOICE_STATE_UPDATE. Aqua uses the bot's own state and ignores packets
+ * without guild_id, which is optional here.
  *
  * @example
  * ```ts
@@ -106,7 +103,7 @@ export interface VoiceUpdatePayload {
 export interface VoiceStateUpdate {
   /** Discord guild ID, if this voice state belongs to a guild. */
   guild_id?: string
-  /** User whose voice state changed; Aqua checks this against its bot ID. */
+  /** User whose state changed. Aqua matches this against the bot ID. */
   user_id: string
   /** Discord voice session, not the node's WebSocket session. */
   session_id: string
@@ -115,8 +112,8 @@ export interface VoiceStateUpdate {
 }
 
 /**
- * Incoming Discord VOICE_SERVER_UPDATE data, paired with the bot's voice state.
- * endpoint=null means we still need a usable voice server before sending REST data.
+ * Incoming VOICE_SERVER_UPDATE, paired with the bot's voice state.
+ * endpoint=null keeps joining pending until a usable server arrives.
  *
  * @example
  * ```ts
@@ -129,15 +126,14 @@ export interface VoiceStateUpdate {
 export interface VoiceServerUpdate {
   /** Guild these voice credentials belong to. */
   guild_id: string
-  /** Voice credential from Discord; don't print real tokens in logs. */
+  /** Discord voice token. Don't log it. */
   token: string
   /** Voice server hostname, or null while one isn't available. */
   endpoint: string | null
 }
 
 /**
- * The two incoming gateway packets Aqua understands for voice joining.
- * Check t first and TypeScript knows which data shape is inside d.
+ * Incoming voice packets. Checking t narrows the type of d.
  *
  * @example
  * ```ts
@@ -153,9 +149,8 @@ export type VoicePacket =
   | { t: 'VOICE_SERVER_UPDATE'; d: VoiceServerUpdate }
 
 /**
- * Complete voice fields sent to the node in a player PATCH.
- * Connection.getVoiceInfo() may still contain missing fields while joining;
- * this type represents the completed data sent by Connection instead.
+ * Complete voice data for a player PATCH. Connection.getVoiceInfo() can still
+ * have missing fields while joining; this type requires them all.
  *
  * @example
  * ```ts
@@ -178,9 +173,8 @@ export interface VoiceInfo {
 }
 
 /**
- * Player PATCH fields supported by the client so far: voice and encoded track.
- * This isn't the complete Lavalink update API yet; volume, filters, pause, etc.
- * still need types/handling. Omitted fields aren't sent in the body.
+ * Supported player PATCH fields: voice and encoded track. Omitted fields aren't sent.
+ * Other API fields, including volume, filters and pause, still need types/handling.
  *
  * @example
  * ```ts
@@ -196,8 +190,8 @@ export interface PlayerUpdate {
 }
 
 /**
- * How Aqua reaches one Lavalink/NodeLink server.
- * All fields are required here. Password is the server password, not your bot token.
+ * Server connection config. All fields are required; password is the node's password,
+ * separate from your Discord bot token.
  *
  * @example
  * ```ts
@@ -208,9 +202,9 @@ export interface PlayerUpdate {
  * ```
  */
 export interface NodeOptions {
-  /** Node name, also used as its nodesMap key. Use a unique one. */
+  /** Unique node name, used as the nodesMap key. */
   name: string
-  /** true uses HTTPS/WSS; false uses HTTP/WS. Set it explicitly. */
+  /** true for HTTPS/WSS, false for HTTP/WS. Required. */
   ssl: boolean
   /** password of the node */
   password: string
@@ -221,10 +215,9 @@ export interface NodeOptions {
 }
 
 /**
- * Current track payload shape. Use TrackAPI['track'] when you need one track;
- * TrackAPI itself is only the type container, not the /loadtracks response.
- * pluginInfo/userData aren't declared here yet. The protocol also allows null
- * for uri/artworkUrl/isrc, but these draft fields still require strings.
+ * Use TrackAPI['track'] for one payload. TrackAPI is a type container;
+ * /loadtracks returns LoadResult. pluginInfo/userData aren't typed here yet.
+ * uri/artworkUrl/isrc still require strings here; the protocol also allows null.
  * @see https://lavalink.dev/api/rest#track-info
  *
  * @example
@@ -244,7 +237,7 @@ export interface NodeOptions {
 export interface TrackAPI {
   /** One raw track object from the server. */
   track: {
-    /** Encoded track data to send back when starting playback. */
+    /** Encoded data sent back to start playback. */
     encoded: string
     /** Track metadata; time values below are in milliseconds. */
     info: {
@@ -258,15 +251,15 @@ export interface TrackAPI {
       length: number
       /** Whether this is a live stream. */
       isStream: boolean
-      /** Position in milliseconds supplied by this payload, not a live clock. */
+      /** Payload position in milliseconds; doesn't update itself. */
       position: number
       /** Display title. */
       title: string
-      /** Link to the track; this draft doesn't represent protocol null yet. */
+      /** Track URL; null isn't typed yet. */
       uri: string
-      /** Artwork URL; this draft doesn't represent protocol null yet. */
+      /** Artwork URL; null isn't typed yet. */
       artworkUrl: string
-      /** Recording code; this draft doesn't represent protocol null yet. */
+      /** Recording code; null isn't typed yet. */
       isrc: string
       /** Source name returned by the node, for example youtube. */
       sourceName: string
@@ -275,9 +268,9 @@ export interface TrackAPI {
 }
 
 /**
- * Raw /v4/loadtracks result. Check loadType before using data.
- * search has typed tracks; the other branches still use unknown and need their
- * own payload types. Aqua.resolve currently converts only the search branch.
+ * Raw /v4/loadtracks result. Check loadType before reading data.
+ * Only search data is typed/converted by Aqua.resolve so far; other branches
+ * still use unknown and need payload types.
  *
  * @example
  * ```ts

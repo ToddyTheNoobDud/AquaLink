@@ -1,6 +1,6 @@
 /**
- * /v4/info from a Lavalink server. Describes the server build and available features.
- * getInfo can also return NodeLink info, so check the shape before using JVM fields.
+ * Lavalink's /v4/info: server build and available features.
+ * Check getInfo's result for Lavalink fields before reading JVM details.
  *
  * @example
  * ```ts
@@ -12,32 +12,32 @@
  * ```
  */
 export interface LavalinkInfo {
-  /** Server version details; not Aqua's package version. */
+  /** Server version, separate from Aqua's version. */
   version: {
-    /** Full version string, including pre-release/build parts if present. */
+    /** Full version, including pre-release/build labels. */
     semver: string
     major: number
     minor: number
     patch: number
-    /** Pre-release label, or null for a release without one. */
+    /** Pre-release label, or null. */
     preRelease: string | null
-    /** Build metadata, or null if absent. */
+    /** Build metadata, or null. */
     build: string | null
   }
-  /** Server build timestamp, in milliseconds since Unix epoch. */
+  /** Build time, in milliseconds since Unix epoch. */
   buildTime: number
   /** Git revision used to build the server. */
   git: {
     branch: string
     commit: string
-    /** Git commit timestamp, in milliseconds since Unix epoch. */
+    /** Commit time, in milliseconds since Unix epoch. */
     commitTime: number
   }
   /** Java runtime version reported by Lavalink. */
   jvm: string
   /** Lavaplayer version used by the server. */
   lavaplayer: string
-  /** Enabled source names. This doesn't guarantee a particular track will load. */
+  /** Enabled sources. Individual track loads can still fail. */
   sourceManagers: string[]
   /** Filter names supported by this server. */
   filters: string[]
@@ -49,9 +49,8 @@ export interface LavalinkInfo {
 }
 
 /**
- * NodeLink's info shape: replaces the JVM/Lavaplayer fields with Node/voice details.
- * The shared version/source/filter/plugin fields come from LavalinkInfo.
- * These are types for the response, not a runtime validator.
+ * NodeLink info with Node/voice details in place of JVM/Lavaplayer fields.
+ * Inherits version, sources, filters and plugins from LavalinkInfo. No runtime validation.
  *
  * @example
  * ```ts
@@ -63,13 +62,13 @@ export interface LavalinkInfo {
  * ```
  */
 export interface NodelinkInfo extends Omit<LavalinkInfo, 'jvm' | 'lavaplayer'> {
-  /** Node.js runtime version reported by NodeLink. */
+  /** Node.js runtime version. */
   node: string
-  /** Voice implementation name and version used by this server. */
+  /** Server's voice implementation name/version. */
   voice: {
     name: string
     version: string
   }
-  /** Server's NodeLink marker; narrow the union before accessing it. */
+  /** NodeLink marker. Narrow the info union before reading it. */
   isNodelink: boolean
 }

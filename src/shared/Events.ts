@@ -5,8 +5,7 @@
 // and specific events for both.
 
 /**
- * Reserved player event names. Empty for now; there are no keys to use yet.
- * This object doesn't register handlers or expose the logged server events.
+ * Reserved player event names. Empty for now, with no handlers or event forwarding.
  * @example
  * ```ts
  * console.log(Object.keys(PlayerEvents)) // [] for now
@@ -15,7 +14,7 @@
 export const PlayerEvents = Object.freeze({})
 
 /**
- * Reserved WebSocket event names. Empty for now, same idea as PlayerEvents.
+ * Reserved WebSocket event names. Empty for now, like PlayerEvents.
  * @example
  * ```ts
  * console.log(Object.keys(WebsocketEvents)) // [] for now

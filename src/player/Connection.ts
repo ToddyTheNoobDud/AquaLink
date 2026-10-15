@@ -4,8 +4,8 @@ import type { VoiceServerUpdate, VoiceStateUpdate } from '../types/shared.ts'
 import type Player from './Player.ts'
 
 /**
- * Joins Discord voice and collects the two gateway packets needed by the node.
- * Once all fields arrive, sends them through REST and resolves the pending join.
+ * Joins voice and collects both Discord packets. Once complete, sends the voice
+ * data through REST and resolves the join after the node accepts it.
  *
  * @example
  * ```ts
@@ -16,27 +16,27 @@ import type Player from './Player.ts'
 export default class Connection {
   /** The manager with your Discord send adapter. */
   public aqua: AquaManager
-  /** The player whose voice channel and node this connection uses. */
+  /** Player supplying the voice channel and node. */
   public player: Player
-  /** Voice server hostname from Discord; null means no usable endpoint yet. */
+  /** Discord voice server hostname, or null while unavailable. */
   public endpoint: string | null = null
   /** Discord guild ID used in the player REST route. */
   public guildId: string | undefined
-  /** Discord voice token. Treat this as a credential, don't log it. */
+  /** Discord voice token. Don't log it. */
   public token: string | undefined
   /** Discord voice session; different from player.node.sessionId. */
   public sessionId: string | undefined
-  /** The node accepted our voice PATCH; not a live voice ping/health check. */
+  /** The node accepted our voice PATCH. Doesn't track live voice health. */
   public connected = false
 
   private pending: ReturnType<typeof Promise.withResolvers<void>> | null = null
   private updating = false
 
   /**
-   * Stores the manager/player without joining voice. Player creates this for you.
+   * Player creates this with its manager. Joining happens later.
    *
-   * @param aqua - The owning Aqua instance.
-   * @param player - The player supplying the node and channel IDs.
+   * @param aqua - Owning manager.
+   * @param player - Player supplying node/channel IDs.
    * @example
    * ```ts
    * const connection = player.connection // usually use the one Player already created
@@ -49,11 +49,10 @@ export default class Connection {
   }
 
   /**
-   * Gets a new object with the voice fields collected so far.
-   * Some fields can be null/undefined until both Discord packets arrive.
-   * This is a local snapshot, not a VoiceInfo guaranteed ready for REST.
+   * Gets a new snapshot of the collected voice fields. Fields can still be
+   * null/undefined while packets are missing, so check before using it as VoiceInfo.
    *
-   * @returns Endpoint, guild ID, token, voice session ID and current voice channel ID.
+   * @returns Endpoint, guild ID, token, voice session ID and channel ID.
    * @example
    * ```ts
    * const voice = player.connection.getVoiceInfo()
@@ -71,15 +70,13 @@ export default class Connection {
   }
 
   /**
-   * Sends the join payload, waits for Discord voice data, then waits for its REST PATCH.
-   * Missing voice packets time out after 15 seconds. Keep forwarding both packet types
-   * to aqua.updateVoiceState while this promise is pending.
-   * An existing pending join is shared; a connected instance returns immediately.
-   * This doesn't move an already connected instance to a different channel.
+   * Sends the join payload and waits for voice data plus its REST PATCH.
+   * Forward both packet types to aqua.updateVoiceState; missing packets time out in 15s.
+   * Shares a pending join. Already connected instances return as-is, without moving channels.
    *
-   * @param options - Guild/channel IDs plus deaf (true) and mute (false) defaults.
-   * @returns This Connection after the node accepts the voice update.
-   * @throws If sending fails, joining times out, the bot leaves or the voice PATCH fails.
+   * @param options - Guild/channel IDs. Deaf defaults to true, mute to false.
+   * @returns This Connection after the node accepts voice data.
+   * @throws On send/PATCH errors, timeout or the bot leaving during the join.
    * @example
    * ```ts
    * await player.connection.joinVoice(connectionOptions)
@@ -123,12 +120,11 @@ export default class Connection {
   }
 
   /**
-   * Stores Discord's VOICE_SERVER_UPDATE and tries to complete the pending join.
-   * A null endpoint keeps waiting for usable data. The name really is setSeverUpdate;
-   * keeping the draft spelling avoids breaking callers for now.
-   * Normally aqua.updateVoiceState routes this packet for you.
+   * Stores VOICE_SERVER_UPDATE and tries to finish joining; a null endpoint keeps waiting.
+   * aqua.updateVoiceState routes this for you. setSeverUpdate keeps its old spelling
+   * for caller compatibility.
    *
-   * @param data - Server update data for this player's guild.
+   * @param data - This guild's server update.
    * @example
    * ```ts
    * await aqua.updateVoiceState({
@@ -145,12 +141,11 @@ export default class Connection {
   }
 
   /**
-   * Stores the bot's Discord voice session/channel and tries to complete joining.
-   * channel_id=null means the bot left: clears local voice/playback state and rejects
-   * a pending join. It doesn't clear queued tracks or delete the remote player.
-   * Normally Aqua filters the guild/user before calling this.
+   * Stores the bot's voice session/channel and tries to finish joining.
+   * channel_id=null clears local voice/playback state and rejects a pending join;
+   * queued tracks and the remote player stay. Aqua filters guild/user before calling.
    *
-   * @param data - The bot's VOICE_STATE_UPDATE data for this guild.
+   * @param data - The bot's VOICE_STATE_UPDATE for this guild.
    * @example
    * ```ts
    * await aqua.updateVoiceState({
@@ -177,8 +172,8 @@ export default class Connection {
   }
 
   /**
-   * Sends one voice PATCH once the pending join has all required fields.
-   * A response from an expired join can't resolve a newer join's promise.
+   * PATCHes complete voice data for the pending join. Expired responses can't
+   * resolve a newer join's promise.
    * @example The second voice packet completes the fields and triggers this internally.
    */
   private async updateVoice() {

@@ -1,6 +1,6 @@
 /**
- * Shared v4 WebSocket route, without a leading / because Node adds it.
- * Frozen so code can't accidentally change it at runtime.
+ * Shared v4 WebSocket route. Node adds the leading /.
+ * Frozen to prevent changes at runtime.
  * @example
  * ```ts
  * const url = `ws://127.0.0.1:2333/${RoutesForWebsocket.WebsocketV4Route}`
@@ -12,8 +12,8 @@ export const RoutesForWebsocket = Object.freeze({
 })
 
 /**
- * Shared REST paths. These have a leading / for Rest.makeRequest.
- * /version has no v4 prefix; the other routes here do.
+ * Shared REST paths with a leading / for Rest.makeRequest.
+ * Only /version skips the v4 prefix.
  * @example
  * ```ts
  * const info = await node.rest.makeRequest(RoutesForRest.InfoRoute)

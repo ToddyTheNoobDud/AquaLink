@@ -27,8 +27,7 @@ const BASE_BACKOFF = 5000
 const MAX_BACKOFF = 420000
 
 /**
- * Fields the current WebSocket handler reads. Extra plugin fields stay unknown.
- * This is a draft view of a parsed payload, not validation of incoming JSON.
+ * Fields read by the WebSocket handler. Extra fields stay unknown; JSON isn't validated.
  * @example A ready payload is { op: 'ready', sessionId: 'node-session' }.
  */
 interface WebsocketPayload {
@@ -40,18 +39,17 @@ interface WebsocketPayload {
   guildId?: string
   /** Event name, for example TrackEndEvent. */
   type?: string
-  /** Encoded track used to match an end event to the local current track. */
+  /** Matches end events to the local current track. */
   track?: { encoded: string }
-  /** Stats loads read by the handler; some NodeLink payloads don't include cpu. */
+  /** CPU loads; absent in some NodeLink payloads. */
   cpu?: { nodelinkLoad?: number; lavalinkLoad?: number }
-  /** Other server/plugin fields, without assuming their shape yet. */
+  /** Extra server/plugin fields with unknown shapes. */
   [field: string]: unknown
 }
 
 /**
- * One Lavalink/NodeLink server: WebSocket messages, REST and reconnect attempts.
- * Aqua normally creates/registers it. Custom ops/events are still logged only;
- * public forwarding hooks aren't implemented yet.
+ * A Lavalink/NodeLink server with its WebSocket, REST and retries.
+ * Aqua creates/registers it. Custom ops/events are logged only; public hooks are pending.
  *
  * @example
  * ```ts
@@ -72,32 +70,32 @@ export default class Node extends EventEmitter {
   public name: string
   /** host of the configured node */
   public host: string
-  /** checks if the configured host is a secure connection or not */
+  /** Whether this server uses TLS. */
   public ssl: boolean
   /** the configured port */
   public port: number
   /** the configured password */
   public password: string
-  /** Node session from ready; null before one arrives. Not a Discord voice session. */
+  /** Node session from ready, initially null. Separate from the Discord voice session. */
   public sessionId: string | null
-  /** Local connection flag; also check sessionId before using player REST routes. */
+  /** Local connection flag. Player REST routes also need sessionId. */
   public connected: boolean
   /** the rest instance */
   public rest: Rest
-  /** Latest stats without op; starts as {} and depends on what the server sends. */
+  /** Latest server stats without op. Starts as {}. */
   public stats: StatsNodelink | StatsLavalink | object
-  /** Detected from /v4/info; false initially, so false alone isn't proof of Lavalink. */
+  /** Detected via /v4/info; initially false, before the server type is known. */
   public isNodelink: boolean
   /** current websocket in the Node. */
   public websocket: WebSocket | null = null
 
   /**
-   * Stores the server config and creates its REST instance, without opening a socket.
-   * Reconnect settings come from aqua.options.nodeConfigs, not the _options argument.
+   * Stores config and creates REST. connect opens the socket.
+   * Reads retry settings from aqua.options.nodeConfigs.
    *
-   * @param aqua - The owning manager, supplying logging and the bot's user ID.
-   * @param nodeOptions - Host, port, password, name and whether to use TLS.
-   * @param _options - Unused draft argument; configure retries on Aqua instead.
+   * @param aqua - Manager supplying the logger and bot ID.
+   * @param nodeOptions - Server address, password, name and TLS flag.
+   * @param _options - Unused; configure retries on Aqua.
    * @example
    * ```ts
    * const node = new Node(aqua, nodeOptions)
@@ -140,13 +138,12 @@ export default class Node extends EventEmitter {
   }
 
   /**
-   * Starts the WebSocket with this node's password and Aqua's bot user ID.
-   * Aqua should already have its clientId set, normally by init.
-   * Sends Session-Id if there's a stored session; the server decides if it can resume.
-   * This method returns after creating the socket, before open/ready messages arrive.
+   * Starts the socket using this node's password and Aqua's clientId, set by init.
+   * Sends a stored Session-Id if present; the server decides whether resuming works.
+   * Doesn't wait for open/ready.
    *
-   * @returns The new WebSocket, or undefined after logging that we're already connected.
-   * @throws If constructing the WebSocket fails; asynchronous socket errors happen later.
+   * @returns New WebSocket, or undefined with a log if already connected.
+   * @throws On socket construction errors. Async socket errors happen later.
    * @example
    * ```ts
    * await node.connect() // starts connecting; this isn't a readiness promise
@@ -193,10 +190,9 @@ export default class Node extends EventEmitter {
   }
 
   /**
-   * Parses a server message: ready stores the session, stats replaces the snapshot,
-   * and a matching TrackEnd clears local playback. playerUpdate is only logged so far.
-   * Unknown ops/events are logged rather than forwarded to public listeners.
-   * @throws If message.data isn't valid JSON; payload fields aren't schema-validated.
+   * Reads ready/session and stats; a matching TrackEnd clears local playback.
+   * playerUpdate and unknown ops/events are logged only.
+   * @throws On invalid JSON. Payload fields aren't validated.
    * @example Incoming { op: 'ready', sessionId: 'node-session' } stores the session ID.
    */
   private async handleWebsocketMessages(message: MessageEvent<string>) {
@@ -260,8 +256,8 @@ export default class Node extends EventEmitter {
   }
 
   /**
-   * Fetches info to detect NodeLink, then resets retries and marks the socket connected.
-   * Checks socket identity/state around the request so a late result can't revive it.
+   * Fetches info to detect NodeLink, resets retries and marks connected.
+   * Checks the socket before/after fetching so late results can't revive an old socket.
    * @example A WebSocket open event calls this; a delayed response from an old socket is ignored.
    */
   private async handleWebsocketOpen(open: Event): Promise<void> {
@@ -306,8 +302,8 @@ export default class Node extends EventEmitter {
   }
 
   /**
-   * Marks the node disconnected, logs the close and schedules retries through backoff.
-   * The stored sessionId is kept for the next connection's Session-Id header.
+   * Marks disconnected, logs the close and schedules backoff.
+   * Keeps sessionId for the next connection's Session-Id header.
    * @example Closing a socket triggers this automatically; users don't call it directly.
    */
   private handleWebsocketClose(close: CloseEvent, websocket: WebSocket) {
@@ -328,10 +324,9 @@ export default class Node extends EventEmitter {
   }
 
   /**
-   * Schedules a retry if the socket is closed and retry settings allow it.
-   * Starts at 5 seconds, then grows with the retry count up to 420 seconds.
-   * maxRetries=0 disables finite retries; infiniteReconnects ignores that limit.
-   * Successful open/info handling resets the retry count.
+   * Retries a closed socket when settings allow it. Starts at 5s, grows with
+   * the retry count and caps at 420s. Successful open/info handling resets the count.
+   * maxRetries=0 disables finite retries; infiniteReconnects ignores the limit.
    * @example With maxRetries=3 and no successful reconnect, delays are 5s, 5s, 12.5s.
    */
   private manageBackoff(websocket: WebSocket) {

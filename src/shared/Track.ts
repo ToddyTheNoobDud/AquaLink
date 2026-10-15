@@ -1,8 +1,8 @@
 import type { TrackAPI } from '../types/shared.ts'
 
 /**
- * Small wrapper around a node's track payload: encoded data plus its info.
- * Doesn't load audio or play anything. pluginInfo/userData aren't stored yet.
+ * Holds encoded data and info from a track payload. Creating it only stores data;
+ * pluginInfo/userData aren't stored yet.
  *
  * @example
  * ```ts
@@ -11,16 +11,15 @@ import type { TrackAPI } from '../types/shared.ts'
  * ```
  */
 export default class Track {
-  /** Encoded string from the node, sent back when starting playback. */
+  /** Encoded data from the node, sent back to start playback. */
   public encoded: TrackAPI['track']['encoded']
-  /** Metadata from the payload; this is the same object reference, not a copy. */
+  /** Payload metadata, kept by reference. */
   public info: TrackAPI['track']['info']
 
   /**
-   * Keeps encoded and info from one payload. It doesn't create a cleanup resource.
-   * Drop your references when done and let JavaScript's GC handle the object.
+   * Keeps encoded and info. No cleanup resources; drop references when done for GC.
    *
-   * @param data - One track payload, not the entire load result or an array.
+   * @param data - One track payload from a load result.
    * @example
    * ```ts
    * const track = new Track(trackData)

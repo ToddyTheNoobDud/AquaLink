@@ -7,8 +7,8 @@ import Connection from './Connection.ts'
 import Queue from './Queue.ts'
 
 /**
- * One guild's playback state, queue and voice connection on a specific node.
- * Aqua normally creates/registers this for you. Queue advancement is still manual.
+ * A guild's playback state, queue and voice connection on one node.
+ * Aqua creates/registers it. Playing the next track is still manual.
  *
  * @example
  * ```ts
@@ -22,19 +22,19 @@ import Queue from './Queue.ts'
 export default class Player extends EventEmitter {
   /** The Aqua instance owning this player. */
   public aqua: AquaManager
-  /** The assigned node; later Aqua lookups don't change this reference. */
+  /** Assigned node; Aqua lookups don't change it. */
   public node: Node
-  /** Handles this player's Discord voice credentials and joining. */
+  /** Joins Discord voice and holds its credentials. */
   public connection: Connection
   /** Set by connect; undefined on a freshly constructed player. */
   public guildId: string | undefined
   /** Set by connect/voice states; cleared when the bot leaves voice. */
   public voiceChannel: string | undefined
-  /** Your bot's text channel ID; Aqua doesn't send messages automatically. */
+  /** Text channel ID for your bot's messages; Aqua sends none itself. */
   public textChannel: string | undefined
   /** Local playback flag; set before the track PATCH and rolled back on failure. */
   public playing = false
-  /** Queue allocation mode read from Aqua when this player was created. */
+  /** Lazy setting read from Aqua at creation. */
   public lazyLoad: boolean
 
   private queueInstance: Queue | undefined
@@ -43,12 +43,11 @@ export default class Player extends EventEmitter {
   private starting: Promise<this> | null = null
 
   /**
-   * Creates local state on the supplied node, or uses aqua.getNode() if omitted.
-   * Doesn't register the player, join voice or start a track by itself.
+   * Creates local state. Registration, voice joining and playback happen separately.
    *
-   * @param aqua - The manager used for voice updates and node selection.
-   * @param node - A connected node with a sessionId; defaults to aqua.getNode().
-   * @throws If no usable node is supplied/found.
+   * @param aqua - Owning manager.
+   * @param node - Connected node with a sessionId. Defaults to aqua.getNode().
+   * @throws If no node is ready.
    * @example
    * ```ts
    * const player = new Player(aqua, node)
@@ -73,10 +72,9 @@ export default class Player extends EventEmitter {
   }
 
   /**
-   * Gets the queue, creating it on first access if lazyloadPlayer is enabled.
-   * Even reading queue.size creates it; use hasQueue to check without allocating.
-   * The same instance is reused. You can replace it with your own Queue instance.
-   * Assigning undefined drops it; the next queue access creates a new one.
+   * Gets or creates the queue and reuses it on later reads.
+   * Even queue.size creates it in lazy mode. Use hasQueue to check without allocating.
+   * You can assign your own Queue; assigning undefined drops it until the next read.
    *
    * @example
    * ```ts
@@ -89,8 +87,7 @@ export default class Player extends EventEmitter {
   }
 
   /**
-   * Replaces the waiting queue, or drops it when assigned undefined.
-   * Doesn't change current or start playback.
+   * Replaces/drops the waiting queue. Leaves current and playback alone.
    * @example
    * ```ts
    * player.queue = new Queue()
@@ -101,8 +98,7 @@ export default class Player extends EventEmitter {
   }
 
   /**
-   * Checks whether a Queue has been created, without creating one just to check.
-   * An empty queue still exists once created; it isn't discarded automatically.
+   * Checks for an existing Queue without creating one. Empty queues are kept too.
    *
    * @example
    * ```ts
@@ -115,8 +111,8 @@ export default class Player extends EventEmitter {
   }
 
   /**
-   * Gets the track being started/played, or null while idle. No Queue is needed.
-   * Keeps the same Track reference; setting current doesn't start playback.
+   * The track being started/played, or null while idle. Reads the same Track
+   * reference without creating a Queue. Setting it only changes local state.
    *
    * @example
    * ```ts
@@ -128,7 +124,7 @@ export default class Player extends EventEmitter {
   }
 
   /**
-   * Updates the local current reference. Use play(track) to actually send REST.
+   * Sets the local reference. Use play(track) to send the playback request.
    * @example
    * ```ts
    * player.current = null // local state only
@@ -139,12 +135,12 @@ export default class Player extends EventEmitter {
   }
 
   /**
-   * Sets the guild/channel IDs and waits for the node to accept Discord voice data.
-   * Aqua must have this player registered so updateVoiceState can route packets to it.
+   * Saves guild/channel IDs and waits for the node to accept voice data.
+   * Register the player in Aqua first so updateVoiceState can find it.
    *
-   * @param options - The guild, voice/text channel IDs and deaf/mute flags.
-   * @returns This player after joining; an existing connected Connection is reused.
-   * @throws If joining fails, the adapter is missing or voice packets time out.
+   * @param options - Guild/channel IDs and deaf/mute flags.
+   * @returns This player. Reuses an already connected Connection.
+   * @throws On a missing adapter, timeout or failed join.
    * @example
    * ```ts
    * await player.connect({ guildId: '123', voiceChannel: '456', textChannel: '789' })
@@ -160,19 +156,17 @@ export default class Player extends EventEmitter {
   }
 
   /**
-   * Starts a supplied track directly when idle, without creating a Queue.
-   * With no argument, starts the first track from an existing queue.
-   * A supplied track joins the queue if playback/start is in progress or tracks
-   * are already waiting, so it doesn't jump ahead of them. Concurrent calls share
-   * the pending start request; supplied tracks are still added to the waiting queue.
-   * An empty player just returns itself without creating a Queue.
-   * Queued tracks leave the queue only after REST succeeds; failures keep them.
-   * A failed direct start clears current/playing; retry it with play(track).
-   * TrackEnd resets local state, but doesn't automatically play the next track yet.
+   * Starts track directly when idle; queues it if playback is starting/playing or
+   * tracks are already waiting. Without track, plays the first queued item.
+   * Concurrent calls share the start request; new tracks still join the queue.
+   * No tracks means no queue allocation. Queued tracks leave only after REST succeeds.
+   * Failed starts clear current/playing: queued tracks stay put; retry direct ones
+   * with play(track). TrackEnd resets state; playing the next track is manual.
    *
-   * @returns This player after the start request; doesn't wait for the track to finish.
-   * @param track - Optional Track to start directly or append behind existing work.
-   * @throws If voice isn't connected, connecting failed or the node rejects the track.
+   * @returns This player after the start request, or unchanged if there's nothing to do.
+   * It doesn't wait for the track to finish.
+   * @param track - Optional track to start or queue behind existing work.
+   * @throws If connecting fails, voice isn't connected or the node rejects playback.
    * @example
    * ```ts
    * await player.play(track) // current only, no queue allocation when lazy
@@ -195,8 +189,8 @@ export default class Player extends EventEmitter {
   }
 
   /**
-   * Does the actual track PATCH and rolls back current/playing on failure.
-   * Only play calls this; its shared promise keeps starts from racing.
+   * Sends the track PATCH and rolls back current/playing on failure.
+   * play shares its promise between concurrent calls.
    * @example Calling play() twice at once still sends one start request.
    */
   private async startTrack(track?: Track) {

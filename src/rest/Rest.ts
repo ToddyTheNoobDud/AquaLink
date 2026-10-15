@@ -10,8 +10,8 @@ import type {
 import type { LoadResult, PlayerUpdate } from '../types/shared.ts'
 
 /**
- * One REST instance per node, using that node's host, password and session.
- * Requests use fetch; results are parsed bodies, not fetch Response objects.
+ * One REST instance per node, using its host, password and session.
+ * Uses fetch and returns the parsed body.
  *
  * @example
  * ```ts
@@ -22,15 +22,14 @@ import type { LoadResult, PlayerUpdate } from '../types/shared.ts'
 export default class Rest {
   /** the Aqua manager instance */
   public aqua: AquaManager
-  /** The single node this REST instance belongs to, despite the plural name. */
+  /** The single node this REST instance belongs to. */
   public nodes: Node
 
   /**
-   * Stores the manager and node; it doesn't make requests yet.
-   * Node already creates one for you as node.rest.
+   * Stores the manager/node for later requests. Node creates this as node.rest.
    *
-   * @param aqua - The manager used for logging.
-   * @param nodes - The node supplying host, authentication and sessionId.
+   * @param aqua - Manager used for logging.
+   * @param nodes - Node supplying host, password and sessionId.
    * @example
    * ```ts
    * const rest = new Rest(aqua, node)
@@ -42,10 +41,9 @@ export default class Rest {
   }
 
   /**
-   * Gets the Lavalink/NodeLink session from the WebSocket ready payload.
-   * This is NOT the Discord voice session used in a voice update.
+   * Gets the node session from ready. The Discord voice session is a separate ID.
    *
-   * @returns The node's sessionId, or undefined if it hasn't received one yet.
+   * @returns sessionId, or undefined before it arrives.
    * @example
    * ```ts
    * const sessionId = node.rest.getSessionId()
@@ -61,16 +59,14 @@ export default class Rest {
   }
 
   /**
-   * Every NL/LL REST request goes through here, with the node's password.
-   * text/plain is read as text; everything else is parsed as JSON.
-   * An HTTP error or a caught fetch/parse error returns undefined instead of rejecting.
+   * Sends an authenticated request. Reads text/plain as text, everything else as JSON.
+   * HTTP, fetch and parsing failures return undefined instead of rejecting.
    *
-   * @param url - Required path starting with /, not a full URL; include query params here.
-   * @param method - HTTP method, defaults to GET.
-   * @param body - Optional object; serialized to JSON with Content-Type set for you.
-   * @returns The parsed response body. null for HTTP 204; undefined on failure.
-   * JSON itself can also contain null, so null isn't exclusive to 204.
-   * The generic result is unknown; narrow it before reading fields.
+   * @param url - Path starting with /, including query params. Full URLs aren't accepted.
+   * @param method - Defaults to GET.
+   * @param body - Optional JSON body; sets Content-Type too.
+   * @returns Parsed body, null for 204, undefined on failure. JSON can also return null.
+   * The result is unknown; narrow it before reading fields.
    * @example
    * ```ts
    * const result = await node.rest.makeRequest('/v4/info')
@@ -131,10 +127,9 @@ export default class Rest {
   }
 
   /**
-   * Fetches /version, which normally returns plain version text.
+   * Fetches the version text from /version.
    *
-   * @returns The parsed body, or the null/undefined result from makeRequest.
-   * Its current TypeScript return is unknown, so check for a string first.
+   * @returns makeRequest's result, still typed unknown. Check for a string before use.
    * @example
    * ```ts
    * const version = await node.rest.getVersion()
@@ -147,10 +142,10 @@ export default class Rest {
   }
 
   /**
-   * Fetches /v4/info with the server's version, sources, filters and plugins.
-   * The type assertion doesn't validate the remote JSON at runtime.
+   * Fetches /v4/info: server version, sources, filters and plugins.
+   * The response is typed but isn't validated at runtime.
    *
-   * @returns Lavalink or NodeLink info, or null/undefined from makeRequest.
+   * @returns Lavalink/NodeLink info, or null/undefined from makeRequest.
    * @example
    * ```ts
    * const info = await node.rest.getInfo()
@@ -167,14 +162,13 @@ export default class Rest {
   }
 
   /**
-   * Fetches raw /v4/loadtracks data using source:query as the identifier.
-   * The query is URL-encoded here; don't encode it again before passing it.
-   * This returns the server's load result, not an array of Track instances.
+   * Fetches raw /v4/loadtracks data using source:query. It encodes query for you.
+   * Returns the load result; Aqua.resolve wraps search tracks into Track instances.
    *
-   * @param query - Search text sent to the node.
+   * @param query - Search text, without URL encoding.
    * @param source - Prefix without :, for example ytsearch.
-   * @returns A LoadResult, or null/undefined; empty query/source returns undefined.
-   * Only the search branch has a detailed data type for now.
+   * @returns LoadResult or null/undefined. Empty query/source returns undefined.
+   * Only search data is fully typed so far.
    * @example
    * ```ts
    * const result = await node.rest.loadTracks('slayr eyesight', 'ytsearch')
@@ -195,15 +189,12 @@ export default class Rest {
   }
 
   /**
-   * PATCHes one guild's player using this node's current sessionId.
-   * The name is plural, but this isn't a batch update.
-   * noReplace=true is always sent, so a new track won't replace one already playing.
-   * A successful response is the remote body; this doesn't update local Player state.
+   * PATCHes one guild's player with this node's sessionId and noReplace=true,
+   * so a new track won't replace one already playing. Local Player state stays unchanged.
    *
-   * @param guildId - The Discord server owning the remote player.
-   * @param data - Voice credentials and/or encoded track; the supported fields so far.
-   * @returns The parsed body, or null/undefined from makeRequest.
-   * Missing guildId/sessionId returns undefined without making a request.
+   * @param guildId - Discord guild ID.
+   * @param data - Voice credentials and/or encoded track.
+   * @returns makeRequest's result. Missing guildId/sessionId returns undefined without a request.
    * @example
    * ```ts
    * const result = await node.rest.updatePlayers('123', {

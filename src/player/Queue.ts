@@ -1,8 +1,8 @@
 import type Track from '../shared/Track.ts'
 
 /**
- * A FIFO list of Track references. Adding a track doesn't start playback.
- * No cloning, auto-play or Track cleanup happens here.
+ * Waiting tracks in FIFO order, stored as references. Playback and cleanup stay
+ * with the caller; adding a track just stores it.
  *
  * @example
  * ```ts
@@ -15,7 +15,7 @@ export default class Queue {
   private tracks: Track[] = []
 
   /**
-   * How many tracks are waiting in this queue right now.
+   * Number of waiting tracks.
    * @example
    * ```ts
    * console.log(player.queue.size)
@@ -26,10 +26,9 @@ export default class Queue {
   }
 
   /**
-   * Adds one or more tracks to the end, in the order you pass them.
-   * Stores the same references and returns this queue for chaining.
+   * Appends tracks in order, keeping their references. Returns this queue for chaining.
    *
-   * @param tracks - Track instances to append; an array needs ...tracks.
+   * @param tracks - Tracks to append; spread arrays with ...tracks.
    * @example
    * ```ts
    * player.queue.add(track)
@@ -43,10 +42,10 @@ export default class Queue {
   }
 
   /**
-   * Reads a track without removing it. Negative indexes count from the end.
+   * Reads a track without removing it.
    *
-   * @param index - Zero-based index; -1 means the last track.
-   * @returns The stored Track, or undefined if the index is out of range.
+   * @param index - Zero-based; negative indexes count from the end (-1 is last).
+   * @returns Stored Track, or undefined if out of range.
    * @example
    * ```ts
    * const first = player.queue.at(0)
@@ -59,9 +58,9 @@ export default class Queue {
   }
 
   /**
-   * Removes and returns the first track. Doesn't play or dispose it.
+   * Removes the first track. Playback and cleanup stay with the caller.
    *
-   * @returns The removed Track, or undefined if the queue is empty.
+   * @returns Removed Track, or undefined if empty.
    * @example
    * ```ts
    * const removed = player.queue.dequeue()
@@ -73,10 +72,10 @@ export default class Queue {
   }
 
   /**
-   * Returns a copy of the list, useful for displaying the queue.
-   * Changing the array doesn't change this queue, but its Track objects are shared.
+   * Copies the list for display. Array changes leave the queue alone;
+   * Track objects are still shared.
    *
-   * @returns A shallow Track array in queue order.
+   * @returns Track[] in queue order, with the same Track references.
    * @example
    * ```ts
    * const titles = player.queue.toArray().map(track => track.info.title)

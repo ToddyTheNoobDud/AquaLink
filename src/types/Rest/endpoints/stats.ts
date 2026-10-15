@@ -1,8 +1,7 @@
 /**
- * Lavalink stats payload after removing the WebSocket op field.
- * Time is in milliseconds and memory is in bytes.
- * frameStats can be null in the protocol, but this draft still requires an object.
- * Node.stats also starts as {}, so check the received shape before treating it as this.
+ * Lavalink stats without op. Time is in milliseconds, memory in bytes.
+ * frameStats still needs a null case in this type. Node.stats starts as {},
+ * so check the payload before treating it as StatsLavalink.
  * @see https://lavalink.dev/api/websocket#stats-op
  *
  * @example
@@ -17,48 +16,47 @@
  * ```
  */
 export interface StatsLavalink {
-  /** The amount of players connected to the node */
+  /** Players connected to the node. */
   players: number
-  /** The amount of players playing a track */
+  /** Players playing a track. */
   playingPlayers: number
-  /** The uptime of the node in milliseconds */
+  /** Node uptime in milliseconds. */
   uptime: number
-  /** The memory stats of the node */
+  /** Node memory stats, in bytes. */
   memory: {
-    /**	The amount of free memory in bytes */
+    /** Free bytes. */
     free: number
-    /** The amount of used memory in bytes */
+    /** Used bytes. */
     used: number
-    /** The amount of allocated memory in bytes */
+    /** Allocated bytes. */
     allocated: number
-    /** The amount of reservable memory in bytes */
+    /** Reservable bytes. */
     reservable: number
   }
-  /** The cpu stats of the node */
+  /** Node CPU stats. */
   cpu: {
-    /** The amount of cores the node has */
+    /** Core count. */
     cores: number
-    /** The system load of the node */
+    /** System load. */
     systemLoad: number
-    /** The load of Lavalink on the node */
+    /** Lavalink load. */
     lavalinkLoad: number
   }
-  /** Frame counts. Protocol null still needs to be represented by this type. */
+  /** Frame counts; null isn't typed yet. */
   frameStats: {
-    /** The amount of frames sent to Discord */
+    /** Frames sent to Discord. */
     sent: number
-    /** The amount of frames that were nulled */
+    /** Nulled frames. */
     nulled: number
-    /** The difference between sent frames and the expected amount of frames */
+    /** Difference between sent and expected frames. */
     deficit: number
   }
 }
 
 /**
- * Current NodeLink stats draft: nodelinkLoad replaces cpu.lavalinkLoad.
- * detailedStats keeps request/source/event counters keyed by their names.
- * This still requires inherited memory/frameStats and cpu; payload variants that
- * omit those fields need their own typing instead of assuming they're always there.
+ * NodeLink stats with cpu.nodelinkLoad and named request/source/event counters.
+ * This draft requires memory, frameStats and cpu. Variants omitting them still
+ * need their own types.
  *
  * @example
  * ```ts
@@ -75,19 +73,19 @@ export interface StatsLavalink {
  * ```
  */
 export interface StatsNodelink extends Omit<StatsLavalink, 'cpu'> {
-  /** NodeLink CPU stats; use nodelinkLoad, not lavalinkLoad. */
+  /** NodeLink CPU stats, using nodelinkLoad. */
   cpu: Omit<StatsLavalink['cpu'], 'lavalinkLoad'> & {
-    /** Load value reported by NodeLink. */
+    /** NodeLink load. */
     nodelinkLoad: number
   }
 
-  /** Extra NodeLink counters; not client-side benchmark measurements. */
+  /** Extra counters reported by the NodeLink server. */
   detailedStats: {
     /** Server API counters and error data. */
     api: {
-      /** Counts by route; an absent key returns undefined, so use ?? 0 if needed. */
+      /** Counts by route. Missing keys return undefined; use ?? 0 for a zero fallback. */
       requests: Record<string, number>
-      /** Server error entries. Value shapes aren't typed yet. */
+      /** Error entries; value shapes aren't typed yet. */
       errors: Record<string, unknown>
     }
     /** Counts keyed by source name. */
