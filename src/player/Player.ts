@@ -15,14 +15,11 @@ import Queue from './Queue.ts'
  * const player = await aqua.createConnection(connectionOptions)
  * const tracks = await aqua.resolve('slayr eyesight', 'ytsearch')
  * if (tracks?.[0]) {
- *   player.queue.add(tracks[0])
- *   await player.play()
+ *   await player.play(tracks[0]) // current doesn't need to go through the queue
  * }
  * ```
  */
 export default class Player extends EventEmitter {
-  /** Tracks waiting to play. The current track is removed after its PATCH succeeds. */
-  public queue: Queue
   /** The Aqua instance owning this player. */
   public aqua: AquaManager
   /** The assigned node; later Aqua lookups don't change this reference. */
@@ -35,11 +32,13 @@ export default class Player extends EventEmitter {
   public voiceChannel: string | undefined
   /** Your bot's text channel ID; Aqua doesn't send messages automatically. */
   public textChannel: string | undefined
-  /** The track being started/played, or null while idle. */
-  public current: Track | null = null
   /** Local playback flag; set before the track PATCH and rolled back on failure. */
   public playing = false
+  /** Queue allocation mode read from Aqua when this player was created. */
+  public lazyLoad: boolean
 
+  private queueInstance: Queue | undefined
+  private currentTrack: Track | null = null
   private connecting: Promise<Connection> | null = null
   private starting: Promise<this> | null = null
 
@@ -65,8 +64,78 @@ export default class Player extends EventEmitter {
     }
     this.aqua = aqua
     this.node = node
-    this.queue = new Queue()
+
+    this.lazyLoad = this.aqua.options?.lazyloadPlayer === true
+    if (!this.lazyLoad) {
+      this.queueInstance = new Queue()
+    }
     this.connection = new Connection(aqua, this)
+  }
+
+  /**
+   * Gets the queue, creating it on first access if lazyloadPlayer is enabled.
+   * Even reading queue.size creates it; use hasQueue to check without allocating.
+   * The same instance is reused. You can replace it with your own Queue instance.
+   * Assigning undefined drops it; the next queue access creates a new one.
+   *
+   * @example
+   * ```ts
+   * player.queue.add(track) // creates the queue if it doesn't exist yet
+   * ```
+   */
+  public get queue(): Queue {
+    this.queueInstance ??= new Queue()
+    return this.queueInstance
+  }
+
+  /**
+   * Replaces the waiting queue, or drops it when assigned undefined.
+   * Doesn't change current or start playback.
+   * @example
+   * ```ts
+   * player.queue = new Queue()
+   * ```
+   */
+  public set queue(queue: Queue | undefined) {
+    this.queueInstance = queue
+  }
+
+  /**
+   * Checks whether a Queue has been created, without creating one just to check.
+   * An empty queue still exists once created; it isn't discarded automatically.
+   *
+   * @example
+   * ```ts
+   * const waiting = player.hasQueue ? player.queue.size : 0
+   * console.log(waiting)
+   * ```
+   */
+  public get hasQueue() {
+    return this.queueInstance !== undefined
+  }
+
+  /**
+   * Gets the track being started/played, or null while idle. No Queue is needed.
+   * Keeps the same Track reference; setting current doesn't start playback.
+   *
+   * @example
+   * ```ts
+   * console.log(player.current?.info.title)
+   * ```
+   */
+  public get current(): Track | null {
+    return this.currentTrack
+  }
+
+  /**
+   * Updates the local current reference. Use play(track) to actually send REST.
+   * @example
+   * ```ts
+   * player.current = null // local state only
+   * ```
+   */
+  public set current(track: Track | null) {
+    this.currentTrack = track
   }
 
   /**
@@ -91,26 +160,35 @@ export default class Player extends EventEmitter {
   }
 
   /**
-   * Starts the first queued track after any current connect call finishes.
-   * If already playing or the queue is empty, just returns this player.
-   * Concurrent calls share one start request, so they don't consume two tracks.
-   * The track leaves the queue only after the REST update succeeds; failures keep it.
+   * Starts a supplied track directly when idle, without creating a Queue.
+   * With no argument, starts the first track from an existing queue.
+   * A supplied track joins the queue if playback/start is in progress or tracks
+   * are already waiting, so it doesn't jump ahead of them. Concurrent calls share
+   * the pending start request; supplied tracks are still added to the waiting queue.
+   * An empty player just returns itself without creating a Queue.
+   * Queued tracks leave the queue only after REST succeeds; failures keep them.
+   * A failed direct start clears current/playing; retry it with play(track).
    * TrackEnd resets local state, but doesn't automatically play the next track yet.
    *
    * @returns This player after the start request; doesn't wait for the track to finish.
+   * @param track - Optional Track to start directly or append behind existing work.
    * @throws If voice isn't connected, connecting failed or the node rejects the track.
    * @example
    * ```ts
-   * player.queue.add(track)
-   * await player.play()
+   * await player.play(track) // current only, no queue allocation when lazy
+   * // player.queue.add(nextTrack); await player.play() also keeps working
    * console.log(player.current?.info.title)
    * ```
    */
-  public play(): Promise<this> {
+  public play(track?: Track): Promise<this> {
+    if (track && (this.starting || this.playing || this.queueInstance?.size)) {
+      this.queue.add(track)
+      track = undefined
+    }
     if (this.starting) {
       return this.starting
     }
-    this.starting = this.startTrack().finally(() => {
+    this.starting = this.startTrack(track).finally(() => {
       this.starting = null
     })
     return this.starting
@@ -121,7 +199,7 @@ export default class Player extends EventEmitter {
    * Only play calls this; its shared promise keeps starts from racing.
    * @example Calling play() twice at once still sends one start request.
    */
-  private async startTrack() {
+  private async startTrack(track?: Track) {
     await this.connecting
     if (!this.connection.connected || !this.guildId) {
       throw new Error('Connect the player to voice before playing a track.')
@@ -129,21 +207,24 @@ export default class Player extends EventEmitter {
     if (this.playing) {
       return this
     }
-    const track = this.queue.at(0)
-    if (!track) {
+    const queue = this.queueInstance
+    const nextTrack = track ?? queue?.at(0)
+    if (!nextTrack) {
       return this
     }
 
-    this.current = track
+    this.current = nextTrack
     this.playing = true
     try {
       const response = await this.node.rest.updatePlayers(this.guildId, {
-        track: { encoded: track.encoded }
+        track: { encoded: nextTrack.encoded }
       })
       if (response === undefined) {
         throw new Error('The node rejected the track update.')
       }
-      this.queue.dequeue()
+      if (!track) {
+        queue?.dequeue()
+      }
       return this
     } catch (error) {
       this.current = null

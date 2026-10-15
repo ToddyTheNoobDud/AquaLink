@@ -11,12 +11,38 @@ import type { Level } from 'pino'
  * ```ts
  * const options: AquaOptions = {
  *   logging: { level: 'debug' },
+ *   lazyloadPlayer: true,
  *   nodeConfigs: { infiniteReconnects: false, maxRetries: 3 },
  *   send: payload => sendToDiscord(payload)
  * }
  * ```
  */
 export interface AquaOptions {
+  /**
+   * Creates the player's Queue only when it's needed, instead of in the constructor.
+   * play(track) can set current without a Queue. Tracks waiting behind other work
+   * need one. Once created, the same queue is reused even after it becomes empty.
+   * Accessing player.queue also creates it, including reads like queue.size;
+   * player.hasQueue and player.current don't allocate a queue.
+   *
+   * true enables lazy queue creation; false or omitted keeps immediate creation.
+   * This only changes Queue allocation: Player and Connection are still created
+   * normally. It doesn't load modules with import() or start playback by itself.
+   * The first queue use pays the creation cost, so savings depend on actual usage.
+   * The flag is read when each player is constructed; changing it later doesn't
+   * reconfigure existing players. Default is false.
+   *
+   * @example
+   * ```ts
+   * const options: AquaOptions = {
+   *   lazyloadPlayer: true,
+   *   logging: { level: 'info' },
+   *   nodeConfigs: { infiniteReconnects: false, maxRetries: 3 }
+   * }
+   * const aqua = new AquaManager(client, [nodeOptions], options)
+   * ```
+   */
+  lazyloadPlayer?: boolean
   /** Your adapter: send opcode 4 to the guild's shard. Required when joining voice. */
   send?: (payload: VoiceUpdatePayload) => void | Promise<void>
   /** Pino settings used by Aqua's shared logger. */
