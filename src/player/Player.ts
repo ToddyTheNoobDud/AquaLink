@@ -226,4 +226,71 @@ export default class Player extends EventEmitter {
       throw error
     }
   }
+
+  /**
+   * Stops current without disconnecting or touching the waiting queue.
+   * Clears current/playing after REST succeeds. Doesn't create a lazy queue.
+   * Missing voice, guildId or current logs an error and returns undefined.
+   *
+   * @returns This player after stopping, or undefined when there's nothing to stop
+   * or the voice connection/guildId is missing.
+   * @throws If the node rejects the stop request. Local playback state stays as it was.
+   * @example
+   * ```ts
+   * await player.stop() // waiting tracks stay queued; use play() to start again
+   * ```
+   */
+  public async stop() {
+    if (!this.connection.connected || !this.guildId) {
+      return this.aqua.logger.error(
+        'Stop cannot be used without a connection or a guildId. Pay attetion pls !!!'
+      )
+    }
+
+    if (!this.current) {
+      return this.aqua.logger.error('There is no track to stop.')
+    }
+
+    const response = await this.node.rest.updatePlayers(this.guildId, {
+      track: { encoded: null }
+    })
+
+    if (response === undefined) {
+      throw new Error('The node rejected the stop update.')
+    }
+
+    this.current = null
+    this.playing = false
+
+    return this
+  }
+
+  /**
+   * Stops current, then waits for play() to start the next queued track.
+   * No queue or an empty queue logs an error and leaves current playing.
+   * current lives on the player, so it doesn't count as a waiting track.
+   *
+   * @returns This player, or undefined if no track is waiting.
+   * @throws If stopping or starting the next track fails. A failed stop prevents play().
+   * @example
+   * ```ts
+   * player.queue.add(nextTrack)
+   * await player.skip() // needs a current track and a connected player too
+   * ```
+   */
+  public async skip() {
+    if (!this.hasQueue || this.queue.size === 0) {
+      return this.aqua.logger.error(
+        'skip only works when u actually have a queue, if you wanted only to stop a track, use stop directly. No track to skip'
+      )
+    }
+
+    const result = await this.stop()
+
+    if (result) {
+      await this.play()
+    }
+
+    return this
+  }
 }
