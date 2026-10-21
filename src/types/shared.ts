@@ -287,6 +287,10 @@ export type LoadResult =
       data: TrackAPI['track'][]
     }
   | {
-      loadType: 'track' | 'playlist' | 'empty' | 'error'
+      loadType: 'track'
+      data: TrackAPI['track']
+    }
+  | {
+      loadType: 'playlist' | 'empty' | 'error'
       data: unknown
     }

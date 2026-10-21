@@ -182,9 +182,13 @@ export default class Rest {
     if (!source || !query) {
       return undefined
     }
-    const res = await this.makeRequest(
-      `${RoutesForRest.LoadTracksRoute}?identifier=${source}:${encodeURIComponent(query)}`
-    )
+
+    let url = `${RoutesForRest.LoadTracksRoute}?identifier=${source}:${encodeURIComponent(query)}`
+
+    if (query.includes('http://') || query.includes('https://')) {
+      url = `${RoutesForRest.LoadTracksRoute}?identifier=${encodeURIComponent(query)}`
+    }
+    const res = await this.makeRequest(url)
     return res as LoadResult | null | undefined
   }
 

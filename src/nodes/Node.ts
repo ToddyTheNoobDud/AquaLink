@@ -1,6 +1,7 @@
 import EventEmitter from 'node:events'
 import type AquaManager from '../aqua/Aqua.ts'
 import Rest from '../rest/Rest.ts'
+import type { PlayerEventPayload } from '../shared/Events.ts'
 import { RoutesForWebsocket } from '../shared/routes.ts'
 import type {
   StatsLavalink,
@@ -49,7 +50,7 @@ interface WebsocketPayload {
 
 /**
  * A Lavalink/NodeLink server with its WebSocket, REST and retries.
- * Aqua creates/registers it. Custom ops/events are logged only; public hooks are pending.
+ * Aqua creates/registers it. Guild events reach PlayerEvents; unknown ops are logged only.
  *
  * @example
  * ```ts
@@ -174,7 +175,14 @@ export default class Node extends EventEmitter {
     })
 
     websocket.addEventListener('message', (message) => {
-      this.handleWebsocketMessages(message as MessageEvent<string>)
+      this.handleWebsocketMessages(message as MessageEvent<string>).catch(
+        (error: unknown) => {
+          this.aqua.logger.error(
+            { err: error },
+            'Failed to handle a node message.'
+          )
+        }
+      )
     })
 
     websocket.addEventListener('open', (open) => {
@@ -190,9 +198,9 @@ export default class Node extends EventEmitter {
   }
 
   /**
-   * Reads ready/session and stats; a matching TrackEnd clears local playback.
-   * playerUpdate and unknown ops/events are logged only.
-   * @throws On invalid JSON. Payload fields aren't validated.
+   * Reads ready/session and stats; forwards guild events to their assigned Player.
+   * playerUpdate and unknown ops are logged only.
+   * @throws On invalid JSON or a throwing handler/listener; the socket callback logs it.
    * @example Incoming { op: 'ready', sessionId: 'node-session' } stores the session ID.
    */
   private async handleWebsocketMessages(message: MessageEvent<string>) {
@@ -225,15 +233,14 @@ export default class Node extends EventEmitter {
         break
       case 'event':
       case 'events': {
-        const player = this.aqua.get(parsed.guildId ?? '')
-        if (
-          player?.node === this &&
-          player.current?.encoded === parsed.track?.encoded &&
-          parsed.type === 'TrackEndEvent'
-        ) {
-          player.playing = false
-          player.current = null
+        const emitted = this.emitEventToPlayer(parsed)
+
+        if (emitted === null) {
+          return this.aqua.logger.info(
+            `event not emitted because of a error. event: ${parsed.type}`
+          )
         }
+
         // we let pino build the parsed stuff, because JS do the work before logging.
         this.aqua.logger.debug(
           {
@@ -253,6 +260,27 @@ export default class Node extends EventEmitter {
           `Unknown message/event/op recived, you can extend this so you can use it if you want to.`
         )
     }
+  }
+
+  private emitEventToPlayer(payload: WebsocketPayload) {
+    if (
+      typeof payload.type !== 'string' ||
+      typeof payload.guildId !== 'string'
+    ) {
+      this.aqua.logger.error('A player event needs a string type and guildId.')
+      return null
+    }
+    const player = this.aqua.get(payload.guildId)
+    if (!player) {
+      this.aqua.logger.error('no player found to emit any event sadly.')
+      return null
+    }
+
+    if (player.node !== this) {
+      return null
+    }
+
+    player.handleEvents(payload as PlayerEventPayload)
   }
 
   /**

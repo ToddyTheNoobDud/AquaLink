@@ -336,6 +336,9 @@ export default class AquaManager extends EventEmitter {
 
         return tracks
       }
+      case 'track': {
+        return [new Track(res.data)]
+      }
     }
   }
 

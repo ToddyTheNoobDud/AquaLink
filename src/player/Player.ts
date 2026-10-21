@@ -2,8 +2,10 @@ import EventEmitter from 'node:events'
 import type AquaManager from '../aqua/Aqua.ts'
 import type { ConnectionOptions } from '../aqua/Aqua.ts'
 import type Node from '../nodes/Node.ts'
+import type { PlayerEventPayload } from '../shared/Events.ts'
 import type Track from '../shared/Track.ts'
 import Connection from './Connection.ts'
+import PlayerEvents from './PlayerEvents.ts'
 import Queue from './Queue.ts'
 
 /**
@@ -36,10 +38,13 @@ export default class Player extends EventEmitter {
   public playing = false
   /** Lazy setting read from Aqua at creation. */
   public lazyLoad: boolean
+  public events: PlayerEvents
 
-  private queueInstance: Queue | undefined
+  /** The existing queue; reading this field doesn't create one. */
+  private storedQueue: Queue | undefined
   private currentTrack: Track | null = null
-  private connecting: Promise<Connection> | null = null
+  /** Latest voice join request; playback waits for it to finish. */
+  private voiceConnectionPromise: Promise<Connection> | null = null
   private starting: Promise<this> | null = null
 
   /**
@@ -66,9 +71,15 @@ export default class Player extends EventEmitter {
 
     this.lazyLoad = this.aqua.options?.lazyloadPlayer === true
     if (!this.lazyLoad) {
-      this.queueInstance = new Queue()
+      this.storedQueue = new Queue()
     }
     this.connection = new Connection(aqua, this)
+    this.events = new PlayerEvents(aqua, this)
+  }
+
+  /** Forwards a node event to this player's handlers and public listeners. */
+  public handleEvents(payload: PlayerEventPayload) {
+    this.events.handleEvents(payload)
   }
 
   /**
@@ -82,8 +93,8 @@ export default class Player extends EventEmitter {
    * ```
    */
   public get queue(): Queue {
-    this.queueInstance ??= new Queue()
-    return this.queueInstance
+    this.storedQueue ??= new Queue()
+    return this.storedQueue
   }
 
   /**
@@ -94,7 +105,7 @@ export default class Player extends EventEmitter {
    * ```
    */
   public set queue(queue: Queue | undefined) {
-    this.queueInstance = queue
+    this.storedQueue = queue
   }
 
   /**
@@ -107,7 +118,7 @@ export default class Player extends EventEmitter {
    * ```
    */
   public get hasQueue() {
-    return this.queueInstance !== undefined
+    return this.storedQueue !== undefined
   }
 
   /**
@@ -150,8 +161,8 @@ export default class Player extends EventEmitter {
     this.guildId = options.guildId
     this.voiceChannel = options.voiceChannel
     this.textChannel = options.textChannel
-    this.connecting = this.connection.joinVoice(options)
-    await this.connecting
+    this.voiceConnectionPromise = this.connection.joinVoice(options)
+    await this.voiceConnectionPromise
     return this
   }
 
@@ -161,7 +172,7 @@ export default class Player extends EventEmitter {
    * Concurrent calls share the start request; new tracks still join the queue.
    * No tracks means no queue allocation. Queued tracks leave only after REST succeeds.
    * Failed starts clear current/playing: queued tracks stay put; retry direct ones
-   * with play(track). TrackEnd resets state; playing the next track is manual.
+   * with play(track). Event handlers live in player.events; playing the next track is manual.
    *
    * @returns This player after the start request, or unchanged if there's nothing to do.
    * It doesn't wait for the track to finish.
@@ -175,7 +186,7 @@ export default class Player extends EventEmitter {
    * ```
    */
   public play(track?: Track): Promise<this> {
-    if (track && (this.starting || this.playing || this.queueInstance?.size)) {
+    if (track && (this.starting || this.playing || this.storedQueue?.size)) {
       this.queue.add(track)
       track = undefined
     }
@@ -194,14 +205,16 @@ export default class Player extends EventEmitter {
    * @example Calling play() twice at once still sends one start request.
    */
   private async startTrack(track?: Track) {
-    await this.connecting
+    if (this.voiceConnectionPromise) {
+      await this.voiceConnectionPromise
+    }
     if (!this.connection.connected || !this.guildId) {
       throw new Error('Connect the player to voice before playing a track.')
     }
     if (this.playing) {
       return this
     }
-    const queue = this.queueInstance
+    const queue = this.storedQueue
     const nextTrack = track ?? queue?.at(0)
     if (!nextTrack) {
       return this
@@ -281,7 +294,7 @@ export default class Player extends EventEmitter {
   public async skip() {
     if (!this.hasQueue || this.queue.size === 0) {
       return this.aqua.logger.error(
-        'skip only works when u actually have a queue, if you wanted only to stop a track, use stop directly. No track to skip'
+        'skip only works when u actually have a queue, if you wanted only to stop a track, use stop directly. No track to skip\n If this happend by itself, its probaly a logic error in the library (me), so please open an issue w the logs.'
       )
     }
 
