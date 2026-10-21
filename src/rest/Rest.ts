@@ -162,13 +162,14 @@ export default class Rest {
   }
 
   /**
-   * Fetches raw /v4/loadtracks data using source:query. It encodes query for you.
-   * Returns the load result; Aqua.resolve wraps search tracks into Track instances.
+   * Fetches raw /v4/loadtracks data. Search text uses source:query; HTTP(S) URLs
+   * go directly into identifier without a search prefix. It encodes query for you.
+   * Aqua.resolve wraps search/direct track data into Track arrays.
    *
-   * @param query - Search text, without URL encoding.
-   * @param source - Prefix without :, for example ytsearch.
+   * @param query - Search text or an HTTP(S) URL, without URL encoding.
+   * @param source - Prefix without :, for example ytsearch. Required even for a direct URL.
    * @returns LoadResult or null/undefined. Empty query/source returns undefined.
-   * Only search data is fully typed so far.
+   * Search and direct track data are typed; other result data is still unknown.
    * @example
    * ```ts
    * const result = await node.rest.loadTracks('slayr eyesight', 'ytsearch')

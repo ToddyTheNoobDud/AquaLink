@@ -200,7 +200,9 @@ export default class Node extends EventEmitter {
   /**
    * Reads ready/session and stats; forwards guild events to their assigned Player.
    * playerUpdate and unknown ops are logged only.
-   * @throws On invalid JSON or a throwing handler/listener; the socket callback logs it.
+   * @throws On JSON/routing errors; the socket callback logs this method's rejection.
+   * Player's asynchronous event work currently isn't awaited here, so its rejections
+   * don't reach that catch. playerUpdate and unknown ops still have no public dispatch.
    * @example Incoming { op: 'ready', sessionId: 'node-session' } stores the session ID.
    */
   private async handleWebsocketMessages(message: MessageEvent<string>) {

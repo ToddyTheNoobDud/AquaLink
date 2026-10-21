@@ -269,8 +269,8 @@ export interface TrackAPI {
 
 /**
  * Raw /v4/loadtracks result. Check loadType before reading data.
- * Only search data is typed/converted by Aqua.resolve so far; other branches
- * still use unknown and need payload types.
+ * Search/direct track data is typed and converted by Aqua.resolve.
+ * Playlist, empty and error data still use unknown and need payload types.
  *
  * @example
  * ```ts

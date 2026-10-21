@@ -10,7 +10,7 @@ import Queue from './Queue.ts'
 
 /**
  * A guild's playback state, queue and voice connection on one node.
- * Aqua creates/registers it. Playing the next track is still manual.
+ * Aqua creates/registers it. PlayerEvents handles track ends and queue progression.
  *
  * @example
  * ```ts
@@ -38,6 +38,7 @@ export default class Player extends EventEmitter {
   public playing = false
   /** Lazy setting read from Aqua at creation. */
   public lazyLoad: boolean
+  /** Event processing instance; listeners stay on the Player through player.on(). */
   public events: PlayerEvents
 
   /** The existing queue; reading this field doesn't create one. */
@@ -77,7 +78,12 @@ export default class Player extends EventEmitter {
     this.events = new PlayerEvents(aqua, this)
   }
 
-  /** Forwards a node event to this player's handlers and public listeners. */
+  /**
+   * Starts processing in PlayerEvents. This method currently doesn't return its promise,
+   * so awaiting player.handleEvents() doesn't wait for next playback or public emission.
+   * Use player.events.handleEvents(payload) when calling the dispatcher directly.
+   * @example Node forwards a guild's payload here after checking its assigned player.
+   */
   public handleEvents(payload: PlayerEventPayload) {
     this.events.handleEvents(payload)
   }
@@ -172,7 +178,8 @@ export default class Player extends EventEmitter {
    * Concurrent calls share the start request; new tracks still join the queue.
    * No tracks means no queue allocation. Queued tracks leave only after REST succeeds.
    * Failed starts clear current/playing: queued tracks stay put; retry direct ones
-   * with play(track). Event handlers live in player.events; playing the next track is manual.
+   * with play(track). The default TrackEnd handler advances waiting tracks after
+   * finished/loadFailed. stop() and other end reasons don't advance the queue.
    *
    * @returns This player after the start request, or unchanged if there's nothing to do.
    * It doesn't wait for the track to finish.

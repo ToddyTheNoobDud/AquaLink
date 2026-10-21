@@ -322,7 +322,8 @@ export default class AquaManager extends EventEmitter {
   }
 
   /**
-   * Wraps search payloads as Tracks for resolve. Other load types return undefined.
+   * Wraps search data as Track[] and a direct track as a one-item Track[].
+   * Playlist, empty and error results return undefined for now.
    * @example A search response with two payloads becomes an array of two Tracks.
    */
   private handleTrackLoading(res: LoadResult) {
@@ -343,14 +344,14 @@ export default class AquaManager extends EventEmitter {
   }
 
   /**
-   * Searches the first configured node and wraps loadType='search' results as Tracks.
+   * Loads from the first configured node. Search and direct URLs return Track arrays.
    * Uses its own lookup; _node and getNode() don't affect selection yet.
    *
-   * @param query - Search text.
+   * @param query - Search text or an HTTP(S) track URL.
    * @param source - Prefix without :, for example ytsearch or scsearch.
    * @param _node - Unused for now.
    * @returns Track[]; an empty search stays []. Returns undefined if offline,
-   * loading fails or the response isn't a search result.
+   * loading fails or loadType isn't search/track. Playlist metadata isn't handled yet.
    * @example
    * ```ts
    * const tracks = await aqua.resolve('slayr eyesight', 'ytsearch')
