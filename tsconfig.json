@@ -27,5 +27,11 @@
     "noUnusedParameters": false,
     "noPropertyAccessFromIndexSignature": false
   },
-  "include": ["src/**/*.ts", "tests/**/*.ts", "comparison/**/*.ts", "build.ts"]
+  "include": [
+    "src/**/*.ts",
+    "examples/**/*.ts",
+    "tests/**/*.ts",
+    "comparison/**/*.ts",
+    "build.ts"
+  ]
 }

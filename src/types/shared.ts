@@ -142,7 +142,7 @@ export interface NodeAdditionalOptions {
   /** Retry limit unless infiniteReconnects is enabled. Default: 10. */
   reconnectTries?: number
   infiniteReconnects?: boolean
-  /** Legacy option retained in the type; the current transport doesn't read it. */
+  /** Per-node REST response-header deadline in ms. Overrides Aqua's restTimeout. */
   timeout?: number
 }
 /** Guild/channel IDs are strings. Creation waits for the Discord voice handshake. */

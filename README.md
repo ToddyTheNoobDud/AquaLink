@@ -165,6 +165,9 @@ remain available in payloads; narrow them before using them.
 
 ## Customize from your bot
 
+The [examples folder](examples/README.md) has small overrides for every structure,
+an independent queue implementation and a bot-owned autoplay callback.
+
 Pass subclasses through `structures` before creating nodes or players:
 
 ```ts
