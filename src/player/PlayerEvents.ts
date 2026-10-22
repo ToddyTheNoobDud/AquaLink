@@ -1,120 +1,211 @@
-import type AquaManager from '../aqua/Aqua.ts'
+import type Aqua from '../aqua/Aqua.ts'
 import type { PlayerEventPayload } from '../shared/Events.ts'
+import Track from '../shared/Track.ts'
 import type Player from './Player.ts'
 
-/**
- * Handles one player's node events, then emits the original payload on the Player.
- * Uses a switch for known types; other types go through handleCustomEvent.
- * @example
- * ```ts
- * player.on('TrackEndEvent', payload => {
- *   console.log(payload.reason)
- * })
- * ```
+// Protocol names differ from the v3 public listener names. These aren't handlers.
+const legacyNames: Record<string, string> = Object.freeze({
+  LyricsLineEvent: 'lyricsLine',
+  LyricsFoundEvent: 'lyricsFound',
+  LyricsNotFoundEvent: 'lyricsNotFound',
+  VolumeChangedEvent: 'volumeChanged',
+  FiltersChangedEvent: 'filtersChanged',
+  SeekEvent: 'seek',
+  PlayerCreatedEvent: 'playerCreated',
+  PlayerConnectedEvent: 'playerConnected',
+  PlayerDisconnectedEvent: 'playerDisconnected',
+  PlayerDestroyedEvent: 'playerDestroy',
+  PlayerMigratedEvent: 'playerMigrated',
+  PauseEvent: 'pauseEvent',
+  MixStartedEvent: 'mixStarted',
+  MixEndedEvent: 'mixEnded',
+  PlayerReconnectingEvent: 'PlayerReconnectingEvent'
+})
+
+/** Runs a handler, then emits the original payload on Player, even if the handler throws.
+ * Override methods from bot code through options.structures.PlayerEvents.
+ * @example class Events extends PlayerEvents {
+ *   override async handleCustomEvent(payload: PlayerEventPayload) { console.log(payload.type) }
+ * }
  */
 export default class PlayerEvents {
-  /** Manager used by this player's event handling. */
-  public aqua: AquaManager
-  /** The same Player instance that received the event. */
-  public player: Player
-  /**
-   * Stores the manager and player. Player creates this once in its constructor.
-   * @example
-   * ```ts
-   * const events = player.events
-   * ```
-   */
-  constructor(aqua: AquaManager, player: Player) {
-    this.aqua = aqua
-    this.player = player
-  }
-
-/*   get customEvent() {
-    return 'todo'
-  }
-
-  set customEvent(name: string) {
-     this.aqua.logger.info('todo')
-  }
-
-  public async deleteCustomEvent() {} */
-
-  /**
-   * Hook for types outside TrackStartEvent/TrackEndEvent, including other protocol events.
-   * Empty by default. Override it in your subclass; no handler Map is needed.
-   * handleEvents currently calls this hook without awaiting its promise.
-   * @param payload - The full event, including any custom fields.
-   * @example
-   * ```ts
-   * class CustomEvents extends PlayerEvents {
-   *   override async handleCustomEvent(payload: PlayerEventPayload) {
-   *     this.aqua.logger.info(`got ${payload.type}`)
-   *   }
-   * }
-   * player.events = new CustomEvents(aqua, player)
-   * ```
-   */
-  public async handleCustomEvent(payload) { } 
-
-  /**
-   * TrackStart passes straight to emission. TrackEnd waits for trackEnd's work;
-   * other types call handleCustomEvent without waiting for it.
-   * Emits once under payload.type, keeping the same payload object.
-   * @param payload - Guild event forwarded by Node.
-   * @returns Resolves after dispatch and public emission, including next playback if attempted.
-   * @throws If trackEnd or a public listener fails. A rejected trackEnd skips emission.
-   * Player/Node currently don't return/await this promise through the full chain.
-   * @example
-   * ```ts
-   * await player.events.handleEvents({ type: 'CustomEvent', guildId: '123' })
-   * ```
-   */
+  constructor(
+    public aqua: Aqua,
+    public player: Player
+  ) {}
+  /** Override for event types without a built-in handler. Raw emission still happens afterwards. */
+  public async handleCustomEvent(_payload: PlayerEventPayload): Promise<void> {}
+  /** Dispatch known types through the switch. Override the individual methods to keep routing. */
   public async handleEvents(payload: PlayerEventPayload) {
-    switch (payload.type) {
-      case 'TrackStartEvent':
-        break
-  
-      case 'TrackEndEvent':
-        await this.trackEnd(payload)
-        break
-  
-      default:
-        this.handleCustomEvent(payload)
-    }
-  
-    this.player.emit(payload.type, payload)
-  }
-
-  /**
-   * Ignores ends that don't match current's encoded track. A match clears current
-   * and playing before checking the queue, without allocating a lazy queue.
-   * finished/loadFailed start the next waiting track; other reasons don't advance.
-   * stopped/replaced/cleanup still have debug logs and a TODO for extra handling.
-   * @throws If starting the next track fails; the queued track stays available.
-   * @example A matching finished event leaves the player idle when no tracks are waiting.
-   */
-  private async trackEnd(payload: any) {
-    const player = this.player
-    
-    if (!player.current || payload.track?.encoded !== player.current.encoded) {
+    if (this.player.destroyed) {
       return
     }
-    
+    try {
+      switch (payload.type) {
+        case 'TrackStartEvent':
+          await this.trackStart(payload)
+          break
+        case 'TrackEndEvent':
+          await this.trackEnd(payload)
+          break
+        case 'TrackExceptionEvent':
+          await this.trackError(payload)
+          break
+        case 'TrackStuckEvent':
+          await this.trackStuck(payload)
+          break
+        case 'WebSocketClosedEvent':
+          await this.socketClosed(payload)
+          break
+        case 'TrackChangeEvent':
+          await this.trackChange(payload)
+          break
+        default:
+          if (Object.hasOwn(legacyNames, payload.type)) {
+            await this.serverEvent(payload)
+          } else {
+            await this.handleCustomEvent(payload)
+          }
+      }
+    } finally {
+      this.player.emit('event', payload)
+      this.player.emit(payload.type, payload)
+    }
+  }
+
+  /** v3 aliases go to Player(track, ...) and Aqua(player, track, ...). */
+  protected emit(name: string, track: Track | null, ...details: unknown[]) {
+    this.player.emit(name, track, ...details)
+    this.aqua.emit(name, this.player, track, ...details)
+  }
+
+  protected eventTrack(payload: PlayerEventPayload) {
+    if (this.player.current?.encoded === payload.track?.encoded) {
+      return this.player.current
+    }
+    if (!payload.track) {
+      return this.player.current
+    }
+    const TrackClass = this.aqua.options?.structures?.Track ?? Track
+    return new TrackClass(payload.track, undefined, this.player.node)
+  }
+
+  /** Set current/playing and emit trackStart with the Track wrapper. */
+  public async trackStart(payload: PlayerEventPayload) {
+    const track = this.eventTrack(payload)
+    if (track) {
+      this.player.current = track
+    }
+    this.player.playing = true
+    this.player.timestamp = Date.now()
+    this.emit('trackStart', track)
+  }
+
+  /** finished/loadFailed advance; replaced belongs to the newer play request.
+   * The trackEnd alias is emitted before state cleanup; raw TrackEndEvent is emitted afterwards.
+   * stopped/cleanup clear state without advancing. Loop/autoplay/leaveOnEnd apply here.
+   * Override this method to own queue progression entirely.
+   */
+  public async trackEnd(payload: PlayerEventPayload) {
+    const player = this.player
+    const track = this.eventTrack(payload)
+    this.emit('trackEnd', track, payload.reason)
+    if (
+      !player.current ||
+      payload.track?.encoded !== player.current.encoded ||
+      payload.reason === 'replaced'
+    ) {
+      return
+    }
+    if (
+      payload.reason !== 'finished' &&
+      payload.reason !== 'loadFailed' &&
+      payload.reason !== 'stopped' &&
+      payload.reason !== 'cleanup'
+    ) {
+      return
+    }
+    player.previous = player.current
     player.current = null
     player.playing = false
-    
-    const canStartNext =
-      payload.reason === 'finished' ||
-      payload.reason === 'loadFailed'
-    
-    if (canStartNext && player.hasQueue && player.queue.size > 0) {
-      await player.play()
+    player.paused = false
+    player.position = 0
+    if (payload.reason === 'cleanup' || payload.reason === 'stopped') {
+      return
     }
+    await player.waitForPlayback()
+    if (player.destroyed || player.playing || player.current) {
+      return
+    }
+    if (player.loop === 1 && track && payload.reason === 'finished') {
+      await player.playNext(track)
+      return
+    }
+    if (player.loop === 2 && track && payload.reason === 'finished') {
+      player.queue.add(track)
+    }
+    if (player.hasQueue && player.queue.size) {
+      await player.playNext()
+    } else if (player.isAutoplayEnabled) {
+      await player.autoplay()
+    }
+    if (!player.playing) {
+      player.emit('queueEnd')
+      this.aqua.emit('queueEnd', player)
+      if (player.leaveOnEnd) {
+        await player.destroy()
+      }
+    }
+  }
 
-    if (payload.reason === 'stopped' || payload.reason === 'replaced' || payload.reason === 'cleanup') {
-      console.log(payload.reason)
-      console.log(payload)
-      // todo
+  /** Emit trackError with the track and server exception. Doesn't advance the queue. */
+  public async trackError(payload: PlayerEventPayload) {
+    this.emit('trackError', this.eventTrack(payload), payload.exception)
+  }
+
+  /** Emit trackStuck with the track and threshold in ms. Recovery belongs to the bot. */
+  public async trackStuck(payload: PlayerEventPayload) {
+    this.emit('trackStuck', this.eventTrack(payload), payload.thresholdMs)
+  }
+
+  /** Mark voice disconnected and forward socketClosed. Doesn't automatically rejoin. */
+  public async socketClosed(payload: PlayerEventPayload) {
+    this.player.connected = false
+    this.player.emit('socketClosed', payload)
+    this.aqua.emit('socketClosed', this.player, payload)
+  }
+
+  /** Mirror a server track change into previous/current and emit trackChange. */
+  public async trackChange(payload: PlayerEventPayload) {
+    const track = this.eventTrack(payload)
+    this.player.previous = this.player.current
+    this.player.current = track
+    this.emit('trackChange', track, payload)
+  }
+
+  /** NodeLink notification aliases. Reconnecting notifications don't trigger a hidden rejoin. */
+  public async serverEvent(payload: PlayerEventPayload) {
+    if (
+      payload.type === 'VolumeChangedEvent' &&
+      typeof payload.volume === 'number'
+    ) {
+      this.player.volume = payload.volume
+    }
+    if (payload.type === 'PauseEvent' && typeof payload.paused === 'boolean') {
+      this.player.paused = payload.paused
+    }
+    if (payload.type === 'SeekEvent' && typeof payload.position === 'number') {
+      this.player.position = payload.position
+    }
+    const name = legacyNames[payload.type]
+    if (!name) {
+      return
+    }
+    if (payload.type.startsWith('Player') || payload.type === 'PauseEvent') {
+      this.player.emit(name, payload)
+      this.aqua.emit(name, this.player, payload)
+    } else {
+      this.emit(name, this.eventTrack(payload), payload)
     }
   }
 }

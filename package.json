@@ -1,0 +1,48 @@
+{
+  "name": "aqualink",
+  "version": "4.0.0",
+  "description": "Extensible Lavalink v4 and NodeLink client.",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/types/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/types/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/cjs-types/index.d.ts",
+        "default": "./dist/index.cjs"
+      }
+    }
+  },
+  "files": [
+    "dist",
+    "LICENSE.md"
+  ],
+  "scripts": {
+    "typecheck": "bun ./node_modules/typescript/bin/tsc --noEmit -p tsconfig.json"
+  },
+  "license": "WTFPL",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ToddyTheNoobDud/AquaLink.git"
+  },
+  "engines": {
+    "node": ">=22.19.0",
+    "bun": ">=1.4.4"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.3",
+    "@types/node": "^26.6.5",
+    "pino-pretty": "^13.2.0",
+    "typescript": "^7"
+  },
+  "dependencies": {
+    "@types/ws": "^8.18.2",
+    "pino": "^10.4.0",
+    "ws": "^8.22.0"
+  }
+}

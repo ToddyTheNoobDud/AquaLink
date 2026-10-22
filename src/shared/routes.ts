@@ -25,13 +25,3 @@ export const RoutesForRest = Object.freeze({
   InfoRoute: '/v4/info',
   LoadTracksRoute: '/v4/loadtracks'
 })
-
-/* 
-
-specific routes for both lavalink and nodelink, since lavalink will have plugin endpoints
-and nodelink will have its own endpoints too.
-
-export const RoutesForRestLavalink = Object.freeze({})
-
-export const RoutesForRestNodelink = Object.freeze({}) 
- */

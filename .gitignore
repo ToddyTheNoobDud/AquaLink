@@ -1,1 +1,17 @@
 node_modules
+dist/
+*.tgz
+
+# Local development tools and learner notes.
+tests/
+testBot/
+comparison/
+bun.lock
+build.ts
+.vibe-wise/
+
+.env
+.env.*
+!.env.example
+AquaPlayers.jsonl
+AquaPlayers.jsonl.*.tmp

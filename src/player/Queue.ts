@@ -1,88 +1,98 @@
 import type Track from '../shared/Track.ts'
 
-/**
- * Waiting tracks in FIFO order, stored as references. Playback and cleanup stay
- * with the caller; adding a track just stores it.
- *
- * @example
- * ```ts
- * const queue = new Queue()
- * queue.add(track)
- * const next = queue.dequeue()
- * ```
+/** FIFO of waiting tracks. current belongs to Player, never to the queue.
+ * @example const queue = new Queue(first, second); queue.shuffle()
  */
 export default class Queue {
   private tracks: Track[] = []
 
-  /**
-   * Number of waiting tracks.
-   * @example
-   * ```ts
-   * console.log(player.queue.size)
-   * ```
-   */
-  public get size() {
+  constructor(...tracks: Track[]) {
+    this.add(...tracks)
+  }
+
+  get size() {
     return this.tracks.length
   }
 
-  /**
-   * Appends tracks in order, keeping their references. Returns this queue for chaining.
-   *
-   * @param tracks - Tracks to append; spread arrays with ...tracks.
-   * @example
-   * ```ts
-   * player.queue.add(track)
-   * const tracks = await aqua.resolve('slayr eyesight', 'ytsearch')
-   * if (tracks) player.queue.add(...tracks)
-   * ```
+  get length() {
+    return this.size
+  }
+
+  /** Append references and return this queue. Doesn't start playback.
+   * @example queue.add(first, second)
    */
-  public add(...tracks: Track[]) {
+  add(...tracks: Track[]) {
     this.tracks.push(...tracks)
     return this
   }
 
-  /**
-   * Reads a track without removing it.
-   *
-   * @param index - Zero-based; negative indexes count from the end (-1 is last).
-   * @returns Stored Track, or undefined if out of range.
-   * @example
-   * ```ts
-   * const first = player.queue.at(0)
-   * const last = player.queue.at(-1)
-   * console.log(first?.info.title, last?.info.title)
-   * ```
-   */
-  public at(index: number) {
-    return this.tracks.at(index)
+  /** Prepend tracks in the given order. Returns the new queue size. */
+  unshift(...tracks: Track[]) {
+    return this.tracks.unshift(...tracks)
   }
 
-  /**
-   * Removes the first track. Playback and cleanup stay with the caller.
-   *
-   * @returns Removed Track, or undefined if empty.
-   * @example
-   * ```ts
-   * const removed = player.queue.dequeue()
-   * console.log(removed?.info.title)
-   * ```
-   */
-  public dequeue() {
+  /** Read an item or null. Negative indexes count from the end, as with Array.at. */
+  at(index: number) {
+    return this.tracks.at(index) ?? null
+  }
+
+  /** Remove the first matching object reference. Returns whether it was found. */
+  remove(track: Track) {
+    const index = this.tracks.indexOf(track)
+    if (index < 0) {
+      return false
+    }
+    this.tracks.splice(index, 1)
+    return true
+  }
+
+  /** Releases queue references; shared Track wrappers aren't disposed. */
+  clear() {
+    this.tracks.length = 0
+  }
+
+  /** Snapshot the order. The array is copied; Track objects are shared. */
+  toArray(): Track[] {
+    return this.tracks.slice()
+  }
+
+  /** Remove the first waiting track, or return undefined when empty. */
+  dequeue() {
     return this.tracks.shift()
   }
 
-  /**
-   * Copies the list for display. Array changes leave the queue alone;
-   * Track objects are still shared.
-   *
-   * @returns Track[] in queue order, with the same Track references.
-   * @example
-   * ```ts
-   * const titles = player.queue.toArray().map(track => track.info.title)
-   * console.log(titles)
-   * ```
+  /** Move between zero-based indexes. Invalid indexes leave the queue unchanged.
+   * @example queue.move(2, 0)
    */
-  public toArray() {
-    return this.tracks.slice()
+  move(from: number, to: number) {
+    if (
+      !Number.isInteger(from) ||
+      !Number.isInteger(to) ||
+      from < 0 ||
+      to < 0 ||
+      from >= this.size ||
+      to >= this.size
+    ) {
+      return this
+    }
+    const track = this.tracks.splice(from, 1)[0] as Track
+    this.tracks.splice(to, 0, track)
+    return this
+  }
+
+  /** Shuffle waiting order in place and return this queue. Current is unaffected. */
+  shuffle() {
+    for (let index = this.size - 1; index > 0; index--) {
+      const other = Math.floor(Math.random() * (index + 1))
+      const track = this.tracks[index] as Track
+      this.tracks[index] = this.tracks[other] as Track
+      this.tracks[other] = track
+    }
+    return this
+  }
+
+  /** Iterate a snapshot, so later queue changes don't alter this traversal. */
+  [Symbol.iterator]() {
+    return this.toArray()[Symbol.iterator]()
   }
 }

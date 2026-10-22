@@ -1,402 +1,430 @@
-import EventEmitter from 'node:events'
-import type AquaManager from '../aqua/Aqua.ts'
+import { EventEmitter } from 'node:events'
+import WebSocket from 'ws'
+import type Aqua from '../aqua/Aqua.ts'
+import type Player from '../player/Player.ts'
 import Rest from '../rest/Rest.ts'
 import type { PlayerEventPayload } from '../shared/Events.ts'
-import { RoutesForWebsocket } from '../shared/routes.ts'
 import type {
-  StatsLavalink,
-  StatsNodelink
-} from '../types/Rest/endpoints/stats.ts'
-import type { AquaOptions, NodeOptions } from '../types/shared.ts'
+  LavalinkInfo,
+  NodelinkInfo
+} from '../types/Rest/endpoints/info.ts'
+import type { NodeStats } from '../types/Rest/endpoints/stats.ts'
+import type {
+  NodeAdditionalOptions,
+  NodeOptions,
+  RemotePlayer,
+  TrackData
+} from '../types/shared.ts'
 
-// https://bun.sh/reference/bun/Socket/readyState
-// ig nodejs also follow that lol?
-// https://dev.to/ivanzm123/dont-use-enums-in-typescript-they-are-very-dangerous-57bh
-// this was a enum before.
-const WEBSOCKET_STATES = {
-  Shutdown: -2,
-  Detached: -1,
-  Closed: 0,
-  Established: 1,
-  Else: 2
-}
-
-// 5 seconds
-const BASE_BACKOFF = 5000
-
-// 7 minutes, 420 seconds
-const MAX_BACKOFF = 420000
-
-/**
- * Fields read by the WebSocket handler. Extra fields stay unknown; JSON isn't validated.
- * @example A ready payload is { op: 'ready', sessionId: 'node-session' }.
- */
 interface WebsocketPayload {
-  /** Server operation, for example ready, stats or event. */
   op?: string
-  /** Node session carried by ready. */
-  sessionId?: string
-  /** Guild related to a player update/event, when present. */
-  guildId?: string
-  /** Event name, for example TrackEndEvent. */
   type?: string
-  /** Matches end events to the local current track. */
-  track?: { encoded: string }
-  /** CPU loads; absent in some NodeLink payloads. */
+  guildId?: string
+  sessionId?: string
+  resumed?: boolean
+  state?: RemotePlayer['state']
+  track?: TrackData
   cpu?: { nodelinkLoad?: number; lavalinkLoad?: number }
-  /** Extra server/plugin fields with unknown shapes. */
   [field: string]: unknown
 }
 
-/**
- * A Lavalink/NodeLink server with its WebSocket, REST and retries.
- * Aqua creates/registers it. Guild events reach PlayerEvents; unknown ops are logged only.
- *
- * @example
- * ```ts
- * const node = aqua.getNode()
- * if (node) console.log(node.name, node.isNodelink)
- * ```
+/** One server connection. The ready message makes its session usable.
+ * Unknown ops go to nodeCustomOp; protocol events also go to nodeEvent on Aqua.
+ * @example aqua.on('nodeReady', node => console.log(node.name, node.sessionId))
  */
 export default class Node extends EventEmitter {
-  private infiniteReconnects: boolean
-  private maxRetries: number
-  private reconnectRetries: number
-
-  /** Aqualink's internal client name (CLIENT/VERSION format) */
-  private clientName: string
-  /** current aqua instance running */
-  public aqua: AquaManager
-  /** name of the configured node */
   public name: string
-  /** host of the configured node */
   public host: string
-  /** Whether this server uses TLS. */
-  public ssl: boolean
-  /** the configured port */
   public port: number
-  /** the configured password */
+  public ssl: boolean
   public password: string
-  /** Node session from ready, initially null. Separate from the Discord voice session. */
   public sessionId: string | null
-  /** Local connection flag. Player REST routes also need sessionId. */
-  public connected: boolean
-  /** the rest instance */
-  public rest: Rest
-  /** Latest server stats without op. Starts as {}. */
-  public stats: StatsNodelink | StatsLavalink | object
-  /** Detected via /v4/info; initially false, before the server type is known. */
-  public isNodelink: boolean
-  /** current websocket in the Node. */
+  public connected = false
+  public isNodelink = false
+  public isDestroyed = false
+  /** Populated by /v4/info independently of the ready message. May still be null on nodeReady. */
+  public info: LavalinkInfo | NodelinkInfo | null = null
   public websocket: WebSocket | null = null
+  public rest: Rest
+  public stats: Partial<NodeStats> = {}
+  public players = new Set<Player>()
+  public reconnectRetries = 0
+  public reconnectTimeoutId: ReturnType<typeof setTimeout> | null = null
+  public infiniteReconnects: boolean
+  public maxRetries: number
+  public resumeTimeout: number
+  public autoResume: boolean
+  public reconnectTimeout: number
+  public nodeState = 'DISCONNECTED'
 
-  /**
-   * Stores config and creates REST. connect opens the socket.
-   * Reads retry settings from aqua.options.nodeConfigs.
-   *
-   * @param aqua - Manager supplying the logger and bot ID.
-   * @param nodeOptions - Server address, password, name and TLS flag.
-   * @param _options - Unused; configure retries on Aqua.
-   * @example
-   * ```ts
-   * const node = new Node(aqua, nodeOptions)
-   * ```
-   */
   constructor(
-    aqua: AquaManager,
-    nodeOptions: NodeOptions,
-    _options?: AquaOptions
+    public aqua: Aqua,
+    public options: NodeOptions,
+    additional: NodeAdditionalOptions = {}
   ) {
     super()
-
-    this.aqua = aqua
-    this.host = nodeOptions.host
-    this.ssl = nodeOptions.ssl //?? this.secure = nodeOptions.secure
-    this.port = nodeOptions.port
-    this.password = nodeOptions.password
-    this.name = nodeOptions.name
-
+    this.host = options.host
+    this.name = options.name ?? options.host
+    this.port = Number(options.port ?? 2333)
+    this.ssl = options.ssl ?? false
+    this.password = options.password ?? options.auth ?? ''
+    if (
+      !this.host ||
+      !this.password ||
+      !Number.isInteger(this.port) ||
+      this.port < 1 ||
+      this.port > 65535
+    ) {
+      throw new TypeError('Node needs a host, password/auth and a valid port.')
+    }
+    this.sessionId = options.sessionId ?? null
     this.infiniteReconnects =
-      this.aqua.options?.nodeConfigs.infiniteReconnects === true
-    this.maxRetries = this.aqua.options?.nodeConfigs.maxRetries ?? 10
-
-    this.reconnectRetries = 0
-
-    this.sessionId = null
-
-    this.rest = new Rest(this.aqua, this)
-
-    this.connected = false
-
-    this.isNodelink = false
-
-    this.clientName =
-      'Aqualink/4.0.0 (https://github.com/ToddyTheNoobDud/AquaLink'
-
-    this.websocket = null
-
-    this.stats = {}
+      additional.infiniteReconnects ??
+      aqua.options?.nodeConfigs?.infiniteReconnects ??
+      aqua.options?.infiniteReconnects ??
+      false
+    this.maxRetries =
+      additional.reconnectTries ?? aqua.options?.nodeConfigs?.maxRetries ?? 10
+    this.reconnectTimeout = additional.reconnectTimeout ?? 5000
+    this.resumeTimeout =
+      additional.resumeTimeout ?? aqua.options?.resumeTimeout ?? 60
+    this.autoResume = additional.autoResume ?? aqua.options?.autoResume ?? false
+    const RestClass = aqua.options?.structures?.Rest ?? Rest
+    this.rest = new RestClass(aqua, this)
+    this.rest.timeout = additional.timeout ?? this.rest.timeout
   }
 
-  /**
-   * Starts the socket using this node's password and Aqua's clientId, set by init.
-   * Sends a stored Session-Id if present; the server decides whether resuming works.
-   * Doesn't wait for open/ready.
-   *
-   * @returns New WebSocket, or undefined with a log if already connected.
-   * @throws On socket construction errors. Async socket errors happen later.
-   * @example
-   * ```ts
-   * await node.connect() // starts connecting; this isn't a readiness promise
-   * ```
+  get wsUrl() {
+    return `${this.ssl ? 'wss' : 'ws'}://${this.host}:${this.port}/v4/websocket`
+  }
+
+  get isUsable() {
+    return this.connected && this.sessionId !== null && !this.isDestroyed
+  }
+
+  /** Open an authenticated ws socket, or return the current connecting/open socket.
+   * Resolves before the handshake/ready message. Use Aqua's nodeReady event for availability.
+   * @example await node.connect()
    */
-  public async connect() {
-    if (this.connected) {
-      return this.aqua.logger.error('this node is already connected')
+  async connect() {
+    if (this.isDestroyed) {
+      throw new Error('Node is destroyed.')
     }
-
-    const protocol = this.ssl ? 'wss' : 'ws'
-    const websocketUrl = `${protocol}://${this.host}:${this.port}/${RoutesForWebsocket.WebsocketV4Route}`
-
-    const hasSessionId = this.sessionId !== null
-
+    if (this.websocket && this.websocket.readyState < 2) {
+      return this.websocket
+    }
+    if (!this.aqua.clientId) {
+      throw new Error('Call aqua.init(clientId) first.')
+    }
+    if (this.reconnectTimeoutId !== null) {
+      clearTimeout(this.reconnectTimeoutId)
+      this.reconnectTimeoutId = null
+    }
     const headers: Record<string, string> = {
-      Authorization: `${this.password}`,
-      'User-Id': `${this.aqua.clientId}`,
-      'Client-Name': this.clientName
+      Authorization: this.password,
+      'User-Id': this.aqua.clientId,
+      'Client-Name':
+        'Aqualink/4.0.0 (https://github.com/ToddyTheNoobDud/AquaLink)'
     }
-
-    if (hasSessionId) {
-      headers['Session-Id'] = this.sessionId as string
+    if (this.sessionId) {
+      headers['Session-Id'] = this.sessionId
     }
-
-    const websocket = new WebSocket(websocketUrl, {
-      headers
-    })
-
-    websocket.addEventListener('message', (message) => {
-      this.handleWebsocketMessages(message as MessageEvent<string>).catch(
-        (error: unknown) => {
-          this.aqua.logger.error(
-            { err: error },
-            'Failed to handle a node message.'
-          )
-        }
+    const socket = new WebSocket(this.wsUrl, { headers })
+    this.websocket = socket
+    this.nodeState = 'CONNECTING'
+    socket.on('message', (data) => {
+      if (socket !== this.websocket || this.isDestroyed) {
+        return
+      }
+      this.handleWebsocketMessages({ data: data.toString() }).catch((error) =>
+        this.reportError(error)
       )
     })
-
-    websocket.addEventListener('open', (open) => {
-      this.handleWebsocketOpen(open)
+    socket.on('open', () => {
+      this.handleWebsocketOpen({ currentTarget: socket }).catch((error) =>
+        this.reportError(error)
+      )
     })
-
-    websocket.addEventListener('close', (close) => {
-      this.handleWebsocketClose(close, websocket)
+    socket.on('close', (code, reason) => {
+      this.handleWebsocketClose({ code, reason: reason.toString() }, socket)
     })
-
-    this.websocket = websocket
-    return websocket
+    socket.on('error', (error) => {
+      if (socket === this.websocket && !this.isDestroyed) {
+        this.reportError(error)
+      }
+    })
+    return socket
   }
 
-  /**
-   * Reads ready/session and stats; forwards guild events to their assigned Player.
-   * playerUpdate and unknown ops are logged only.
-   * @throws On JSON/routing errors; the socket callback logs this method's rejection.
-   * Player's asynchronous event work currently isn't awaited here, so its rejections
-   * don't reach that catch. playerUpdate and unknown ops still have no public dispatch.
-   * @example Incoming { op: 'ready', sessionId: 'node-session' } stores the session ID.
+  /** Parse one text frame and route it to state handling, Player or public extension events.
+   * Override from a Node subclass to handle extra ops; call super for the built-in ones.
    */
-  private async handleWebsocketMessages(message: MessageEvent<string>) {
-    const parsed = JSON.parse(message.data) as WebsocketPayload
-
+  public async handleWebsocketMessages(message: { data: string }) {
+    if (this.isDestroyed) {
+      return
+    }
+    let parsed: WebsocketPayload
+    try {
+      const data: unknown = JSON.parse(message.data)
+      if (
+        !data ||
+        typeof data !== 'object' ||
+        !('op' in data) ||
+        typeof data.op !== 'string'
+      ) {
+        throw new TypeError('Node message needs a string op.')
+      }
+      parsed = data as WebsocketPayload
+    } catch (error) {
+      this.reportError(error)
+      return
+    }
     switch (parsed.op) {
       case 'ready': {
-        this.aqua.logger.info(`Node is ready: ${this.name}`)
-        this.sessionId = parsed.sessionId ?? null
-        this.connected = this.sessionId !== null
-
+        if (typeof parsed.sessionId !== 'string' || !parsed.sessionId) {
+          this.reportError(new TypeError('ready needs a sessionId.'))
+          return
+        }
+        const oldSession = this.sessionId
+        this.sessionId = parsed.sessionId
+        this.connected = true
+        this.nodeState = 'CONNECTED'
+        this.reconnectRetries = 0
+        if (this.reconnectTimeoutId !== null) {
+          clearTimeout(this.reconnectTimeoutId)
+          this.reconnectTimeoutId = null
+        }
+        if (this.autoResume) {
+          const session = await this.rest.updateSession({
+            resuming: true,
+            timeout: this.resumeTimeout
+          })
+          if (session === undefined) {
+            throw new Error('The node rejected session resuming.')
+          }
+        }
+        if (
+          this.isDestroyed ||
+          !this.connected ||
+          this.sessionId !== parsed.sessionId
+        ) {
+          return
+        }
+        this.emit('ready', parsed)
+        this.aqua.emit('nodeReady', this, parsed)
+        if (this.autoResume && oldSession && !parsed.resumed) {
+          for (const player of this.players) {
+            try {
+              await this.aqua.restorePlayer(player)
+            } catch (error) {
+              this.aqua.emit('reconnectionFailed', player, { error })
+              this.reportError(error)
+            }
+          }
+        }
         break
       }
-      case 'stats':
-        this.aqua.logger.debug('got an stats')
-
-        if ('op' in parsed) {
-          delete parsed.op
-        }
-
+      case 'stats': {
+        delete parsed.op
         if (parsed.cpu && 'nodelinkLoad' in parsed.cpu) {
           delete parsed.cpu.lavalinkLoad
         }
-
-        this.stats = parsed
-
+        this.stats = parsed as Partial<NodeStats>
+        this.emit('stats', this.stats)
+        this.aqua.emit('nodeStats', this, this.stats)
         break
-      case 'playerUpdate':
-        this.aqua.logger.info('i got a playerUpdate')
-        break
-      case 'event':
-      case 'events': {
-        const emitted = this.emitEventToPlayer(parsed)
-
-        if (emitted === null) {
-          return this.aqua.logger.info(
-            `event not emitted because of a error. event: ${parsed.type}`
-          )
+      }
+      case 'playerUpdate': {
+        const player = this.findPlayer(parsed.guildId)
+        if (!player || !parsed.state) {
+          break
         }
-
-        // we let pino build the parsed stuff, because JS do the work before logging.
-        this.aqua.logger.debug(
-          {
-            node: this.name,
-            type: parsed.type,
-            guildId: parsed.guildId,
-            payload: parsed
-          },
-          `recived an event.`
-        )
+        player.position = parsed.state.position
+        player.timestamp = parsed.state.time
+        player.ping = parsed.state.ping
+        player.connected = parsed.state.connected
+        player.emit('playerUpdate', parsed)
+        this.aqua.emit('playerUpdate', player, parsed)
+        break
+      }
+      case 'event':
+      case 'events':
+        this.emit('event', parsed)
+        this.aqua.emit('nodeEvent', this, parsed)
+        if (
+          typeof parsed.type === 'string' &&
+          typeof parsed.guildId === 'string'
+        ) {
+          const player = this.findPlayer(parsed.guildId)
+          if (player) {
+            await player.handleEvents(parsed as PlayerEventPayload)
+          }
+        }
+        break
+      case 'lyricsLine':
+      case 'lyricsFound':
+      case 'lyricsNotFound': {
+        const player = this.findPlayer(parsed.guildId)
+        if (player) {
+          player.emit(parsed.op, player.current, parsed)
+          this.aqua.emit(parsed.op, player, player.current, parsed)
+        }
         break
       }
       default:
-        // we let pino build the parsed stuff, because JS do the work before logging.
-        this.aqua.logger.debug(
-          { node: this.name, op: parsed.op, payload: parsed },
-          `Unknown message/event/op recived, you can extend this so you can use it if you want to.`
-        )
+        this.emit('customOp', parsed.op, parsed)
+        this.aqua.emit('nodeCustomOp', this, parsed.op, parsed)
     }
   }
 
-  private emitEventToPlayer(payload: WebsocketPayload) {
-    if (
-      typeof payload.type !== 'string' ||
-      typeof payload.guildId !== 'string'
-    ) {
-      this.aqua.logger.error('A player event needs a string type and guildId.')
+  private findPlayer(guildId?: string) {
+    if (!guildId) {
       return null
     }
-    const player = this.aqua.get(payload.guildId)
-    if (!player) {
-      this.aqua.logger.error('no player found to emit any event sadly.')
-      return null
-    }
-
-    if (player.node !== this) {
-      return null
-    }
-
-    player.handleEvents(payload as PlayerEventPayload)
+    const player = this.aqua.players.get(guildId)
+    return player?.node === this && !player.destroyed ? player : null
   }
 
-  /**
-   * Fetches info to detect NodeLink, resets retries and marks connected.
-   * Checks the socket before/after fetching so late results can't revive an old socket.
-   * @example A WebSocket open event calls this; a delayed response from an old socket is ignored.
-   */
-  private async handleWebsocketOpen(open: Event): Promise<void> {
-    const socket = open.currentTarget as WebSocket | null
+  /** Fetch server info after socket open, then emit nodeConnect. Does not establish readiness. */
+  public async handleWebsocketOpen(event: { currentTarget: unknown }) {
+    const socket = this.websocket
     if (
-      socket?.readyState !== WEBSOCKET_STATES.Established ||
-      socket !== this.websocket
+      !socket ||
+      event.currentTarget !== socket ||
+      socket.readyState !== 1 ||
+      this.isDestroyed
     ) {
       return
     }
-
+    let info: Awaited<ReturnType<Rest['getInfo']>>
     try {
-      const info = await this.rest.getInfo()
+      info = await this.rest.getInfo()
+    } catch (error) {
+      if (socket === this.websocket && !this.isDestroyed) {
+        this.reportError(error)
+      }
+      return
+    }
+    if (
+      socket !== this.websocket ||
+      socket.readyState !== 1 ||
+      this.isDestroyed
+    ) {
+      return
+    }
+    if (info) {
+      this.info = info
+      this.isNodelink = 'isNodelink' in info && info.isNodelink === true
+    }
+    this.emit('connect')
+    this.aqua.emit('nodeConnect', this)
+    this.aqua.emit('nodeConnected', this)
+  }
 
-      // we check again, because an late info response can come even after a socket was closed
-      if (
-        socket.readyState !== WEBSOCKET_STATES.Established ||
-        socket !== this.websocket
-      ) {
+  /** Mark the owned socket disconnected and schedule a retry within the configured limit. */
+  public handleWebsocketClose(
+    event: { code: number; reason: string },
+    socket: WebSocket
+  ) {
+    if (
+      this.isDestroyed ||
+      (this.websocket !== null && this.websocket !== socket)
+    ) {
+      return
+    }
+    this.connected = false
+    this.nodeState = 'DISCONNECTED'
+    this.emit('disconnect', event)
+    this.aqua.emit('nodeDisconnect', this, {
+      code: event.code,
+      reason: event.reason ?? ''
+    })
+    this.manageBackoff(socket)
+  }
+
+  /** Keep at most one reconnect timer. Delays grow from reconnectTimeout up to seven minutes. */
+  public manageBackoff(socket: Pick<WebSocket, 'readyState'>) {
+    if (
+      this.isDestroyed ||
+      this.connected ||
+      socket.readyState === 1 ||
+      this.reconnectTimeoutId !== null
+    ) {
+      return
+    }
+    if (!this.infiniteReconnects && this.reconnectRetries >= this.maxRetries) {
+      return
+    }
+    const delay = Math.min(
+      this.reconnectTimeout *
+        (this.reconnectRetries >= 2 ? this.reconnectRetries + 0.5 : 1),
+      420000
+    )
+    this.reconnectTimeoutId = setTimeout(async () => {
+      this.reconnectTimeoutId = null
+      if (this.isDestroyed || this.connected) {
         return
       }
-      if (info) {
-        this.isNodelink = 'isNodelink' in info && info.isNodelink === true
-      }
-
-      this.reconnectRetries = 0
-
-      this.connected = true
-
-      this.aqua.logger.info(
-        `Aqualink has connected to the node: ${this.name}, isNodelink: ${this.isNodelink}`
-      )
-    } catch (error) {
-      if (this.websocket === socket) {
-        this.connected = false
-        this.reconnectRetries = 0
-      }
-      this.aqua.logger.error(
-        `there was an error during info fetching (node connect): ${error}`
-      )
-    }
-  }
-
-  /**
-   * Marks disconnected, logs the close and schedules backoff.
-   * Keeps sessionId for the next connection's Session-Id header.
-   * @example Closing a socket triggers this automatically; users don't call it directly.
-   */
-  private handleWebsocketClose(close: CloseEvent, websocket: WebSocket) {
-    this.connected = false
-
-    // bigger than 0 means an reconnection is happening
-    if (this.reconnectRetries > 0) {
-      this.aqua.logger.info('Reconnection in progress')
-    }
-
-    if (close.code === 1006 && this.reconnectRetries === 0) {
-      this.aqua.logger.info(
-        '1006 close clode, probaly the node got force-killed.'
-      )
-    }
-
-    this.manageBackoff(websocket)
-  }
-
-  /**
-   * Retries a closed socket when settings allow it. Starts at 5s, grows with
-   * the retry count and caps at 420s. Successful open/info handling resets the count.
-   * maxRetries=0 disables finite retries; infiniteReconnects ignores the limit.
-   * @example With maxRetries=3 and no successful reconnect, delays are 5s, 5s, 12.5s.
-   */
-  private manageBackoff(websocket: WebSocket) {
-    if (
-      websocket.readyState === WEBSOCKET_STATES.Established ||
-      this.connected
-    ) {
-      return this.aqua.logger.info(
-        'WEBSOCKET is already connected, why a backoff would happen?'
-      )
-    }
-
-    let time = BASE_BACKOFF
-
-    const backoff = () => {
-      if (this.reconnectRetries >= 2) {
-        time = Math.min(
-          BASE_BACKOFF * (this.reconnectRetries + 0.5),
-          MAX_BACKOFF
-        )
-      }
-      setTimeout(async () => {
-        this.reconnectRetries++
-
+      this.reconnectRetries++
+      this.aqua.emit('nodeReconnect', this, {
+        attempt: this.reconnectRetries,
+        delay
+      })
+      try {
         await this.connect()
-      }, time)
-    }
+      } catch (error) {
+        this.reportError(error)
+        this.manageBackoff({ readyState: 3 })
+      }
+    }, delay)
+    this.reconnectTimeoutId.unref?.()
+  }
 
-    if (this.maxRetries && !this.infiniteReconnects) {
-      if (this.reconnectRetries < this.maxRetries) {
-        backoff()
-      } else if (this.reconnectRetries >= this.maxRetries) {
-        this.aqua.logger.info(
-          'Max retries reached, in the future, the node will be deleted/destroyed when this happens.'
-        )
+  /** Log and emit nodeError on Aqua. Node's error event is emitted only when it has listeners. */
+  reportError(error: unknown) {
+    this.aqua.logger.error(
+      { err: error, node: this.name },
+      'Node operation failed.'
+    )
+    this.aqua.emit('nodeError', this, error)
+    if (this.listenerCount('error')) {
+      this.emit('error', error)
+    }
+  }
+
+  /** Close the socket, cancel retries/requests and remove this node from Aqua.
+   * clean=true also starts player cleanup with skipRemote; this method doesn't await it.
+   * Use aqua.destroy() when you need to await cleanup for the whole client.
+   * @example node.destroy()
+   */
+  destroy(clean = true) {
+    if (this.isDestroyed) {
+      return
+    }
+    this.isDestroyed = true
+    this.connected = false
+    this.nodeState = 'DESTROYED'
+    if (this.reconnectTimeoutId !== null) {
+      clearTimeout(this.reconnectTimeoutId)
+    }
+    this.reconnectTimeoutId = null
+    const socket = this.websocket
+    this.websocket = null
+    socket?.close()
+    if (clean) {
+      for (const player of this.players) {
+        player
+          .destroy({ skipRemote: true })
+          .catch((error) => this.reportError(error))
       }
     }
-
-    if (this.infiniteReconnects) {
-      backoff()
+    this.players.clear()
+    this.rest.destroy()
+    this.sessionId = null
+    if (this.aqua.nodesMap.get(this.name) === this) {
+      this.aqua.nodesMap.delete(this.name)
     }
+    this.aqua.emit('nodeDestroy', this)
+    this.removeAllListeners()
   }
 }

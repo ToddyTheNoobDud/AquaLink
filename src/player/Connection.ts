@@ -1,104 +1,73 @@
-import type AquaManager from '../aqua/Aqua.ts'
-import type { ConnectionOptions } from '../aqua/Aqua.ts'
-import type { VoiceServerUpdate, VoiceStateUpdate } from '../types/shared.ts'
+import type Aqua from '../aqua/Aqua.ts'
+import type {
+  ConnectionOptions,
+  VoiceServerUpdate,
+  VoiceStateUpdate
+} from '../types/shared.ts'
 import type Player from './Player.ts'
 
-/**
- * Joins voice and collects both Discord packets. Once complete, sends the voice
- * data through REST and resolves the join after the node accepts it.
- *
- * @example
- * ```ts
- * const player = await aqua.createConnection(connectionOptions)
- * console.log(player.connection.connected)
- * ```
+/** Collects Discord voice credentials and sends them to the player's node.
+ * The bot forwards packets through Aqua.updateVoiceState; either packet order works.
+ * Recovery can be requested explicitly through attemptResume.
  */
 export default class Connection {
-  /** The manager with your Discord send adapter. */
-  public aqua: AquaManager
-  /** Player supplying the voice channel and node. */
+  public aqua: Aqua
   public player: Player
-  /** Discord voice server hostname, or null while unavailable. */
   public endpoint: string | null = null
-  /** Discord guild ID used in the player REST route. */
-  public guildId: string | undefined
-  /** Discord voice token. Don't log it. */
   public token: string | undefined
-  /** Discord voice session; different from player.node.sessionId. */
   public sessionId: string | undefined
-  /** The node accepted our voice PATCH. Doesn't track live voice health. */
+  public guildId: string | undefined
   public connected = false
+  private pendingJoin: ReturnType<typeof Promise.withResolvers<void>> | null =
+    null
+  private voiceRevision = 0
+  private connectionGeneration = 0
+  private voiceUpdatePromise: Promise<void> | null = null
 
-  private pending: ReturnType<typeof Promise.withResolvers<void>> | null = null
-  private updating = false
-
-  /**
-   * Player creates this with its manager. Joining happens later.
-   *
-   * @param aqua - Owning manager.
-   * @param player - Player supplying node/channel IDs.
-   * @example
-   * ```ts
-   * const connection = player.connection // usually use the one Player already created
-   * console.log(connection.connected)
-   * ```
-   */
-  constructor(aqua: AquaManager, player: Player) {
-    this.aqua = aqua
-    this.player = player
+  constructor(aqua: Aqua, player: Player)
+  constructor(player: Player)
+  constructor(aquaOrPlayer: Aqua | Player, player?: Player) {
+    this.player = player ?? (aquaOrPlayer as Player)
+    this.aqua = player ? (aquaOrPlayer as Aqua) : this.player.aqua
+    this.guildId = this.player.guildId
   }
 
-  /**
-   * Gets a new snapshot of the collected voice fields. Fields can still be
-   * null/undefined while packets are missing, so check before using it as VoiceInfo.
-   *
-   * @returns Endpoint, guild ID, token, voice session ID and channel ID.
-   * @example
-   * ```ts
-   * const voice = player.connection.getVoiceInfo()
-   * console.log(voice.channelId) // avoid logging the token
-   * ```
-   */
-  public getVoiceInfo() {
+  get voiceChannel() {
+    return this.player.voiceChannel
+  }
+
+  /** Current credentials; some fields are empty before joining. Don't log this object. */
+  getVoiceInfo() {
     return {
       endpoint: this.endpoint,
-      guildId: this.guildId,
       token: this.token,
       sessionId: this.sessionId,
+      guildId: this.guildId,
       channelId: this.player.voiceChannel
     }
   }
 
-  /**
-   * Sends the join payload and waits for voice data plus its REST PATCH.
-   * Forward both packet types to aqua.updateVoiceState; missing packets time out in 15s.
-   * Shares a pending join. Already connected instances return as-is, without moving channels.
-   *
-   * @param options - Guild/channel IDs. Deaf defaults to true, mute to false.
-   * @returns This Connection after the node accepts voice data.
-   * @throws On send/PATCH errors, timeout or the bot leaving during the join.
-   * @example
-   * ```ts
-   * await player.connection.joinVoice(connectionOptions)
-   * ```
+  /** A join only finishes after both packets and a successful voice PATCH.
+   * @example await player.connection.joinVoice({ guildId, voiceChannel })
    */
-  public async joinVoice(options: ConnectionOptions) {
-    if (this.connected) {
+  async joinVoice(options: ConnectionOptions) {
+    if (this.connected && this.player.voiceChannel === options.voiceChannel) {
       return this
     }
-    if (this.pending) {
-      await this.pending.promise
+    if (this.pendingJoin) {
+      await this.pendingJoin.promise
       return this
     }
+    this.reset()
     this.guildId = options.guildId
-    const pending = Promise.withResolvers<void>()
-    this.pending = pending
-    const timeout = setTimeout(() => {
-      pending.reject(
-        new Error('Discord voice connection timed out after 15 seconds.')
-      )
-    }, 15000)
-
+    this.player.voiceChannel = options.voiceChannel
+    const pendingJoin = Promise.withResolvers<void>()
+    this.pendingJoin = pendingJoin
+    const timeout = setTimeout(
+      () =>
+        pendingJoin.reject(new Error('Discord voice connection timed out.')),
+      this.aqua.options?.voiceTimeout ?? 15000
+    )
     try {
       await Promise.all([
         this.aqua.send({
@@ -110,100 +79,180 @@ export default class Connection {
             self_mute: options.mute ?? false
           }
         }),
-        pending.promise
+        pendingJoin.promise
       ])
       return this
+    } catch (error) {
+      this.connected = false
+      this.endpoint = null
+      this.token = undefined
+      this.sessionId = undefined
+      this.connectionGeneration++
+      throw error
     } finally {
       clearTimeout(timeout)
-      this.pending = null
+      if (this.pendingJoin === pendingJoin) {
+        this.pendingJoin = null
+      }
     }
   }
 
-  /**
-   * Stores VOICE_SERVER_UPDATE and tries to finish joining; a null endpoint keeps waiting.
-   * aqua.updateVoiceState routes this for you. setSeverUpdate keeps its old spelling
-   * for caller compatibility.
-   *
-   * @param data - This guild's server update.
-   * @example
-   * ```ts
-   * await aqua.updateVoiceState({
-   *   t: 'VOICE_SERVER_UPDATE',
-   *   d: { guild_id: '123', token: 'voice-token', endpoint: 'voice.example.invalid' }
-   * })
-   * ```
-   */
-  public async setSeverUpdate(data: VoiceServerUpdate) {
+  /** Accept VOICE_SERVER_UPDATE data. Identical credentials don't send another PATCH. */
+  async setServerUpdate(data: VoiceServerUpdate) {
+    if (
+      this.endpoint === data.endpoint &&
+      this.token === data.token &&
+      this.guildId === data.guild_id
+    ) {
+      return
+    }
     this.endpoint = data.endpoint
     this.token = data.token
     this.guildId = data.guild_id
+    this.connected = false
+    this.voiceRevision++
     await this.updateVoice()
   }
 
-  /**
-   * Stores the bot's voice session/channel and tries to finish joining.
-   * channel_id=null clears local voice/playback state and rejects a pending join;
-   * queued tracks and the remote player stay. Aqua filters guild/user before calling.
-   *
-   * @param data - The bot's VOICE_STATE_UPDATE for this guild.
-   * @example
-   * ```ts
-   * await aqua.updateVoiceState({
-   *   t: 'VOICE_STATE_UPDATE',
-   *   d: { guild_id: '123', user_id: client.id, session_id: 'voice-session', channel_id: '456' }
-   * })
-   * ```
-   */
-  public async setStateUpdate(data: VoiceStateUpdate) {
-    this.sessionId = data.session_id
+  /** Accept the bot's VOICE_STATE_UPDATE data. Moves update the channel; a kick destroys Player. */
+  async setStateUpdate(data: VoiceStateUpdate) {
     if (data.channel_id === null) {
-      this.connected = false
-      this.sessionId = undefined
-      this.player.voiceChannel = undefined
-      this.player.playing = false
-      this.player.current = null
-      this.pending?.reject(
+      // disconnect() clears our join before its gateway echo reaches this handler.
+      const wasInVoice =
+        this.sessionId !== undefined || this.pendingJoin !== null
+      this.reset(
         new Error('The bot left voice before the connection completed.')
       )
+      this.player.voiceChannel = undefined
+      this.player.current = null
+      this.player.playing = false
+      this.player.paused = false
+      if (wasInVoice) {
+        await this.player.destroy()
+      }
       return
     }
+    const oldChannel = this.player.voiceChannel
+    this.player.deaf = data.self_deaf ?? this.player.deaf
+    this.player.mute = data.self_mute ?? this.player.mute
+    if (this.sessionId === data.session_id && oldChannel === data.channel_id) {
+      return
+    }
+    this.sessionId = data.session_id
     this.player.voiceChannel = data.channel_id
+    this.voiceRevision++
+    if (oldChannel && oldChannel !== data.channel_id) {
+      this.player.emit('playerMove', oldChannel, data.channel_id)
+      this.aqua.emit('playerMove', oldChannel, data.channel_id)
+    }
     await this.updateVoice()
   }
 
-  /**
-   * PATCHes complete voice data for the pending join. Expired responses can't
-   * resolve a newer join's promise.
-   * @example The second voice packet completes the fields and triggers this internally.
-   */
-  private async updateVoice() {
-    const { endpoint, token, sessionId, guildId } = this
-    const channelId = this.player.voiceChannel
-    if (this.connected || this.updating || !this.pending) {
+  private async updateVoice(): Promise<void> {
+    if (this.voiceUpdatePromise) {
+      await this.voiceUpdatePromise
+      // A complete packet may arrive while an incomplete attempt is finishing.
+      if (!this.connected) {
+        await this.updateVoice()
+      }
       return
     }
-    if (!endpoint || !token || !sessionId || !guildId || !channelId) {
-      return
+    const applyVoiceUpdates = async () => {
+      let appliedRevision = -1
+      // Repeat if new credentials arrived while the node was receiving the previous ones.
+      while (appliedRevision !== this.voiceRevision) {
+        appliedRevision = this.voiceRevision
+        const connectionGeneration = this.connectionGeneration
+        const { endpoint, token, sessionId, guildId } = this
+        const channelId = this.player.voiceChannel
+        if (
+          !endpoint ||
+          !token ||
+          !sessionId ||
+          !guildId ||
+          !channelId ||
+          this.player.destroyed
+        ) {
+          return
+        }
+        await this.player.updatePlayer(
+          { voice: { endpoint, token, sessionId, channelId } },
+          true
+        )
+        if (connectionGeneration !== this.connectionGeneration) {
+          continue
+        }
+        if (appliedRevision !== this.voiceRevision) {
+          continue
+        }
+        this.connected = true
+        this.pendingJoin?.resolve()
+      }
     }
-    const pending = this.pending
-
-    this.updating = true
+    this.voiceUpdatePromise = applyVoiceUpdates()
     try {
-      const response = await this.player.node.rest.updatePlayers(guildId, {
-        voice: { endpoint, token, sessionId, channelId }
-      })
-      if (response === undefined) {
-        throw new Error('The node rejected the Discord voice update.')
-      }
-      if (this.pending !== pending) {
-        return
-      }
-      this.connected = true
-      pending.resolve()
+      await this.voiceUpdatePromise
     } catch (error) {
-      pending.reject(error)
+      this.connected = false
+      this.pendingJoin?.reject(error)
+      if (!this.pendingJoin) {
+        throw error
+      }
     } finally {
-      this.updating = false
+      this.voiceUpdatePromise = null
     }
+  }
+
+  /** Resend complete stored credentials. Returns false when they aren't available.
+   * This doesn't send a Discord join request and never runs on a timer.
+   * @example const connected = await player.connection.attemptResume()
+   */
+  async attemptResume() {
+    const voice = this.getVoiceInfo()
+    if (
+      !voice.endpoint ||
+      !voice.token ||
+      !voice.sessionId ||
+      !voice.channelId ||
+      !this.guildId
+    ) {
+      return false
+    }
+    this.connected = false
+    this.voiceRevision++
+    await this.updateVoice()
+    return this.connected
+  }
+
+  /** Alias for attemptResume. The legacy force argument has no effect. */
+  async resendVoiceUpdate(_force = false) {
+    return this.attemptResume()
+  }
+
+  private reset(error?: Error) {
+    this.connectionGeneration++
+    this.voiceRevision++
+    this.connected = false
+    this.endpoint = null
+    this.token = undefined
+    this.sessionId = undefined
+    if (error) {
+      this.pendingJoin?.reject(error)
+    }
+  }
+
+  /** Clear credentials, cancel a pending join and wait for any voice PATCH to settle.
+   * Doesn't leave Discord by itself; Player owns that operation.
+   */
+  destroy() {
+    this.reset(new Error('Voice connection destroyed.'))
+    this.pendingJoin = null
+    // A voice PATCH already accepted by fetch must settle before remote deletion.
+    return (
+      this.voiceUpdatePromise?.then(
+        () => {},
+        () => {}
+      ) ?? Promise.resolve()
+    )
   }
 }

@@ -72,3 +72,4 @@ export interface NodelinkInfo extends Omit<LavalinkInfo, 'jvm' | 'lavaplayer'> {
   /** NodeLink marker. Narrow the info union before reading it. */
   isNodelink: boolean
 }
+export type NodeInfo = LavalinkInfo | NodelinkInfo

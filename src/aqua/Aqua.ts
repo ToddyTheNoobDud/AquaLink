@@ -1,380 +1,549 @@
+import { randomUUID } from 'node:crypto'
 import { EventEmitter } from 'node:events'
-import pino, { type Logger } from 'pino'
+import { readFile, rename, unlink, writeFile } from 'node:fs/promises'
+import pino from 'pino'
 import Node from '../nodes/Node.ts'
 import Player from '../player/Player.ts'
+import type { AquaEventMap } from '../shared/Events.ts'
 import Track from '../shared/Track.ts'
 import type {
   AquaOptions,
   LoadResult,
   NodeOptions,
+  PlayerOptions,
+  ResolveOptions,
+  ResolveResponse,
+  SavedPlayerData,
+  TrackData,
   VoicePacket,
   VoiceUpdatePayload
 } from '../types/shared.ts'
 
-/**
- * Guild and channel IDs for joining voice. Keep Discord IDs as strings.
- * Connection sends deaf=true and mute=false unless you override them.
- *
- * @example
- * ```ts
- * const options: ConnectionOptions = {
- *   guildId: '123', voiceChannel: '456', textChannel: '789', deaf: true
- * }
- * const player = await aqua.createConnection(options)
- * ```
- */
-export type ConnectionOptions = {
-  /** The Discord server this player belongs to. */
-  guildId: string
-  /** The voice channel the bot should join. */
-  voiceChannel: string
-  /** Your bot's text channel; Aqua doesn't send messages here itself. */
-  textChannel: string
-  /** Self-deafen the bot when joining. Defaults to true. */
-  deaf?: boolean
-  /** Self-mute the bot when joining. Defaults to false. */
-  mute?: boolean
-}
+export type { ConnectionOptions } from '../types/shared.ts'
 
-/**
- * Manages nodes, players and your Discord adapter.
- * Call init with the bot's user ID to start connecting.
- *
- * @example
- * ```ts
- * const aqua = new AquaManager(client, [nodeOptions], aquaOptions)
- * await aqua.init(client.id)
- * ```
+/** Keeps the node and player registries. Supply options.send for Discord voice delivery.
+ * @example const aqua = new Aqua(client, nodes, { send: packet => sendToGuildShard(packet) })
+ * @example await aqua.init(botId)
  */
-export default class AquaManager extends EventEmitter {
-  /** the client instance from your discord lib */
-  public client: unknown
-  /** Array of the configured nodes. */
-  public nodes: NodeOptions[]
-  /** the nodes as a Map */
-  public nodesMap: Map<string, Node>
-  /** Logger/retry settings and your Discord voice adapter. */
-  public options?: AquaOptions
-  /** the clientId from init. */
+export default class AquaManager extends EventEmitter<AquaEventMap> {
+  /** Nodes by configured name. nodeMap is an alias for this same Map. */
+  public nodesMap = new Map<string, Node>()
+  /** Players by guild ID. A destroyed entry stays here until its cleanup settles. */
+  public players = new Map<string, Player>()
   public clientId: string | null = null
-  /** logging system, uses pino internally. */
-  public logger: Logger
-  /** init finished creating nodes. Check getNode() for a ready session. */
-  public initiated: boolean
-  /** current registered players in aqua */
-  public players: Map<string, Player>
+  public initiated = false
+  public version = '4.0.0'
+  public logger: NonNullable<AquaOptions['logger']>
+  private initializing: Promise<this> | null = null
+  private destruction: Promise<void> | null = null
+  private destroyed = false
 
-  /**
-   * Stores your client/config and creates the logger/maps. Sockets start in init.
-   *
-   * @param client - Your client, from any Discord library.
-   * @param nodes - Node configs; init supports one node per Aqua for now.
-   * @param options - Logger/retry settings and options.send for voice.
-   * @example
-   * ```ts
-   * const aqua = new AquaManager(client, [nodeOptions], aquaOptions)
-   * ```
-   */
-  constructor(client: unknown, nodes: NodeOptions[], options?: AquaOptions) {
+  constructor(
+    public client: unknown,
+    public nodes: NodeOptions[],
+    public options: AquaOptions = {}
+  ) {
     super()
-
     if (!client) {
       throw new Error('Aqua needs a client for the 1st arg.')
     }
     if (!Array.isArray(nodes) || !nodes.length) {
-      throw new Error('Aqua needs the nodes for the 2nd args.')
+      throw new Error('At least one node is required.')
     }
-
-    this.client = client
-    this.nodes = nodes
-
-    this.nodesMap = new Map()
-    this.players = new Map()
-
-    if (options) {
-      this.options = options
+    const names = nodes.map((node) => node.name ?? node.host)
+    if (new Set(names).size !== names.length) {
+      throw new Error('Node names must be unique.')
     }
-
-    this.clientId = null
-    this.initiated = false
-    this.logger = pino({
-      level: this.options?.logging.level,
-      transport: { target: 'pino-pretty' }
-    })
+    this.logger =
+      options.logger ?? pino({ level: options.logging?.level ?? 'info' })
   }
 
-  /**
-   * Looks up a guild's existing player.
-   *
-   * @param guildid - Discord guild ID.
-   * @returns The stored player, or null if none exists.
-   * @example
-   * ```ts
-   * const player = aqua.get('123')
-   * console.log(player?.queue.size)
-   * ```
-   */
-  public get(guildid: string) {
-    const player = this.players.get(guildid)
-    if (!player) {
-      return null
-    }
-    return player
+  get nodeMap() {
+    return this.nodesMap
   }
 
-  /**
-   * Gets the first connected node with a sessionId, in map insertion order.
-   * Doesn't balance load or change existing players' assigned nodes.
-   *
-   * @returns A ready node, or null.
-   * @example
-   * ```ts
-   * const node = aqua.getNode()
-   * if (node) console.log(node.name, node.sessionId)
-   * ```
-   */
-  public getNode(): Node | null {
-    for (const node of this.nodesMap.values()) {
-      if (node.connected && node.sessionId) {
-        return node
+  get defaultSearchPlatform() {
+    return this.options.defaultSearchPlatform ?? 'ytsearch'
+  }
+
+  get loadBalancer() {
+    return this.options.loadBalancer ?? 'leastLoad'
+  }
+
+  get persistTracks() {
+    return this.options.persistTracks ?? 'uri'
+  }
+
+  /** Snapshot of usable nodes, ordered by load or shuffled when loadBalancer is random. */
+  get leastUsedNodes() {
+    const nodes = Array.from(this.nodesMap.values()).filter(
+      (node) => node.isUsable
+    )
+    if (this.loadBalancer === 'random') {
+      for (let index = nodes.length - 1; index > 0; index--) {
+        const other = Math.floor(Math.random() * (index + 1))
+        const node = nodes[index] as Node
+        nodes[index] = nodes[other] as Node
+        nodes[other] = node
       }
+      return nodes
     }
-    return null
+    return nodes.sort(
+      (first, second) => this.nodeLoad(first) - this.nodeLoad(second)
+    )
   }
 
-  /**
-   * Sends through options.send. Your adapter must pick the guild's shard.
-   *
-   * @param data - Outgoing Discord opcode 4 payload.
-   * @throws If options.send is missing or fails.
-   * @example
-   * ```ts
-   * await aqua.send({
-   *   op: 4,
-   *   d: { guild_id: '123', channel_id: '456', self_deaf: true, self_mute: false }
-   * })
-   * ```
-   */
-  public async send(data: VoiceUpdatePayload) {
-    if (!this.options?.send) {
-      throw new Error(
-        'Configure options.send to connect a player to Discord voice.'
-      )
+  protected nodeLoad(node: Node) {
+    const cpu = node.stats.cpu
+    if (!cpu) {
+      return node.players.size
     }
-    await this.options.send(data)
+
+    if ('lavalinkLoad' in cpu) {
+      return cpu.lavalinkLoad
+    }
+
+    return cpu.processLoad ?? cpu.nodelinkLoad ?? 0
   }
 
-  /**
-   * Routes both Discord voice packet types to the guild's player, in either order.
-   * Ignores other users' voice states and packets without a guild/registered player.
-   *
-   * @param packet - VOICE_STATE_UPDATE or VOICE_SERVER_UPDATE gateway packet.
-   * @example
-   * ```ts
-   * await aqua.updateVoiceState({
-   *   t: 'VOICE_STATE_UPDATE',
-   *   d: { guild_id: '123', user_id: client.id, session_id: 'voice-session', channel_id: '456' }
-   * })
-   * ```
+  /** Find a usable node by name, or choose one using loadBalancer. Returns null if none are ready.
+   * @example const rest = aqua.getNode('main')?.rest
    */
-  public async updateVoiceState(packet: VoicePacket) {
+  getNode(name?: string) {
+    if (name) {
+      const node = this.nodesMap.get(name)
+      return node?.isUsable ? node : null
+    }
+    return this.leastUsedNodes[0] ?? null
+  }
+
+  /** Send through options.send. Rejects if your bot hasn't provided that adapter. */
+  async send(payload: VoiceUpdatePayload) {
+    if (!this.options.send) {
+      throw new Error('Provide options.send to forward Discord voice packets.')
+    }
+    await this.options.send(payload)
+  }
+
+  /** Forward original gateway voice packets here. Other users' voice states are ignored.
+   * A bot kick destroys its player; normal moves update the channel and voice credentials.
+   * @example await aqua.updateVoiceState({ t: 'VOICE_STATE_UPDATE', d: voiceState })
+   */
+  async updateVoiceState(packet: VoicePacket) {
     const guildId = packet.d.guild_id
     if (!guildId) {
       return
     }
     const player = this.players.get(guildId)
-    if (!player) {
+    if (!player || player.destroyed) {
       return
     }
-    switch (packet.t) {
-      case 'VOICE_STATE_UPDATE':
-        if (packet.d.user_id !== this.clientId) {
-          return
-        }
+    if (packet.t === 'VOICE_STATE_UPDATE') {
+      if (packet.d.user_id === this.clientId) {
         await player.connection.setStateUpdate(packet.d)
-        break
-      case 'VOICE_SERVER_UPDATE':
-        await player.connection.setSeverUpdate(packet.d)
-        break
+      }
+    } else if (packet.t === 'VOICE_SERVER_UPDATE') {
+      await player.connection.setServerUpdate(packet.d)
     }
   }
 
-  /**
-   * Returns the guild's player as-is, even while it's connecting. If none exists,
-   * calls createPlayer and waits for voice. New options don't move an existing player.
-   *
-   * @param options - Guild/channel IDs and optional deaf/mute flags.
-   * @returns The registered Player.
-   * @throws If creating/connecting a new player fails; see createPlayer.
-   * @example
-   * ```ts
-   * const player = await aqua.createConnection({
-   *   guildId: '123', voiceChannel: '456', textChannel: '789'
-   * })
-   * ```
+  /** Create and join a guild player. Resolves after the voice PATCH succeeds.
+   * Returns an existing active player unchanged; waits for a destroyed one's cleanup first.
+   * @example const player = await aqua.createConnection({ guildId, voiceChannel })
    */
-  public async createConnection(options: ConnectionOptions) {
-    const player = this.players.get(options.guildId)
-
-    if (player) {
-      return player
-    }
-
-    return await this.createPlayer(options)
-  }
-
-  /**
-   * Picks a ready node, registers the player so voice packets can find it, then joins.
-   * Failed joins remove the new player and rethrow. Existing players return as-is.
-   *
-   * @param options - Discord guild/channel IDs and deaf/mute flags.
-   * @returns Player; new players wait for the node to accept voice data.
-   * @throws If no node is ready, options.send is missing, or joining fails/times out.
-   * @example
-   * ```ts
-   * const player = await aqua.createPlayer({
-   *   guildId: '123', voiceChannel: '456', textChannel: '789', deaf: true
-   * })
-   * ```
-   */
-  public async createPlayer(options: ConnectionOptions) {
+  async createConnection(options: PlayerOptions): Promise<Player> {
     const existing = this.players.get(options.guildId)
     if (existing) {
+      if (existing.destroyed) {
+        await existing.destroy()
+        return this.createConnection(options)
+      }
       return existing
     }
-    const player = new Player(this, this.getNode())
-    // Register before joining: Discord may send voice packets immediately.
+    const node = this.getNode()
+    if (!node) {
+      throw new Error('No connected node with a ready session is available.')
+    }
+    const PlayerClass = this.options.structures?.Player ?? Player
+    const player = new PlayerClass(this, node, options)
     this.players.set(options.guildId, player)
+    node.players.add(player)
     try {
+      this.emit('playerCreate', player)
       await player.connect(options)
       return player
     } catch (error) {
-      this.players.delete(options.guildId)
+      await player.destroy({ skipRemote: true })
       throw error
     }
   }
 
-  /**
-   * Starts the configured node with the bot's user ID without waiting for WebSocket ready.
-   * Check getNode() for a usable session before creating players.
-   *
-   * @example
-   * ```ts
-   * await aqua.init(client.id) // call this once your Discord client is ready
-   * ```
-   *
-   * @param clientId - Bot's Discord user ID for the WebSocket User-Id header.
-   * @returns This Aqua instance.
-   * @throws If the ID is empty or multiple nodes are configured.
+  /** Start configured sockets once the bot ID is known. Repeated calls share initialization.
+   * Resolving this promise doesn't mean the nodes are ready; listen for nodeReady.
+   * @example await aqua.init(client.user.id)
    */
-  public async init(clientId: string) {
+  init(clientId: string): Promise<this> {
     if (!clientId) {
-      throw new Error(
-        'clientId is required to start aqualink, please pass one.'
+      return Promise.reject(
+        new Error('clientId is required to start aqualink.')
       )
     }
-
+    if (this.destroyed) {
+      return Promise.reject(new Error('Aqua is destroyed.'))
+    }
+    if (this.initiated) {
+      return Promise.resolve(this)
+    }
+    if (this.initializing) {
+      return this.initializing
+    }
     this.clientId = clientId
-
-    if (!this.nodes) {
-      throw new Error(`For now, aqualink can't start without a node(s).`)
-    }
-
-    // for now i'll be limiting for 1 node only, i'll add multiple nodes later;
-
-    if (this.nodes.length === 1) {
-      await this.createNode()
-    } else {
-      throw new Error('For now, aqualink is limited to 1 node per-instance.')
-    }
-
-    this.logger.info(
-      `Aqualink initiation was a sucess, in total, ${this.nodes.length} nodes were created.`
-    )
-
-    this.initiated = true
-    return this
-  }
-
-  /**
-   * Creates/registers this.nodes and starts their sockets. init calls this for you.
-   * Calling it again replaces map entries without cleaning up old instances.
-   *
-   * @returns This Aqua instance; doesn't wait for socket readiness.
-   * @example
-   * ```ts
-   * await aqua.init(client.id) // init calls createNode internally
-   * ```
-   */
-  public async createNode() {
-    // https://biomejs.dev/linter/rules/no-for-each/javascript/#description
-
-    for (const nodeOptions of this.nodes) {
-      const node = new Node(this, nodeOptions)
-      this.nodesMap.set(nodeOptions.name, node)
-      if (!node.connected) {
-        await node.connect()
-      }
-      this.logger.debug('CreateNode recived, now trying to connect.')
-    }
-
-    return this
-  }
-
-  /**
-   * Wraps search data as Track[] and a direct track as a one-item Track[].
-   * Playlist, empty and error results return undefined for now.
-   * @example A search response with two payloads becomes an array of two Tracks.
-   */
-  private handleTrackLoading(res: LoadResult) {
-    switch (res.loadType) {
-      case 'search': {
-        if (!Array.isArray(res.data)) {
-          return
+    this.initializing = (async () => {
+      try {
+        await this.createNode()
+        if (this.destroyed) {
+          throw new Error('Aqua was destroyed during initialization.')
         }
-
-        const tracks = res.data.map((trackData) => new Track(trackData))
-
-        return tracks
+        this.initiated = true
+        return this
+      } catch (error) {
+        for (const node of this.nodesMap.values()) {
+          node.destroy()
+        }
+        throw error
+      } finally {
+        this.initializing = null
       }
-      case 'track': {
-        return [new Track(res.data)]
-      }
-    }
+    })()
+    return this.initializing
   }
 
-  /**
-   * Loads from the first configured node. Search and direct URLs return Track arrays.
-   * Uses its own lookup; _node and getNode() don't affect selection yet.
-   *
-   * @param query - Search text or an HTTP(S) track URL.
-   * @param source - Prefix without :, for example ytsearch or scsearch.
-   * @param _node - Unused for now.
-   * @returns Track[]; an empty search stays []. Returns undefined if offline,
-   * loading fails or loadType isn't search/track. Playlist metadata isn't handled yet.
-   * @example
-   * ```ts
-   * const tracks = await aqua.resolve('slayr eyesight', 'ytsearch')
-   * const first = tracks?.[0]
-   * if (first) console.log(first.info.title)
-   * ```
+  /** With no argument, starts configured nodes. With config, adds one node at runtime.
+   * Skips names already in the registry. Wait for nodeReady before using the new session.
+   * @example await aqua.createNode({ name: 'extra', host: 'localhost', password: 'secret' })
    */
-  public async resolve(query: string, source: string, _node?: Node) {
-    // i will do auto node select soon.
-    const nodes = this.nodesMap.get(this.nodes[0]?.name as string)
+  async createNode(options?: NodeOptions) {
+    if (this.destroyed) {
+      throw new Error('Aqua is destroyed.')
+    }
+    const NodeClass = this.options.structures?.Node ?? Node
+    for (const config of options ? [options] : this.nodes) {
+      const name = config.name ?? config.host
+      if (this.nodesMap.has(name)) {
+        continue
+      }
+      const node = new NodeClass(this, config)
+      this.nodesMap.set(name, node)
+      try {
+        this.emit('nodeCreate', node)
+        await node.connect()
+      } catch (error) {
+        node.destroy()
+        throw error
+      }
+    }
+    return this
+  }
 
-    if (!nodes?.connected) {
-      return this.logger.error(
-        'You cannot resolve a song while the NODE is offline/not connected.'
+  protected wrapTrack(data: TrackData, requester?: unknown, node?: Node) {
+    const TrackClass = this.options.structures?.Track ?? Track
+    return new TrackClass(data, requester, node)
+  }
+
+  /** Load tracks from a query, URL or playlist. Object input returns a ResolveResponse.
+   * Object input rejects transport/selection failures; a server load error lives in exception.
+   * Positional input returns Track[], or undefined when selection/loading fails.
+   * @example const { tracks, exception } = await aqua.resolve({ query: 'artist song' })
+   * @example const tracks = await aqua.resolve('artist song', 'scsearch')
+   */
+  resolve(options: ResolveOptions): Promise<ResolveResponse>
+  resolve(
+    query: string,
+    source?: string,
+    node?: Node
+  ): Promise<Track[] | undefined>
+  async resolve(
+    queryOrOptions: string | ResolveOptions,
+    source?: string,
+    suppliedNode?: Node
+  ): Promise<ResolveResponse | Track[] | undefined> {
+    const usesOptionsObject = typeof queryOrOptions !== 'string'
+    const options = usesOptionsObject
+      ? queryOrOptions
+      : { query: queryOrOptions, source }
+    if (!options.query) {
+      throw new TypeError('A query is required.')
+    }
+    const requestedNode = options.nodes ?? suppliedNode
+    let node: Node | null | undefined
+
+    if (typeof requestedNode === 'string') {
+      node = this.nodesMap.get(requestedNode)
+    } else if (Array.isArray(requestedNode)) {
+      node = requestedNode.find((candidate) => candidate.connected)
+    } else {
+      node = requestedNode ?? this.getNode()
+    }
+
+    if (!node) {
+      if (usesOptionsObject) {
+        throw new Error('No connected node is available.')
+      }
+      return undefined
+    }
+    const result = await node.rest.loadTracks(
+      options.query,
+      options.source ?? this.defaultSearchPlatform
+    )
+    if (!result) {
+      if (usesOptionsObject) {
+        throw new Error('Track loading failed.')
+      }
+      return undefined
+    }
+    const response = this.constructResponse(result, options.requester, node)
+    return usesOptionsObject ? response : response.tracks
+  }
+
+  /** Wrap a server load result using structures.Track. Preserves playlist and plugin metadata. */
+  public constructResponse(
+    result: LoadResult,
+    requester?: unknown,
+    node?: Node
+  ): ResolveResponse {
+    const response: ResolveResponse = {
+      loadType: result.loadType,
+      exception: null,
+      playlistInfo: null,
+      pluginInfo: result.pluginInfo ?? {},
+      tracks: []
+    }
+    switch (result.loadType) {
+      case 'track':
+        response.pluginInfo = result.data.pluginInfo ?? response.pluginInfo
+        response.tracks = [this.wrapTrack(result.data, requester, node)]
+        break
+      case 'search':
+        response.tracks = result.data.map((data) =>
+          this.wrapTrack(data, requester, node)
+        )
+        break
+      case 'playlist':
+        response.playlistInfo = {
+          thumbnail:
+            (result.data.pluginInfo?.artworkUrl as string) ??
+            result.data.tracks[0]?.info.artworkUrl ??
+            null,
+          ...result.data.info
+        }
+        response.pluginInfo = result.data.pluginInfo ?? response.pluginInfo
+        response.tracks = result.data.tracks.map((data) =>
+          this.wrapTrack(data, requester, node)
+        )
+        for (const track of response.tracks) {
+          track.playlist = response.playlistInfo
+        }
+        break
+      case 'error':
+        response.exception = result.data
+        break
+    }
+    return response
+  }
+
+  /** Recreate remote playback from this player's state and complete voice credentials.
+   * autoResume calls this when an earlier server session wasn't resumed; bots can call it too.
+   * @example await aqua.restorePlayer(player)
+   */
+  async restorePlayer(player: Player) {
+    const voice = player.connection.getVoiceInfo()
+    if (
+      !voice.endpoint ||
+      !voice.sessionId ||
+      !voice.token ||
+      !voice.channelId
+    ) {
+      throw new Error(
+        'Complete Discord voice credentials are needed for restoration.'
       )
     }
+    await player.updatePlayer({
+      voice: {
+        endpoint: voice.endpoint,
+        token: voice.token,
+        sessionId: voice.sessionId,
+        channelId: voice.channelId
+      },
+      ...(player.current?.encoded
+        ? {
+            track: {
+              encoded: player.current.encoded,
+              userData: player.current.userData ?? undefined
+            },
+            position: player.position
+          }
+        : {}),
+      volume: player.volume,
+      paused: player.paused,
+      filters: player.filters.toJSON()
+    })
+    player.connected = true
+    this.emit('playerReconnected', player, { node: player.node })
+  }
 
-    const res = await nodes?.rest.loadTracks(query, source)
-
-    if (res) {
-      const tracks = this.handleTrackLoading(res as LoadResult)
-
-      return tracks
+  /** Write v3 JSONL records to disk. Default path: ./AquaPlayers.jsonl.
+   * Includes current and up to maxQueueSave waiting tracks. Save before destroying players.
+   * Aqua doesn't add voice credentials; bot-provided metadata must be safe to serialize.
+   * @example await aqua.savePlayer('./players.jsonl')
+   */
+  async savePlayer(filePath = './AquaPlayers.jsonl') {
+    const serialize = (track: Track) =>
+      this.persistTracks === 'full' ? track.toJSON() : track.uri
+    const nodeSessions = Object.fromEntries(
+      Array.from(this.nodesMap.values())
+        .filter((node) => node.sessionId)
+        .map((node) => [node.name, node.sessionId])
+    )
+    const lines = [
+      JSON.stringify({ type: 'node_sessions', data: nodeSessions })
+    ]
+    for (const player of this.players.values()) {
+      if (!player.guildId || !player.voiceChannel || player.destroyed) {
+        continue
+      }
+      const record: SavedPlayerData = {
+        g: player.guildId,
+        t: player.textChannel ?? '',
+        v: player.voiceChannel,
+        u: player.current ? serialize(player.current) : null,
+        ud: player.current?.userData ?? null,
+        p: player.position,
+        ts: Date.now(),
+        q: (player.hasQueue
+          ? player.queue.toArray().slice(0, this.options.maxQueueSave ?? 10)
+          : []
+        )
+          .map(serialize)
+          .filter((track): track is string | TrackData => track !== null),
+        r: player.current?.toJSON().requester ?? null,
+        vol: player.volume,
+        pa: player.paused,
+        pl: player.playing,
+        nw: null
+      }
+      lines.push(JSON.stringify(record))
     }
+    const temporary = `${filePath}.${randomUUID()}.tmp`
+    try {
+      await writeFile(temporary, `${lines.join('\n')}\n`, { flag: 'wx' })
+      await rename(temporary, filePath)
+    } catch (error) {
+      await unlink(temporary).catch(() => {})
+      throw error
+    }
+  }
+
+  /** Read saved JSONL, rejoin channels and restore playback. Existing guild players are skipped.
+   * Requires a ready node and working gateway forwarding. Saved session headers are ignored.
+   * @example await aqua.loadPlayers('./players.jsonl')
+   */
+  async loadPlayers(filePath = './AquaPlayers.jsonl') {
+    const content = await readFile(filePath, 'utf8')
+    const saved: unknown[] = content
+      .split(/\r?\n/)
+      .filter((line) => line.trim())
+      .map((line) => JSON.parse(line))
+    for (const record of saved as SavedPlayerData[]) {
+      if (record && 'type' in record && record.type === 'node_sessions') {
+        continue
+      }
+      if (
+        !record ||
+        typeof record.g !== 'string' ||
+        typeof record.v !== 'string' ||
+        !Array.isArray(record.q)
+      ) {
+        throw new TypeError('Invalid saved player.')
+      }
+      if (this.players.has(record.g)) {
+        continue
+      }
+      const player = await this.createConnection({
+        guildId: record.g,
+        voiceChannel: record.v,
+        textChannel: record.t,
+        defaultVolume: record.vol
+      })
+      const restore = async (value: string | TrackData) =>
+        typeof value === 'string'
+          ? (
+              await this.resolve({
+                query: value,
+                requester: record.r,
+                nodes: player.node
+              })
+            ).tracks[0]
+          : this.wrapTrack(value, record.r, player.node)
+      try {
+        const current = record.u ? await restore(record.u) : null
+        for (const entry of record.q.slice(
+          0,
+          this.options.maxTracksRestore ?? 20
+        )) {
+          const track = await restore(entry)
+          if (track) {
+            player.queue.add(track)
+          }
+        }
+        if (current) {
+          current.userData = record.ud
+          if (record.pl) {
+            await player.playNext(current, {
+              paused: record.pa,
+              startTime: record.p
+            })
+          } else {
+            player.current = current
+            player.position = record.p
+            player.paused = record.pa
+          }
+        }
+      } catch (error) {
+        await player.destroy()
+        throw error
+      }
+    }
+  }
+
+  /** Destroy players, close nodes and remove listeners. This Aqua instance cannot be restarted.
+   * Cleanup continues after individual failures, then rejects with their AggregateError.
+   * @example await aqua.destroy()
+   */
+  async destroy() {
+    if (this.destruction) {
+      return this.destruction
+    }
+    this.destroyed = true
+    this.destruction = (async () => {
+      await this.initializing?.catch(() => {})
+      const results = await Promise.allSettled(
+        Array.from(this.players.values(), (player) => player.destroy())
+      )
+      for (const node of this.nodesMap.values()) {
+        node.destroy()
+      }
+      this.initiated = false
+      this.removeAllListeners()
+      const errors = results.filter(
+        (result) => result.status === 'rejected'
+      ) as PromiseRejectedResult[]
+      if (errors.length) {
+        throw new AggregateError(
+          errors.map((result) => result.reason),
+          'Aqua cleanup failed.'
+        )
+      }
+    })()
+    return this.destruction
   }
 }
