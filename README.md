@@ -1,46 +1,74 @@
+<div align="center">
+
+<img src="https://capsule-render.vercel.app/api?type=wave&color=0099FF&height=220&section=header&text=AquaLink&fontSize=70&fontAlignY=35&fontColor=ffffff&desc=Lavalink%20v4%20%2B%20NodeLink%20Client&descSize=20&descAlignY=60" alt="AquaLink: Lavalink v4 and NodeLink client" />
+
+[![NPM Downloads](https://img.shields.io/npm/dw/aqualink.svg?style=for-the-badge&color=3498db)](https://www.npmjs.com/package/aqualink)
+[![NPM Version](https://img.shields.io/npm/v/aqualink?color=0061ff&label=AquaLink&style=for-the-badge&logo=npm)](https://www.npmjs.com/package/aqualink)
+[![GitHub Stars](https://img.shields.io/github/stars/ToddyTheNoobDud/AquaLink?color=00bfff&style=for-the-badge&logo=github)](https://github.com/ToddyTheNoobDud/AquaLink/stargazers)
+[![Discord](https://img.shields.io/discord/1346930640049803266?color=7289da&label=Discord&logo=discord&style=for-the-badge)](https://discord.gg/K4CVv84VBC)
+
+[Examples](https://github.com/ToddyTheNoobDud/AquaLink/tree/v4-ts-rewrite/examples) · [Support](https://discord.gg/K4CVv84VBC)
+
+</div>
+
 # AquaLink v4
 
-TypeScript client for Lavalink v4 and NodeLink. It comes with a player, a waiting
-queue and filter helpers. You can replace those classes or change their handlers
-from your bot code.
+A Lavalink v4 and NodeLink client for Discord bots, written in TypeScript.
+Players, queues and filters work out of the box. When you need different
+behavior, replace the parts you want from your bot code. No fork needed.
 
-This branch is a source preview of the rewrite. npm packaging is still being
-prepared. Some v3 APIs remain, but there are changes to migrate before using v4
-in an existing bot.
+## Features
 
-## Try the sources
+- Track loading, searches and playlists, with typed Lavalink and NodeLink payloads.
+- Playback controls, queue progression, looping and shuffle.
+- Optional lazy queues, replaceable queue storage and playback without a queue.
+- Equalizer, bassboost, nightcore, vaporwave, karaoke, 8D and other filter helpers.
+- Multiple nodes, load balancing and node reconnection with configurable retries.
+- Typed events, raw server events and custom ops for your own handlers.
+- Optional session resuming, player persistence and a bot-supplied autoplay policy.
+- ESM and CommonJS exports, TypeScript declarations and a replaceable stdout logger.
 
-Use Bun 1.4.4 or newer for this checkout:
+REST uses native `fetch`; WebSocket connections use `ws` on both Node.js and Bun.
+Your bot owns Discord messages, commands and any extra recovery or recommendation
+logic you want to add.
 
-```sh
-git clone --branch v4-ts-rewrite https://github.com/ToddyTheNoobDud/AquaLink.git
-cd AquaLink
-bun install
-bun run typecheck
+## Installation
+
+Use Node.js **22.19+** or Bun **1.4.4+**, a Lavalink v4 or NodeLink server, and
+your preferred Discord library. Your bot needs the Guilds and GuildVoiceStates intents.
+
+| Package manager | Install v4 |
+| --- | --- |
+| npm | `npm install aqualink@4` |
+| Bun | `bun add aqualink@4` |
+| pnpm | `pnpm add aqualink@4` |
+| Yarn | `yarn add aqualink@4` |
+
+```ts
+import { Aqua } from 'aqualink'
 ```
 
-Import `src/index.ts` from your bot while testing this branch. Build tooling and
-compiled packages aren't included in this source preview. The package metadata
-targets Node.js 22.19+ as well, but Node execution hasn't been validated yet.
+CommonJS works too: `const { Aqua } = require('aqualink')`.
 
 ## Connect your bot
 
-With an existing Seyfert client, create Aqua once:
+This example uses your existing Seyfert client. Create Aqua once in your bot's
+setup file, here called `aqua.ts`:
 
 ```ts
-import { Aqua } from './AquaLink/src/index.ts'
-import type { GatewayVoiceStateUpdate } from 'seyfert'
+import { Aqua } from 'aqualink'
 
-const aqua = new Aqua(client, [
+export const aqua = new Aqua(client, [
   {
     name: 'main',
     host: '127.0.0.1',
     port: 2333,
-    password: process.env.NODE_PASSWORD!
+    password: process.env.NODE_PASSWORD!,
+    ssl: false
   }
 ], {
   lazyloadPlayer: true,
-  send: async (packet: GatewayVoiceStateUpdate) => {
+  send: async (packet) => {
     const shardId = client.gateway.calculateShardId(packet.d.guild_id)
     await client.gateway.send(shardId, packet)
   }
@@ -50,33 +78,61 @@ aqua.on('nodeReady', (node) => {
   console.log(`${node.name} is ready`)
 })
 
-// Call this when Discord has given you the bot's user ID.
-await aqua.init(botId)
+aqua.on('nodeError', (node, error) => {
+  console.error(node.name, error)
+})
 ```
 
-`send` forwards outgoing Discord voice packets. You also need to forward the two
-incoming voice events from your gateway handler:
+Forward voice packets in `src/events/raw.ts`:
 
 ```ts
-import type { VoicePacket } from './AquaLink/src/index.ts'
+import { createEvent } from 'seyfert'
+import { aqua } from '../../aqua.ts'
 
-async function handleVoicePacket(packet: VoicePacket) {
-  await aqua.updateVoiceState(packet)
-}
+export default createEvent({
+  data: { name: 'raw' },
+  async run(packet) {
+    if (packet.t === 'VOICE_STATE_UPDATE' || packet.t === 'VOICE_SERVER_UPDATE') {
+      await aqua.updateVoiceState(packet)
+    }
+  }
+})
 ```
 
-Call that handler for `VOICE_STATE_UPDATE` and `VOICE_SERVER_UPDATE`, passing the
-original `{ t, d }` packet. Aqua filters voice states by the bot's user ID.
-The Discord client needs the Guilds and GuildVoiceStates intents.
+Initialize it in `src/events/botReady.ts`, after Discord supplies the bot ID:
 
-`init()` starts the sockets. Wait for `nodeReady` before creating players; that
-event confirms that the server sent a session ID. The node's session ID and
-Discord's voice session ID are separate values.
+```ts
+import { createEvent } from 'seyfert'
+import { aqua } from '../../aqua.ts'
+
+export default createEvent({
+  data: { name: 'botReady', once: true },
+  async run(user) {
+    await aqua.init(user.id)
+  }
+})
+```
+
+Use your bot's configured events directory and adjust the `aqua.ts` import to its
+location. If you already have these handlers, merge the calls into them.
+
+For another Discord library, provide its gateway sender through `send` and forward
+the same two incoming voice packets to `aqua.updateVoiceState()`. Keep the original
+`{ t, d }` payload; AquaLink filters voice states by the bot's user ID.
+
+`init(botId)` opens the node connections. Wait for `nodeReady` before creating
+players. Node hosts have no URL scheme; set `ssl: true` for HTTPS/WSS.
 
 ## Search and play
 
+Inside your command, use the guild ID and the user's voice channel ID:
+
 ```ts
-const result = await aqua.resolve({ query: 'artist song', source: 'ytsearch' })
+const result = await aqua.resolve({
+  query: 'artist song',
+  source: 'ytsearch',
+  requester: { id: userId }
+})
 
 if (result.exception) {
   throw new Error(result.exception.message ?? 'Track loading failed')
@@ -84,21 +140,24 @@ if (result.exception) {
 
 const track = result.tracks[0]
 if (track) {
-  const player = await aqua.createConnection({ guildId, voiceChannel })
+  const player = await aqua.createConnection({
+    guildId,
+    voiceChannel,
+    textChannel
+  })
   await player.play(track)
 }
 ```
 
-URLs and playlists use the same `resolve` method. Search prefixes depend on the
-sources enabled on your node. The object form returns `tracks`, `loadType`,
-`exception`, `playlistInfo` and `pluginInfo`; `resolve(query, source?)` returns
-an array of tracks, or `undefined` when loading fails.
+URLs use the same method. Search sources depend on what's enabled on your node.
+For playlists, add `result.tracks` to `player.queue` and call `await player.play()`
+when idle. `result.playlistInfo` contains the playlist metadata.
 
-`play(track)` starts a track when idle and queues it behind active playback.
-`play()` starts the first waiting track. To replace the current track while
-keeping the waiting queue, use `play(track, { noReplace: false })`.
+`play(track)` starts immediately when idle, or adds the track behind current
+playback. `play()` starts the first waiting track. To replace current while
+keeping the queue, use `play(track, { noReplace: false })`.
 
-## Player and queue
+### Controls and filters
 
 ```ts
 await player.pause(true)
@@ -115,27 +174,25 @@ await player.stop()
 await player.destroy()
 ```
 
-Await player controls and filter updates. Each call sends its own request.
-`setLoop` and `shuffle` only change local state.
+Await playback controls, filter updates and destruction. Looping and shuffle
+only change local state.
 
-- `stop()` stops the current track and keeps the waiting tracks.
-- `skip()` starts the next waiting track. With none waiting, it leaves current alone.
-- The default event handler advances after `finished` or `loadFailed`.
-- A manual voice kick destroys the player and clears its queue. A later
-  `createConnection()` waits for cleanup before creating a replacement.
+| Operation | Behavior |
+| --- | --- |
+| `stop()` | Stops current and keeps the waiting tracks |
+| `skip()` | Starts the next waiting track; does nothing when none are waiting |
+| `destroy()` | Leaves voice, clears the queue and removes the player |
+| Track finishes or fails to load | The default handler starts the next waiting track |
+| Bot is kicked from voice | Destroys the player and queue; the next explicit connection creates a new player |
 
-`current` belongs to the player. Its queue only contains waiting tracks.
-With `lazyloadPlayer: true`, the queue is created when a track needs to wait or
-your code reads `player.queue`. Check `player.hasQueue` to inspect allocation
-without creating it. The default is eager allocation.
-
-Set `queue: false` in Aqua options or player creation options to disable waiting
-tracks. Reading `player.queue` then throws; explicit `play(track)` calls replace
-current unless `noReplace: true` is passed.
+`player.current` holds the current track; `player.queue` holds waiting tracks.
+With `lazyloadPlayer: true`, waiting storage is created only when needed or when
+you read `player.queue`. Reading `player.hasQueue` doesn't allocate anything.
+Set `queue: false` to play without waiting storage; see the queue examples below.
 
 ## Events
 
-Track listeners on Aqua receive the player first. Player listeners don't:
+Listen on Aqua for all players, or on a Player for one guild:
 
 ```ts
 aqua.on('trackStart', (player, track) => {
@@ -146,8 +203,8 @@ player.on('trackEnd', (track, reason) => {
   console.log(track?.title, reason)
 })
 
-player.on('TrackEndEvent', (payload) => {
-  console.log(payload)
+player.on('event', (payload) => {
+  console.log(payload.type)
 })
 
 aqua.on('nodeCustomOp', (node, op, payload) => {
@@ -155,126 +212,98 @@ aqua.on('nodeCustomOp', (node, op, payload) => {
 })
 ```
 
-`trackEnd` runs before the default handler clears state and advances the queue.
-Raw protocol events, such as `TrackEndEvent`, run after the handler. The player
-also emits every raw player event as `event`. Node events are available through
-`nodeEvent`, including events with no matching local player.
+Aqua's track events receive the player first. Raw player events are available
+through `event` or their protocol name, such as `player.on('TrackEndEvent', ...)`.
+`trackEnd` runs before queue progression; raw events run after the handler.
+`nodeEvent` receives server events even without a matching local player.
 
-See [the event types](src/shared/Events.ts) for listener arguments. Unknown fields
-remain available in payloads; narrow them before using them.
+See [event types](https://github.com/ToddyTheNoobDud/AquaLink/blob/v4-ts-rewrite/src/shared/Events.ts)
+for listener arguments and the [custom event example](https://github.com/ToddyTheNoobDud/AquaLink/blob/v4-ts-rewrite/examples/events.ts)
+for adding your own behavior.
 
-## Customize from your bot
+## Make it yours
 
-The [examples folder](examples/README.md) has small overrides for every structure,
-an independent queue implementation and a bot-owned autoplay callback.
+The [examples/ guide](https://github.com/ToddyTheNoobDud/AquaLink/blob/v4-ts-rewrite/examples/README.md)
+shows how to replace each part from your bot. Start with
+[setup.ts](https://github.com/ToddyTheNoobDud/AquaLink/blob/v4-ts-rewrite/examples/setup.ts)
+to see the overrides registered together, then copy only the ones you need.
 
-Pass subclasses through `structures` before creating nodes or players:
+| Example | What you can change |
+| --- | --- |
+| [Player](https://github.com/ToddyTheNoobDud/AquaLink/blob/v4-ts-rewrite/examples/player.ts) | Add controls, settings or your own playback methods |
+| [PlayerEvents](https://github.com/ToddyTheNoobDud/AquaLink/blob/v4-ts-rewrite/examples/events.ts) | Extend built-in handling and add typed custom events |
+| [Queue](https://github.com/ToddyTheNoobDud/AquaLink/blob/v4-ts-rewrite/examples/queue.ts) / [QueueLike](https://github.com/ToddyTheNoobDud/AquaLink/blob/v4-ts-rewrite/examples/queue-storage.ts) | Change ordering or supply your own storage |
+| [Rest](https://github.com/ToddyTheNoobDud/AquaLink/blob/v4-ts-rewrite/examples/rest.ts) | Add routes for server plugins |
+| [Filters](https://github.com/ToddyTheNoobDud/AquaLink/blob/v4-ts-rewrite/examples/filters.ts) | Add presets |
+| [Track](https://github.com/ToddyTheNoobDud/AquaLink/blob/v4-ts-rewrite/examples/track.ts) | Add properties and getters |
+| [Connection](https://github.com/ToddyTheNoobDud/AquaLink/blob/v4-ts-rewrite/examples/connection.ts) / [Node](https://github.com/ToddyTheNoobDud/AquaLink/blob/v4-ts-rewrite/examples/node.ts) | Extend connection behavior or node reporting |
+| [Autoplay](https://github.com/ToddyTheNoobDud/AquaLink/blob/v4-ts-rewrite/examples/autoplay.ts) | Supply your own recommendation policy |
+| [Logger](https://github.com/ToddyTheNoobDud/AquaLink/blob/v4-ts-rewrite/examples/logger.ts) | Route logs through Seyfert or your own logger |
 
-```ts
-import { PlayerEvents, type PlayerEventPayload } from './AquaLink/src/index.ts'
+Register subclasses through `options.structures` before creating their instances.
+Call `super` where you want to keep the default behavior. For independent queue
+storage, supply a `QueueLike` factory through `options.queue`.
 
-class BotEvents extends PlayerEvents {
-  override async trackStart(payload: PlayerEventPayload) {
-    await super.trackStart(payload)
-    this.aqua.logger.info(`Playing in ${this.player.guildId}`)
-  }
+## Configuration
 
-  override async handleCustomEvent(payload: PlayerEventPayload) {
-    this.aqua.logger.debug({ type: payload.type }, 'Received a custom event')
-  }
-}
+| Option | Default | Purpose |
+| --- | --- | --- |
+| `defaultSearchPlatform` | `'ytsearch'` | Search prefix for plain queries |
+| `lazyloadPlayer` | `false` | Create waiting storage on demand |
+| `loadBalancer` | `'leastLoad'` | Choose a node by load, or use `'random'` |
+| `nodeConfigs.maxRetries` | `10` | Maximum node reconnect attempts |
+| `nodeConfigs.infiniteReconnects` | `false` | Keep reconnecting past that limit |
+| `autoResume` | `false` | Request session resuming and restore players when the session expires |
+| `leaveOnEnd` | `false` | Destroy the player when playback and its waiting queue end |
+| `logging.level` | `'info'` | Built-in log threshold; `'silent'` disables it |
 
-aqua.options.structures = { PlayerEvents: BotEvents }
-```
+Pass `logger` to replace the native stdout logger. Your logger controls its own
+levels and output. The funny messages stay either way.
 
-Calling `super` keeps the built-in behavior. Replacing a handler entirely gives
-your bot responsibility for that handler's state changes and queue progression.
-Raw events are still emitted when a custom handler throws.
+Autoplay uses `options.autoplay(player)` to choose the next Track or return `null`.
+Enable it per player with `player.setAutoplay(true)`. Persistence is explicit:
+call `savePlayer(path?)` and `loadPlayers(path?)` when your bot needs them.
+Session resuming doesn't automatically rejoin Discord after a manual kick.
 
-`Node`, `Rest`, `Player`, `Connection`, `Queue`, `Filters` and `Track` are also
-replaceable. For a queue with a different implementation, use a per-player factory:
+All options and defaults are documented in the
+[TypeScript types](https://github.com/ToddyTheNoobDud/AquaLink/blob/v4-ts-rewrite/src/types/shared.ts).
 
-```ts
-import { Queue } from './AquaLink/src/index.ts'
+## REST and server APIs
 
-aqua.options.queue = () => new Queue()
-```
-
-A custom queue implements `QueueLike`. Its operations are synchronous; remote
-storage needs a local adapter. Use a factory to keep each guild's queue separate.
-
-## REST and server extensions
-
-Use `player.node.rest` or `aqua.getNode(name)?.rest` for server requests:
-
-```ts
-const rest = player.node.rest
-const info = await rest.getInfo()
-const response = await rest.request('/v4/info')
-console.log(info, response.status)
-```
+Use `player.node.rest` or `aqua.getNode(name)?.rest` for direct requests.
+Helpers cover player/session updates, track loading and decoding, routeplanner,
+lyrics, mixers and other NodeLink endpoints. Availability depends on your server
+and its plugins.
 
 `makeRequest<T>(path, method?, body?)` reads JSON or text, returns `null` for 204,
-and logs failures before returning `undefined`. `request()` returns a `Response`
-and rejects on failure. Consume or cancel its body when using streams.
-Type parameters describe the response; they don't validate incoming JSON.
-Route helpers can still throw for missing arguments or an unavailable session.
+and logs request failures before returning `undefined`. `request()` returns an
+unread `Response` and rejects on failure. Consume or cancel streaming bodies.
 
-The REST class includes player/session routes, track loading and decoding,
-routeplanner helpers, and NodeLink extensions such as lyrics and mixers.
-Endpoint availability depends on your server and installed plugins. Extra player
-and filter fields can be sent through `player.updatePlayer()`.
-
-Server API references: [Lavalink REST](https://lavalink.dev/api/rest),
+Protocol references: [Lavalink REST](https://lavalink.dev/api/rest),
 [Lavalink WebSocket](https://lavalink.dev/api/websocket) and
 [NodeLink REST](https://nodelink.js.org/docs/api/rest).
 
-## Logging
-
-The default logger writes readable text to `process.stdout`, with a timestamp,
-level and any fields you pass. Error stacks are kept. The funny logs stay too.
-
-Set `logging: { level: 'debug' }` for event details, or use `'silent'` to turn
-logging off. The default is `'info'`; disabled levels skip formatting and writes.
-Pass your own `logger` with `info`, `debug` and `error` methods to replace it.
-Each method accepts a string or `(fields, message)`.
-For Seyfert, see the [logger adapter example](examples/README.md#use-your-bots-logger).
-
-Stdout handles buffering. There are no workers or extra log queues, and logs
-aren't deliberately dropped. A slow output destination can still block or buffer
-writes, so keep debug logging off when you don't need it.
-
-## Optional behavior
-
-`autoResume` defaults to false. Enabling it configures server session resuming
-and attempts to restore local players when a previous server session expires.
-It doesn't rejoin a Discord channel after a kick or move players to another node.
-
-Autoplay requires your `options.autoplay(player)` callback, which returns a Track
-or `null`. Enable it per player with `setAutoplay(true)`.
-`leaveOnEnd` also defaults to false.
-
-Persistence runs only when you call `savePlayer(path?)` or `loadPlayers(path?)`.
-It uses the v3 JSONL format. Save before destroying players. Your bot owns message
-creation/deletion and any recovery policy beyond these hooks.
-
 ## Moving from v3
 
-Await `createConnection`, playback, controls, filters and destruction. Use
-`aqua.players.get(guildId)` for player lookup and `player.destroy()` for removal.
-The generic REST signature is path first, with `null` for 204 and `undefined` on
-failure; use `request()` when you need the error details.
+Many familiar names remain: `Aqua`, `createConnection`, `resolve`, players,
+queues and filter helpers. Update these parts when moving an existing bot:
 
-The rewrite removes HTTP/2 configuration, trace history, automatic Discord message
-deletion, control batching and automatic failover. The old Plugin registry is
-replaced by structure overrides. `stop()` and `skip()` have separate behavior,
-and autoplay needs your bot's recommendation callback.
+- Supply `options.send` for your Discord library and forward both voice events.
+- Await player creation, playback, controls, filter updates and destruction.
+- Look up players with `aqua.players.get(guildId)` and keep current on `player.current`.
+- Use `skip()` to advance. `stop()` keeps the waiting queue without advancing it.
+- Replace the old Plugin registry with structure overrides from your bot.
+- Supply your own autoplay policy and handle Discord messages in your bot.
 
-The rewrite has local protocol and lifecycle tests, including package consumers.
-Real Discord audio and Node.js runtime checks are still needed before calling
-this release ready for production. Performance results from older snapshots
-aren't guarantees for this version.
+HTTP/2 settings, debug trace storage and automatic node failover are no longer
+part of the client. The [examples](https://github.com/ToddyTheNoobDud/AquaLink/tree/v4-ts-rewrite/examples)
+show the v4 extension points.
+
+## Support
+
+Need help or found a bug? Join the [Discord server](https://discord.gg/K4CVv84VBC)
+or [open an issue](https://github.com/ToddyTheNoobDud/AquaLink/issues).
 
 ## License
 
-[WTFPL](LICENSE.md).
+[WTFPL](https://github.com/ToddyTheNoobDud/AquaLink/blob/v4-ts-rewrite/LICENSE.md).

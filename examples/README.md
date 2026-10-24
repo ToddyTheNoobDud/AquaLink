@@ -4,9 +4,15 @@ Start with [setup.ts](setup.ts). It registers all eight structure overrides in
 one Aqua instance. Keep the overrides you need; the rest can use their defaults.
 Importing these files doesn't open sockets or start a bot.
 
-The imports point to this source checkout. Adjust the relative paths if you copy
-an example into your bot. Gateway setup and voice forwarding are covered in the
-[main README](../README.md#connect-your-bot).
+The files use `../src/index.ts` so they can run inside this checkout. When copying
+them into a bot installed from npm, replace that import with `'aqualink'` and keep
+imports between copied example files relative. In `events.ts`, also change
+`declare module '../src/shared/Events.ts'` to `declare module 'aqualink'`.
+You don't need to clone or edit the library to use these overrides.
+
+Gateway setup and voice forwarding are covered in the
+[main README](../README.md#connect-your-bot). Your bot supplies its Discord client,
+node list and gateway sender; the examples don't start those for you.
 
 ## Pick a starting point
 
@@ -176,14 +182,19 @@ It doesn't keep a listening history or promise a different track on every call.
 `[AquaLink]` prefix and puts the message before its fields:
 
 ```ts
-import { Aqua } from '../src/index.ts'
 import { createSeyfertLogger } from './logger.ts'
+import { createExampleAqua } from './setup.ts'
 
-const aqua = new Aqua(client, nodes, {
-  send: sendVoicePacket,
-  logger: createSeyfertLogger(client.logger)
-})
+const aqua = createExampleAqua(
+  client,
+  nodes,
+  sendVoicePacket,
+  createSeyfertLogger(client.logger)
+)
 ```
+
+The fourth setup argument is optional. Leave it out to keep the native logger.
+For your own Aqua instance, pass the adapter as `options.logger` instead.
 
 Both `logger.info('message')` and `logger.error({ err, node }, 'message')` work.
 Fields stay as objects, including Error instances. The adapter calls methods on
