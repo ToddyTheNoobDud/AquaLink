@@ -238,6 +238,7 @@ Set `logging: { level: 'debug' }` for event details, or use `'silent'` to turn
 logging off. The default is `'info'`; disabled levels skip formatting and writes.
 Pass your own `logger` with `info`, `debug` and `error` methods to replace it.
 Each method accepts a string or `(fields, message)`.
+For Seyfert, see the [logger adapter example](examples/README.md#use-your-bots-logger).
 
 Stdout handles buffering. There are no workers or extra log queues, and logs
 aren't deliberately dropped. A slow output destination can still block or buffer

@@ -22,6 +22,7 @@ an example into your bot. Gateway setup and voice forwarding are covered in the
 | [connection.ts](connection.ts) | Runs extra work after the normal voice handshake |
 | [node.ts](node.ts) | Counts reported errors while keeping the default error events |
 | [autoplay.ts](autoplay.ts) | Supplies a recommendation policy from bot code |
+| [logger.ts](logger.ts) | Sends AquaLink logs through your Seyfert logger |
 
 ## Register an override
 
@@ -167,6 +168,30 @@ player.setAutoplay(true)
 This example searches for another track by the previous artist and returns
 `null` when none is found. You can replace that search with your own service.
 It doesn't keep a listening history or promise a different track on every call.
+
+## Use your bot's logger
+
+`options.logger` replaces the built-in logger. You can pass Seyfert's
+`client.logger` directly. The adapter in [logger.ts](logger.ts) also adds an
+`[AquaLink]` prefix and puts the message before its fields:
+
+```ts
+import { Aqua } from '../src/index.ts'
+import { createSeyfertLogger } from './logger.ts'
+
+const aqua = new Aqua(client, nodes, {
+  send: sendVoicePacket,
+  logger: createSeyfertLogger(client.logger)
+})
+```
+
+Both `logger.info('message')` and `logger.error({ err, node }, 'message')` work.
+Fields stay as objects, including Error instances. The adapter calls methods on
+the original logger, so their `this` binding stays intact.
+
+Seyfert controls filtering and output here. AquaLink's `logging.level` only
+applies to the built-in logger; it doesn't filter or duplicate your custom logs.
+The adapter doesn't install Seyfert, start the bot or modify library code.
 
 ## Check the examples
 

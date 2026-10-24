@@ -76,7 +76,10 @@ export interface AquaOptions {
   lazyloadPlayer?: boolean
   /** Forward gateway op 4 through the guild's shard. Required for joining voice. */
   send?: (payload: VoiceUpdatePayload) => void | Promise<void>
-  /** Your logger instance. Omit it to use the built-in process.stdout logger. */
+  /** Your logger instance. Omit it to use the built-in process.stdout logger.
+   * Methods accept a string or (fields, message). Your logger owns filtering.
+   * @example { logger: client.logger }
+   */
   logger?: Logger
   /** Default level is info; silent disables output. Ignored when you supply logger. */
   logging?: { level?: LogLevel }
