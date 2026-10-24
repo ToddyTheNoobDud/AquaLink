@@ -205,6 +205,10 @@ export default class AquaManager extends EventEmitter<AquaEventMap> {
           throw new Error('Aqua was destroyed during initialization.')
         }
         this.initiated = true
+        this.logger.info(
+          { nodes: this.nodesMap.size },
+          'Aqualink initiation was a success, nodes were created.'
+        )
         return this
       } catch (error) {
         for (const node of this.nodesMap.values()) {
@@ -236,6 +240,10 @@ export default class AquaManager extends EventEmitter<AquaEventMap> {
       this.nodesMap.set(name, node)
       try {
         this.emit('nodeCreate', node)
+        this.logger.debug(
+          { node: name },
+          'CreateNode recived, now trying to connect.'
+        )
         await node.connect()
       } catch (error) {
         node.destroy()

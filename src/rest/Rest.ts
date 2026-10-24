@@ -130,7 +130,10 @@ export default class Rest {
       }
       return (await response.text()) as T
     } catch (error) {
-      this.aqua.logger.error({ err: error, path }, 'Node request failed.')
+      this.aqua.logger.error(
+        { err: error, path },
+        'Node request failed, the node had other plans.'
+      )
       return undefined
     }
   }

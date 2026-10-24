@@ -48,7 +48,9 @@ export default class Player extends EventEmitter<PlayerEventMap> {
   public mute = false
   private currentTrack: Track | null = null
   public previous: Track | null = null
-  /** Optional bot-owned message reference. AquaLink never edits or deletes it. */
+  /** Bot-owned message reference, available during destroy events and released afterwards.
+   * AquaLink never edits or deletes the message.
+   */
   public nowPlayingMessage: unknown = null
   public isAutoplayEnabled = false
   public lazyLoad: boolean
@@ -509,7 +511,7 @@ export default class Player extends EventEmitter<PlayerEventMap> {
   reportError(error: unknown) {
     this.aqua.logger.error(
       { err: error, guildId: this.guildId },
-      'Player operation failed.'
+      'Player operation failed, sadly.'
     )
     this.aqua.emit('playerError', this, error)
   }
@@ -568,7 +570,6 @@ export default class Player extends EventEmitter<PlayerEventMap> {
     this.storedFilters = undefined
     this.storedQueue?.clear()
     this.storedQueue = undefined
-    this.nowPlayingMessage = null
     this.current = null
     this.previous = null
     this.playing = false
@@ -610,6 +611,7 @@ export default class Player extends EventEmitter<PlayerEventMap> {
     })()
     this.emit('destroy')
     this.aqua.emit('playerDestroy', this)
+    this.nowPlayingMessage = null
     this.removeAllListeners()
     return this.destruction
   }

@@ -14,7 +14,7 @@ export class BotEvents extends PlayerEvents {
     await super.trackStart(payload)
     this.aqua.logger.info(
       { guildId: this.player.guildId },
-      'The bot received trackStart'
+      'got a trackStart'
     )
   }
 

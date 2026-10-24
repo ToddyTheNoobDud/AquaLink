@@ -210,6 +210,7 @@ export default class Node extends EventEmitter {
         ) {
           return
         }
+        this.aqua.logger.info({ node: this.name }, 'Node is ready')
         this.emit('ready', parsed)
         this.aqua.emit('nodeReady', this, parsed)
         if (this.autoResume && oldSession && !parsed.resumed) {
@@ -225,6 +226,7 @@ export default class Node extends EventEmitter {
         break
       }
       case 'stats': {
+        this.aqua.logger.debug({ node: this.name }, 'got an stats')
         delete parsed.op
         if (parsed.cpu && 'nodelinkLoad' in parsed.cpu) {
           delete parsed.cpu.lavalinkLoad
@@ -235,6 +237,10 @@ export default class Node extends EventEmitter {
         break
       }
       case 'playerUpdate': {
+        this.aqua.logger.debug(
+          { node: this.name, guildId: parsed.guildId },
+          'i got a playerUpdate'
+        )
         const player = this.findPlayer(parsed.guildId)
         if (!player || !parsed.state) {
           break
@@ -249,6 +255,10 @@ export default class Node extends EventEmitter {
       }
       case 'event':
       case 'events':
+        this.aqua.logger.debug(
+          { node: this.name, type: parsed.type, guildId: parsed.guildId },
+          'recived an event.'
+        )
         this.emit('event', parsed)
         this.aqua.emit('nodeEvent', this, parsed)
         if (
@@ -272,6 +282,10 @@ export default class Node extends EventEmitter {
         break
       }
       default:
+        this.aqua.logger.debug(
+          { node: this.name, op: parsed.op },
+          'Unknown op recived, your bot can handle this one.'
+        )
         this.emit('customOp', parsed.op, parsed)
         this.aqua.emit('nodeCustomOp', this, parsed.op, parsed)
     }
@@ -316,6 +330,10 @@ export default class Node extends EventEmitter {
       this.info = info
       this.isNodelink = 'isNodelink' in info && info.isNodelink === true
     }
+    this.aqua.logger.info(
+      { node: this.name, isNodelink: this.isNodelink },
+      'Aqualink has connected to the node'
+    )
     this.emit('connect')
     this.aqua.emit('nodeConnect', this)
     this.aqua.emit('nodeConnected', this)
@@ -334,6 +352,12 @@ export default class Node extends EventEmitter {
     }
     this.connected = false
     this.nodeState = 'DISCONNECTED'
+    this.aqua.logger.info(
+      { node: this.name, code: event.code, reason: event.reason },
+      event.code === 1006
+        ? '1006 close code, probably the node got force-killed.'
+        : 'Node disconnected, see you in a bit maybe.'
+    )
     this.emit('disconnect', event)
     this.aqua.emit('nodeDisconnect', this, {
       code: event.code,
@@ -344,15 +368,21 @@ export default class Node extends EventEmitter {
 
   /** Keep at most one reconnect timer. Delays grow from reconnectTimeout up to seven minutes. */
   public manageBackoff(socket: Pick<WebSocket, 'readyState'>) {
-    if (
-      this.isDestroyed ||
-      this.connected ||
-      socket.readyState === 1 ||
-      this.reconnectTimeoutId !== null
-    ) {
+    if (this.isDestroyed || this.reconnectTimeoutId !== null) {
+      return
+    }
+    if (this.connected || socket.readyState === 1) {
+      this.aqua.logger.info(
+        { node: this.name },
+        'WEBSOCKET is already connected, why a backoff would happen?'
+      )
       return
     }
     if (!this.infiniteReconnects && this.reconnectRetries >= this.maxRetries) {
+      this.aqua.logger.info(
+        { node: this.name, attempts: this.reconnectRetries },
+        'Max retries reached, giving up for now.'
+      )
       return
     }
     const delay = Math.min(
@@ -366,6 +396,10 @@ export default class Node extends EventEmitter {
         return
       }
       this.reconnectRetries++
+      this.aqua.logger.info(
+        { node: this.name, attempt: this.reconnectRetries, delay },
+        'Reconnection in progress, lets try this again.'
+      )
       this.aqua.emit('nodeReconnect', this, {
         attempt: this.reconnectRetries,
         delay
@@ -384,7 +418,7 @@ export default class Node extends EventEmitter {
   reportError(error: unknown) {
     this.aqua.logger.error(
       { err: error, node: this.name },
-      'Node operation failed.'
+      'Node operation failed. well, that was not supposed to happen.'
     )
     this.aqua.emit('nodeError', this, error)
     if (this.listenerCount('error')) {

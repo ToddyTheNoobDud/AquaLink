@@ -6,7 +6,7 @@ export class BotConnection extends Connection {
     const connection = await super.joinVoice(options)
     this.aqua.logger.info(
       { guildId: options.guildId, channelId: options.voiceChannel },
-      'Voice connection completed'
+      'Voice is connected'
     )
     return connection
   }
