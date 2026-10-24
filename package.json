@@ -1,70 +1,46 @@
 {
   "name": "aqualink",
-  "version": "3.2.0",
-  "description": "An Lavalink/Nodelink client, focused in pure performance and features",
-  "main": "./build/index.js",
-  "types": "./build/index.d.ts",
-  "scripts": {
-    "start": "node ./build/index.js"
-  },
+  "version": "4.0.0",
+  "description": "Extensible Lavalink v4 and NodeLink client.",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/types/index.d.ts",
   "exports": {
     ".": {
-      "require": "./build/index.js",
-      "import": "./build/index.js",
-      "types": "./build/index.d.ts"
+      "import": {
+        "types": "./dist/types/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/cjs-types/index.d.ts",
+        "default": "./dist/index.cjs"
+      }
     }
   },
-  "keywords": [
-    "lavalink",
-    "lavalink-client",
-    "client-wrapper",
-    "discord.js",
-    "node.js",
-    "audio-streaming",
-    "music-bot",
-    "discord-integration",
-    "high-performance",
-    "scalable",
-    "nodelink",
-    "api",
-    "discord",
-    "lavalink.js",
-    "discord.js",
-    "lavalink-api",
-    "cross-platform",
-    "seamless-integration",
-    "community-support",
-    "open-source",
-    "opus"
+  "files": [
+    "dist",
+    "LICENSE.md"
   ],
-  "author": "mushroom0162 (https://github.com/ToddyTheNoobDud)",
-  "license": "ISC",
+  "scripts": {
+    "typecheck": "bun ./node_modules/typescript/bin/tsc --noEmit -p tsconfig.json"
+  },
+  "license": "WTFPL",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/ToddyTheNoobDud/AquaLink.git"
   },
-  "homepage": "https://aqualink-6006388d.mintlify.app/",
-  "dependencies": {
-    "ws": "^8.21.1"
+  "engines": {
+    "node": ">=22.19.0",
+    "bun": ">=1.4.4"
   },
-  "contributors": [
-    {
-      "name": "mushroom0162",
-      "url": "https://github.com/ToddyTheNoobDud"
-    },
-    {
-      "name": "SoulDevs",
-      "url": "https://github.com/SoulDevs"
-    },
-    {
-      "name": "southctrl",
-      "url": "https://github.com/southctrl"
-    }
-  ],
-  "maintainers": [
-    {
-      "name": "mushroom0162",
-      "url": "https://github.com/ToddyTheNoobDud"
-    }
-  ]
+  "devDependencies": {
+    "@types/bun": "^1.4.3",
+    "@types/node": "^26.6.5",
+    "typescript": "^7"
+  },
+  "dependencies": {
+    "@types/ws": "^8.18.2",
+    "ws": "^8.22.0"
+  }
 }

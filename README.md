@@ -1,441 +1,309 @@
 <div align="center">
 
-<p align="center">
-  <img src="https://capsule-render.vercel.app/api?type=wave&color=0099FF&height=300&section=header&text=Aqualink&fontSize=90&fontAlignY=35&animation=twinkling&fontColor=ffffff&desc=Performance-focused%20Lavalink%20Client&descSize=25&descAlignY=60" />
-</p>
+<img src="https://capsule-render.vercel.app/api?type=wave&color=0099FF&height=220&section=header&text=AquaLink&fontSize=70&fontAlignY=35&fontColor=ffffff&desc=Lavalink%20v4%20%2B%20NodeLink%20Client&descSize=20&descAlignY=60" alt="AquaLink: Lavalink v4 and NodeLink client" />
 
 [![NPM Downloads](https://img.shields.io/npm/dw/aqualink.svg?style=for-the-badge&color=3498db)](https://www.npmjs.com/package/aqualink)
-[![NPM Version](https://img.shields.io/npm/v/aqualink?color=0061ff&label=Aqualink&style=for-the-badge&logo=npm)](https://www.npmjs.com/package/aqualink)
+[![NPM Version](https://img.shields.io/npm/v/aqualink?color=0061ff&label=AquaLink&style=for-the-badge&logo=npm)](https://www.npmjs.com/package/aqualink)
 [![GitHub Stars](https://img.shields.io/github/stars/ToddyTheNoobDud/AquaLink?color=00bfff&style=for-the-badge&logo=github)](https://github.com/ToddyTheNoobDud/AquaLink/stargazers)
 [![Discord](https://img.shields.io/discord/1346930640049803266?color=7289da&label=Discord&logo=discord&style=for-the-badge)](https://discord.gg/K4CVv84VBC)
 
-<br />
-
-<p align="center">
-  <img src="https://readme-typing-svg.herokuapp.com?font=Montserrat&duration=3000&pause=1000&color=0099FF&center=true&vCenter=true&width=700&lines=Powerful+Audio+Streaming+for+Discord+Bots;Optimized+for+Lavalink+v4+and+Nodelink;Failover%2C+Filters%2C+Autoplay%2C+Lyrics;Easy+to+Integrate%2C+Built+for+Stability" />
-</p>
+[Examples](https://github.com/ToddyTheNoobDud/AquaLink/tree/v4-ts-rewrite/examples) · [Support](https://discord.gg/K4CVv84VBC)
 
 </div>
 
-<div align="center">
-  <h3>🌊 REIMAGINING AUDIO STREAMING FOR DISCORD 🌊</h3>
-  <h4>Built for high uptime, clean APIs, and real-world bot workloads</h4>
-</div>
+# AquaLink v4
 
-<br />
+A Lavalink v4 and NodeLink client for Discord bots, written in TypeScript.
+Players, queues and filters work out of the box. When you need different
+behavior, replace the parts you want from your bot code. No fork needed.
 
-## 💎 Why Choose Aqualink?
+## Features
 
-<div align="center">
-  <table>
-    <tr>
-      <td align="center" width="33%">
-        <h3>🚀</h3>
-        <h4>Performance First</h4>
-        <p>Efficient queue/player internals and load-balanced node selection.</p>
-      </td>
-      <td align="center" width="33%">
-        <h3>🛠️</h3>
-        <h4>Developer Friendly</h4>
-        <p>Simple API surface with CJS/ESM compatibility and TypeScript types.</p>
-      </td>
-      <td align="center" width="33%">
-        <h3>🔌</h3>
-        <h4>Extensible</h4>
-        <p>Plugin base class + rich event system for custom bot behavior.</p>
-      </td>
-    </tr>
-  </table>
-</div>
+- Track loading, searches and playlists, with typed Lavalink and NodeLink payloads.
+- Playback controls, queue progression, looping and shuffle.
+- Optional lazy queues, replaceable queue storage and playback without a queue.
+- Equalizer, bassboost, nightcore, vaporwave, karaoke, 8D and other filter helpers.
+- Multiple nodes, load balancing and node reconnection with configurable retries.
+- Typed events, raw server events and custom ops for your own handlers.
+- Optional session resuming, player persistence and a bot-supplied autoplay policy.
+- ESM and CommonJS exports, TypeScript declarations and a replaceable stdout logger.
 
-## 📦 Installation
-**Latest Stable Release: `v2.20.1`**
+REST uses native `fetch`; WebSocket connections use `ws` on both Node.js and Bun.
+Your bot owns Discord messages, commands and any extra recovery or recommendation
+logic you want to add.
 
-<details>
-<summary><strong>📦 NPM</strong></summary>
+## Installation
 
-```bash
-# Stable release
-npm install aqualink
+Use Node.js **22.19+** or Bun **1.4.4+**, a Lavalink v4 or NodeLink server, and
+your preferred Discord library. Your bot needs the Guilds and GuildVoiceStates intents.
 
-# Development build
-npm install ToddyTheNoobDud/aqualink
+| Package manager | Install v4 |
+| --- | --- |
+| npm | `npm install aqualink@4` |
+| Bun | `bun add aqualink@4` |
+| pnpm | `pnpm add aqualink@4` |
+| Yarn | `yarn add aqualink@4` |
+
+```ts
+import { Aqua } from 'aqualink'
 ```
 
-</details>
+CommonJS works too: `const { Aqua } = require('aqualink')`.
 
-<details>
-<summary><strong>🧶 Yarn</strong></summary>
+## Connect your bot
 
-```bash
-yarn add aqualink
-yarn add ToddyTheNoobDud/aqualink
-```
+This example uses your existing Seyfert client. Create Aqua once in your bot's
+setup file, here called `aqua.ts`:
 
-</details>
+```ts
+import { Aqua } from 'aqualink'
 
-<details>
-<summary><strong>⚡ Bun</strong></summary>
-
-```bash
-bun add aqualink
-bun add ToddyTheNoobDud/aqualink
-```
-
-</details>
-
-<details>
-<summary><strong>📦 pnpm</strong></summary>
-
-```bash
-pnpm add aqualink
-pnpm add ToddyTheNoobDud/aqualink
-```
-</details>
-
-## 🔥 Implemented Highlights (v2.20.1)
-
-<div align="center">
-  <table>
-    <tr>
-      <td align="center" width="25%">
-        <img src="https://img.icons8.com/fluent/48/000000/filter.png"/>
-        <h4>Advanced Filters</h4>
-        <p>EQ, Bassboost, Nightcore, Vaporwave, 8D, Karaoke, and more.</p>
-      </td>
-      <td align="center" width="25%">
-        <img src="https://img.icons8.com/fluent/48/000000/cloud-backup-restore.png"/>
-        <h4>Failover + Recovery</h4>
-        <p>Node failover, player migration, auto-resume, queue persistence.</p>
-      </td>
-      <td align="center" width="25%">
-        <img src="https://img.icons8.com/fluent/48/000000/bar-chart.png"/>
-        <h4>Diagnostics</h4>
-        <p>Debug events + trace buffer for production troubleshooting.</p>
-      </td>
-      <td align="center" width="25%">
-        <img src="https://img.icons8.com/fluent/48/000000/settings.png"/>
-        <h4>Flexible Runtime</h4>
-        <p>Load balancing, region-aware nodes, autoplay, lyrics, mixer APIs.</p>
-      </td>
-    </tr>
-  </table>
-</div>
-
-## 📦 Resources
-
-<div align="center">
-  <a href="https://discord.gg/K4CVv84VBC">
-    <img src="https://img.shields.io/badge/Support_Server-3498db?style=for-the-badge&logo=discord&logoColor=white" />
-  </a>
-</div>
-
-## 💻 Quick Start
-
-```bash
-npm install aqualink discord.js
-```
-
-```javascript
-const { Aqua, AqualinkEvents } = require('aqualink')
-const { Client, GatewayIntentBits, Events } = require('discord.js')
-
-const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildVoiceStates
-  ]
-})
-
-const nodes = [
+export const aqua = new Aqua(client, [
   {
+    name: 'main',
     host: '127.0.0.1',
-    password: 'your_password', // alias for `auth`
     port: 2333,
-    ssl: false,
-    name: 'main-node'
+    password: process.env.NODE_PASSWORD!,
+    ssl: false
   }
-]
-
-const aqua = new Aqua(client, nodes, {
-  defaultSearchPlatform: 'ytsearch',
-  restVersion: 'v4',
-  autoResume: true,
-  infiniteReconnects: true,
-  loadBalancer: 'leastLoad',
-  leaveOnEnd: false,
-  autoRegionMigrate: false
-})
-
-client.once(Events.ClientReady, async () => {
-  await aqua.init(client.user.id)
-  console.log(`Logged in as ${client.user.tag}`)
-})
-
-// Forward Discord voice packets to Aqualink
-client.on(Events.Raw, (packet) => {
-  if (packet.t === 'VOICE_SERVER_UPDATE' || packet.t === 'VOICE_STATE_UPDATE') {
-    aqua.updateVoiceState(packet)
+], {
+  lazyloadPlayer: true,
+  send: async (packet) => {
+    const shardId = client.gateway.calculateShardId(packet.d.guild_id)
+    await client.gateway.send(shardId, packet)
   }
 })
 
-client.on(Events.MessageCreate, async (message) => {
-  if (message.author.bot || !message.content.startsWith('!play')) return
+aqua.on('nodeReady', (node) => {
+  console.log(`${node.name} is ready`)
+})
 
-  const query = message.content.slice(6).trim()
-  if (!query) return message.channel.send('Please provide a song to play.')
-  if (!message.member.voice.channel) {
-    return message.channel.send('You need to be in a voice channel to play music!')
+aqua.on('nodeError', (node, error) => {
+  console.error(node.name, error)
+})
+```
+
+Forward voice packets in `src/events/raw.ts`:
+
+```ts
+import { createEvent } from 'seyfert'
+import { aqua } from '../../aqua.ts'
+
+export default createEvent({
+  data: { name: 'raw' },
+  async run(packet) {
+    if (packet.t === 'VOICE_STATE_UPDATE' || packet.t === 'VOICE_SERVER_UPDATE') {
+      await aqua.updateVoiceState(packet)
+    }
   }
+})
+```
 
-  const player = aqua.createConnection({
-    guildId: message.guild.id,
-    voiceChannel: message.member.voice.channel.id,
-    textChannel: message.channel.id,
-    deaf: true
+Initialize it in `src/events/botReady.ts`, after Discord supplies the bot ID:
+
+```ts
+import { createEvent } from 'seyfert'
+import { aqua } from '../../aqua.ts'
+
+export default createEvent({
+  data: { name: 'botReady', once: true },
+  async run(user) {
+    await aqua.init(user.id)
+  }
+})
+```
+
+Use your bot's configured events directory and adjust the `aqua.ts` import to its
+location. If you already have these handlers, merge the calls into them.
+
+For another Discord library, provide its gateway sender through `send` and forward
+the same two incoming voice packets to `aqua.updateVoiceState()`. Keep the original
+`{ t, d }` payload; AquaLink filters voice states by the bot's user ID.
+
+`init(botId)` opens the node connections. Wait for `nodeReady` before creating
+players. Node hosts have no URL scheme; set `ssl: true` for HTTPS/WSS.
+
+## Search and play
+
+Inside your command, use the guild ID and the user's voice channel ID:
+
+```ts
+const result = await aqua.resolve({
+  query: 'artist song',
+  source: 'ytsearch',
+  requester: { id: userId }
+})
+
+if (result.exception) {
+  throw new Error(result.exception.message ?? 'Track loading failed')
+}
+
+const track = result.tracks[0]
+if (track) {
+  const player = await aqua.createConnection({
+    guildId,
+    voiceChannel,
+    textChannel
   })
-
-  try {
-    const resolved = await aqua.resolve({
-      query,
-      requester: message.member
-    })
-
-    const { loadType, tracks, playlistInfo } = resolved
-
-    if (loadType === 'playlist') {
-      player.queue.add(...tracks)
-      message.channel.send(`Added ${tracks.length} songs from ${playlistInfo?.name || 'playlist'}.`)
-    } else if (loadType === 'search' || loadType === 'track') {
-      const track = tracks[0]
-      player.queue.add(track)
-      message.channel.send(`Added **${track.title}** to the queue.`)
-    } else {
-      return message.channel.send('No results found.')
-    }
-
-    if (!player.playing && !player.paused) {
-      await player.play()
-    }
-  } catch (error) {
-    console.error('Playback error:', error)
-    message.channel.send('An error occurred while trying to play the song.')
-  }
-})
-
-aqua.on(AqualinkEvents.NodeConnect, (node) => {
-  console.log(`Node connected: ${node.name}`)
-})
-
-aqua.on(AqualinkEvents.NodeError, (node, error) => {
-  console.log(`Node "${node.name}" encountered an error: ${error.message}`)
-})
-
-aqua.on(AqualinkEvents.TrackStart, (player, track) => {
-  const channel = client.channels.cache.get(player.textChannel)
-  if (channel) channel.send(`Now playing: **${track.title}**`)
-})
-
-aqua.on(AqualinkEvents.QueueEnd, (player) => {
-  const channel = client.channels.cache.get(player.textChannel)
-  if (channel) channel.send('The queue has ended.')
-  player.destroy()
-})
-
-client.login('YOUR_DISCORD_BOT_TOKEN')
+  await player.play(track)
+}
 ```
 
-### Additional Commands You Can Add
+URLs use the same method. Search sources depend on what's enabled on your node.
+For playlists, add `result.tracks` to `player.queue` and call `await player.play()`
+when idle. `result.playlistInfo` contains the playlist metadata.
 
-```javascript
-client.on(Events.MessageCreate, async (message) => {
-  if (message.content === '!skip') {
-    const player = aqua.players.get(message.guild.id)
-    if (player) {
-      player.skip()
-      message.channel.send('⏭️ Skipped current track!')
-    }
-  }
+`play(track)` starts immediately when idle, or adds the track behind current
+playback. `play()` starts the first waiting track. To replace current while
+keeping the queue, use `play(track, { noReplace: false })`.
+
+### Controls and filters
+
+```ts
+await player.pause(true)
+await player.pause(false)
+await player.seek(30_000)
+await player.setVolume(80)
+await player.filters.setNightcore(true)
+
+player.setLoop('queue')
+player.shuffle()
+
+await player.skip()
+await player.stop()
+await player.destroy()
+```
+
+Await playback controls, filter updates and destruction. Looping and shuffle
+only change local state.
+
+| Operation | Behavior |
+| --- | --- |
+| `stop()` | Stops current and keeps the waiting tracks |
+| `skip()` | Starts the next waiting track; does nothing when none are waiting |
+| `destroy()` | Leaves voice, clears the queue and removes the player |
+| Track finishes or fails to load | The default handler starts the next waiting track |
+| Bot is kicked from voice | Destroys the player and queue; the next explicit connection creates a new player |
+
+`player.current` holds the current track; `player.queue` holds waiting tracks.
+With `lazyloadPlayer: true`, waiting storage is created only when needed or when
+you read `player.queue`. Reading `player.hasQueue` doesn't allocate anything.
+Set `queue: false` to play without waiting storage; see the queue examples below.
+
+## Events
+
+Listen on Aqua for all players, or on a Player for one guild:
+
+```ts
+aqua.on('trackStart', (player, track) => {
+  console.log(player.guildId, track?.title)
 })
 
-client.on(Events.MessageCreate, async (message) => {
-  if (message.content === '!stop') {
-    const player = aqua.players.get(message.guild.id)
-    if (player) {
-      player.destroy()
-      message.channel.send('⏹️ Stopped playback and cleared queue!')
-    }
-  }
+player.on('trackEnd', (track, reason) => {
+  console.log(track?.title, reason)
+})
+
+player.on('event', (payload) => {
+  console.log(payload.type)
+})
+
+aqua.on('nodeCustomOp', (node, op, payload) => {
+  console.log(node.name, op, payload)
 })
 ```
 
-## 🌟 Featured Projects
+Aqua's track events receive the player first. Raw player events are available
+through `event` or their protocol name, such as `player.on('TrackEndEvent', ...)`.
+`trackEnd` runs before queue progression; raw events run after the handler.
+`nodeEvent` receives server events even without a matching local player.
 
-<div align="center">
-<table>
-<tr>
-<td align="center" width="33%">
-  <img width="120" height="120" src="https://img.icons8.com/fluent/240/000000/water-element.png"/>
-  <br/>
-  <img src="https://img.shields.io/badge/Kenium-00bfff?style=for-the-badge&logo=discord&logoColor=white" /><br />
-  <a href="https://discord.com/oauth2/authorize?client_id=1202232935311495209">Add to Discord</a>
-</td>
-<td align="center" width="33%">
-  <img width="120" height="120" src="https://cdn.discordapp.com/attachments/1347414750463660032/1365654298989690930/soya1.jpg"/>
-  <br/>
-  <img src="https://img.shields.io/badge/SoyaMusic-22c55e?style=for-the-badge&logo=discord&logoColor=white" /><br />
-  <a href="https://discord.com/oauth2/authorize?client_id=997906613082013868&permissions=281357446481&integration_type=0&scope=bot+applications.commands">Add to Discord</a>
-</td>
-<td align="center" width="33%">
-  <img width="120" height="120" src="https://img.icons8.com/fluency/240/music.png"/>
-  <br/>
-  <img src="https://img.shields.io/badge/Rive-a855f7?style=for-the-badge&logo=discord&logoColor=white" /><br />
-  <a href="https://discord.com/oauth2/authorize?client_id=1384158871207280651">Add to Discord</a>
-</td>
-</tr>
-</table>
-</div>
+See [event types](https://github.com/ToddyTheNoobDud/AquaLink/blob/v4-ts-rewrite/src/shared/Events.ts)
+for listener arguments and the [custom event example](https://github.com/ToddyTheNoobDud/AquaLink/blob/v4-ts-rewrite/examples/events.ts)
+for adding your own behavior.
 
-[View All Projects →](https://github.com/ToddyTheNoobDud/AquaLink#used-by)
+## Make it yours
 
-## 📖 Documentation
+The [examples/ guide](https://github.com/ToddyTheNoobDud/AquaLink/blob/v4-ts-rewrite/examples/README.md)
+shows how to replace each part from your bot. Start with
+[setup.ts](https://github.com/ToddyTheNoobDud/AquaLink/blob/v4-ts-rewrite/examples/setup.ts)
+to see the overrides registered together, then copy only the ones you need.
 
-For detailed usage, API references, and examples, check out the official documentation:
+| Example | What you can change |
+| --- | --- |
+| [Player](https://github.com/ToddyTheNoobDud/AquaLink/blob/v4-ts-rewrite/examples/player.ts) | Add controls, settings or your own playback methods |
+| [PlayerEvents](https://github.com/ToddyTheNoobDud/AquaLink/blob/v4-ts-rewrite/examples/events.ts) | Extend built-in handling and add typed custom events |
+| [Queue](https://github.com/ToddyTheNoobDud/AquaLink/blob/v4-ts-rewrite/examples/queue.ts) / [QueueLike](https://github.com/ToddyTheNoobDud/AquaLink/blob/v4-ts-rewrite/examples/queue-storage.ts) | Change ordering or supply your own storage |
+| [Rest](https://github.com/ToddyTheNoobDud/AquaLink/blob/v4-ts-rewrite/examples/rest.ts) | Add routes for server plugins |
+| [Filters](https://github.com/ToddyTheNoobDud/AquaLink/blob/v4-ts-rewrite/examples/filters.ts) | Add presets |
+| [Track](https://github.com/ToddyTheNoobDud/AquaLink/blob/v4-ts-rewrite/examples/track.ts) | Add properties and getters |
+| [Connection](https://github.com/ToddyTheNoobDud/AquaLink/blob/v4-ts-rewrite/examples/connection.ts) / [Node](https://github.com/ToddyTheNoobDud/AquaLink/blob/v4-ts-rewrite/examples/node.ts) | Extend connection behavior or node reporting |
+| [Autoplay](https://github.com/ToddyTheNoobDud/AquaLink/blob/v4-ts-rewrite/examples/autoplay.ts) | Supply your own recommendation policy |
+| [Logger](https://github.com/ToddyTheNoobDud/AquaLink/blob/v4-ts-rewrite/examples/logger.ts) | Route logs through Seyfert or your own logger |
 
-[![Docs](https://img.shields.io/badge/Documentation-0099FF?style=for-the-badge&logo=readthedocs&logoColor=white)](https://aqualink-6006388d.mintlify.app)
+Register subclasses through `options.structures` before creating their instances.
+Call `super` where you want to keep the default behavior. For independent queue
+storage, supply a `QueueLike` factory through `options.queue`.
 
-📌 **Get Started Quickly**
-- Installation guide
-- API methods
-- Events and filters
-- Troubleshooting
+## Configuration
 
-🔗 Visit: **[Aqualink Docs](https://aqualink-6006388d.mintlify.app)**
+| Option | Default | Purpose |
+| --- | --- | --- |
+| `defaultSearchPlatform` | `'ytsearch'` | Search prefix for plain queries |
+| `lazyloadPlayer` | `false` | Create waiting storage on demand |
+| `loadBalancer` | `'leastLoad'` | Choose a node by load, or use `'random'` |
+| `nodeConfigs.maxRetries` | `10` | Maximum node reconnect attempts |
+| `nodeConfigs.infiniteReconnects` | `false` | Keep reconnecting past that limit |
+| `autoResume` | `false` | Request session resuming and restore players when the session expires |
+| `leaveOnEnd` | `false` | Destroy the player when playback and its waiting queue end |
+| `logging.level` | `'info'` | Built-in log threshold; `'silent'` disables it |
 
-## 👑 Bots Using Aqualink
+Pass `logger` to replace the native stdout logger. Your logger controls its own
+levels and output. The funny messages stay either way.
 
-| Bot | Invite Link | Notes |
-|-----|-------------|-------|
-| Kenium | [Add to Discord](https://discord.com/oauth2/authorize?client_id=1202232935311495209) | Music playback, playlist support |
-| Soya Music | [Add to Discord](https://discord.com/oauth2/authorize?client_id=997906613082013868&permissions=281357446481&integration_type=0&scope=bot+applications.commands) | Music playback, Discord integration |
-| Rive | [Add to Discord](https://discord.com/oauth2/authorize?client_id=1384158871207280651) | Audio streaming bot |
+Autoplay uses `options.autoplay(player)` to choose the next Track or return `null`.
+Enable it per player with `player.setAutoplay(true)`. Persistence is explicit:
+call `savePlayer(path?)` and `loadPlayers(path?)` when your bot needs them.
+Session resuming doesn't automatically rejoin Discord after a manual kick.
 
-## 🛠️ Advanced Features
+All options and defaults are documented in the
+[TypeScript types](https://github.com/ToddyTheNoobDud/AquaLink/blob/v4-ts-rewrite/src/types/shared.ts).
 
-<div align="center">
-  <table>
-    <tr>
-      <td>
-        <h4>🎛️ Audio Filters</h4>
-        <ul>
-          <li>Equalizer</li>
-          <li>Bassboost preset</li>
-          <li>Nightcore & Vaporwave presets</li>
-          <li>8D rotation</li>
-          <li>Karaoke, ChannelMix, LowPass, Distortion</li>
-        </ul>
-      </td>
-      <td>
-        <h4>🔄 Queue & Player Control</h4>
-        <ul>
-          <li>Shuffle & loop modes</li>
-          <li>Seek, replay, skip</li>
-          <li>Queue move/swap/remove</li>
-          <li>Autoplay support</li>
-          <li>Save/load player sessions</li>
-        </ul>
-      </td>
-      <td>
-        <h4>📡 Reliability</h4>
-        <ul>
-          <li>Auto reconnects</li>
-          <li>Node failover migration</li>
-          <li>Region-aware node migration</li>
-          <li>Debug trace buffer</li>
-          <li>Lyrics and live lyrics support</li>
-        </ul>
-      </td>
-    </tr>
-  </table>
-</div>
+## REST and server APIs
 
-## 👥 Contributors
+Use `player.node.rest` or `aqua.getNode(name)?.rest` for direct requests.
+Helpers cover player/session updates, track loading and decoding, routeplanner,
+lyrics, mixers and other NodeLink endpoints. Availability depends on your server
+and its plugins.
 
-<div align="center">
+`makeRequest<T>(path, method?, body?)` reads JSON or text, returns `null` for 204,
+and logs request failures before returning `undefined`. `request()` returns an
+unread `Response` and rejects on failure. Consume or cancel streaming bodies.
 
-<table>
-  <tbody>
-    <tr>
-      <td align="center" valign="top" width="33%">
-        <a href="https://github.com/southctrl">
-          <img src="https://avatars.githubusercontent.com/u/134554554?v=4?s=100" width="100px;" alt="southctrl"/>
-          <br />
-          <sub><b>southctrl</b></sub>
-        </a>
-        <br />
-        <a href="#code-pomicee" title="Code">💻</a>
-        <a href="#doc-pomicee" title="Documentation">📖</a>
-      </td>
-      <td align="center" valign="top" width="33%">
-        <a href="https://github.com/ToddyTheNoobDud">
-          <img src="https://avatars.githubusercontent.com/u/86982643?v=4?s=100" width="100px;" alt="ToddyTheNoobDud"/>
-          <br />
-          <sub><b>ToddyTheNoobDud</b></sub>
-        </a>
-        <br />
-        <a href="#code-ToddyTheNoobDud" title="Code">💻</a>
-        <a href="#doc-ToddyTheNoobDud" title="Documentation">📖</a>
-      </td>
-      <td align="center" valign="top" width="33%">
-        <a href="https://github.com/SoulDevs">
-          <img src="https://avatars.githubusercontent.com/u/114820381?v=4" width="100px;" alt="SoulDevs"/>
-          <br />
-          <sub><b>SoulDevs</b></sub>
-        </a>
-        <br />
-        <a href="#code-SoulDevs" title="Code">💻</a>
-      </td>
-    </tr>
-  </tbody>
-</table>
+Protocol references: [Lavalink REST](https://lavalink.dev/api/rest),
+[Lavalink WebSocket](https://lavalink.dev/api/websocket) and
+[NodeLink REST](https://nodelink.js.org/docs/api/rest).
 
-<br />
+## Moving from v3
 
-[Become a contributor →](CONTRIBUTING.md)
+Many familiar names remain: `Aqua`, `createConnection`, `resolve`, players,
+queues and filter helpers. Update these parts when moving an existing bot:
 
-</div>
+- Supply `options.send` for your Discord library and forward both voice events.
+- Await player creation, playback, controls, filter updates and destruction.
+- Look up players with `aqua.players.get(guildId)` and keep current on `player.current`.
+- Use `skip()` to advance. `stop()` keeps the waiting queue without advancing it.
+- Replace the old Plugin registry with structure overrides from your bot.
+- Supply your own autoplay policy and handle Discord messages in your bot.
 
-## 🤝 Contributing
+HTTP/2 settings, debug trace storage and automatic node failover are no longer
+part of the client. The [examples](https://github.com/ToddyTheNoobDud/AquaLink/tree/v4-ts-rewrite/examples)
+show the v4 extension points.
 
-<div align="center">
+## Support
 
-We welcome contributions of all sizes: fixes, features, and docs improvements.
+Need help or found a bug? Join the [Discord server](https://discord.gg/K4CVv84VBC)
+or [open an issue](https://github.com/ToddyTheNoobDud/AquaLink/issues).
 
-[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-0061ff.svg?style=for-the-badge)](CONTRIBUTING.md)
+## License
 
-</div>
-
-## 💬 Community & Support
-
-<div align="center">
-
-Join the community and get help quickly:
-
-[![Discord Server](https://img.shields.io/badge/Discord_Server-7289da?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/K4CVv84VBC)
-[![GitHub Discussions](https://img.shields.io/badge/GitHub_Discussions-0061ff?style=for-the-badge&logo=github&logoColor=white)](https://github.com/ToddyTheNoobDud/AquaLink/discussions)
-
-</div>
-
-<div align="center">
-
-<br />
-
-<p align="center">
-  <img src="https://capsule-render.vercel.app/api?type=wave&color=0099FF&height=100&section=footer" />
-</p>
-
-<sub>Built with 💙 by the Aqualink Team</sub>
-
-</div>
+[WTFPL](https://github.com/ToddyTheNoobDud/AquaLink/blob/v4-ts-rewrite/LICENSE.md).
