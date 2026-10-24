@@ -22,7 +22,9 @@ export default class Queue {
    * @example queue.add(first, second)
    */
   add(...tracks: Track[]) {
-    this.tracks.push(...tracks)
+    for (let index = 0; index < tracks.length; index++) {
+      this.tracks.push(tracks[index] as Track)
+    }
     return this
   }
 

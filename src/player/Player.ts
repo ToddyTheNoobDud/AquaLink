@@ -213,16 +213,15 @@ export default class Player extends EventEmitter<PlayerEventMap> {
   protected runPlayback(operation: () => Promise<this>): Promise<this> {
     const previousPlayback = this.playbackPromise
     const playback = previousPlayback
-      ? previousPlayback.catch(() => {}).then(operation)
+      ? previousPlayback.then(operation, operation)
       : operation()
     this.playbackPromise = playback
-    playback
-      .finally(() => {
-        if (this.playbackPromise === playback) {
-          this.playbackPromise = null
-        }
-      })
-      .catch(() => {})
+    const clearPlayback = () => {
+      if (this.playbackPromise === playback) {
+        this.playbackPromise = null
+      }
+    }
+    playback.then(clearPlayback, clearPlayback)
     return playback
   }
 
@@ -268,13 +267,12 @@ export default class Player extends EventEmitter<PlayerEventMap> {
       this.startTrack(requestedTrack, options)
     )
     this.starting = starting
-    starting
-      .finally(() => {
-        if (this.starting === starting) {
-          this.starting = null
-        }
-      })
-      .catch(() => {})
+    const clearStarting = () => {
+      if (this.starting === starting) {
+        this.starting = null
+      }
+    }
+    starting.then(clearStarting, clearStarting)
     return starting
   }
 
