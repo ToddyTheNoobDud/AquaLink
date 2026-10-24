@@ -101,9 +101,9 @@ export default class PlayerEvents {
     this.emit('trackStart', track)
   }
 
-  /** finished/loadFailed advance; replaced belongs to the newer play request.
+  /** finished/loadFailed/stopped advance; replaced belongs to the newer play request.
    * The trackEnd alias is emitted before state cleanup; raw TrackEndEvent is emitted afterwards.
-   * stopped/cleanup clear state without advancing. Loop/autoplay/leaveOnEnd apply here.
+   * cleanup clears state without advancing. Only finished applies looping.
    * Override this method to own queue progression entirely.
    */
   public async trackEnd(payload: PlayerEventPayload) {
@@ -130,7 +130,7 @@ export default class PlayerEvents {
     player.playing = false
     player.paused = false
     player.position = 0
-    if (payload.reason === 'cleanup' || payload.reason === 'stopped') {
+    if (payload.reason === 'cleanup') {
       return
     }
     await player.waitForPlayback()
@@ -149,7 +149,7 @@ export default class PlayerEvents {
     } else if (player.isAutoplayEnabled) {
       await player.autoplay()
     }
-    if (!player.playing) {
+    if (!player.destroyed && !player.playing && !player.current) {
       player.emit('queueEnd')
       this.aqua.emit('queueEnd', player)
       if (player.leaveOnEnd) {

@@ -27,7 +27,7 @@ node list and gateway sender; the examples don't start those for you.
 | [track.ts](track.ts) | Adds a computed display title |
 | [connection.ts](connection.ts) | Runs extra work after the normal voice handshake |
 | [node.ts](node.ts) | Counts reported errors while keeping the default error events |
-| [autoplay.ts](autoplay.ts) | Supplies a recommendation policy from bot code |
+| [autoplay.ts](autoplay.ts) | Replaces built-in autoplay with an artist-search policy |
 | [logger.ts](logger.ts) | Sends AquaLink logs through your Seyfert logger |
 
 ## Register an override
@@ -162,7 +162,10 @@ unless you pass `noReplace: true`.
 
 ## Add an autoplay policy
 
-Configure the callback before enabling autoplay on a player:
+Autoplay works without a callback: `player.setAutoplay(true)` enables the built-in
+policy in `src/player/autoplay.ts`. It uses Spotify recommendations, SoundCloud
+artist searches, or YouTube radio mixes, depending on the previous track.
+To use your own policy instead:
 
 ```ts
 import { artistAutoplay } from './autoplay.ts'
@@ -174,6 +177,26 @@ player.setAutoplay(true)
 This example searches for another track by the previous artist and returns
 `null` when none is found. You can replace that search with your own service.
 It doesn't keep a listening history or promise a different track on every call.
+Your callback fully replaces the built-in policy; returning `null` ends playback.
+You can also override `getAutoplayTrack()` in your Player subclass. SoundCloud's
+default searches an artist; replace it if you want a related-tracks service.
+
+Spotify queries and URLs go straight to your node, including advanced searches,
+seed parameters, and LavaSrc's artist/track/album/ISRC mixes. For example, a custom
+policy can resolve its own mix and pick a track from `result.tracks`:
+
+```ts
+const result = await aqua.resolve({
+  query: 'sprec:mix:artist:0gxyHStUsqpMadRV0Di1Qt',
+  requester: player.previous?.requester,
+  nodes: player.node
+})
+```
+
+These query formats depend on your node and plugins. See
+[LavaSrc's supported queries](https://github.com/topi314/LavaSrc#supported-urls-and-queries)
+and [NodeLink's prefixes](https://nodelink.js.org/docs/api#recommendation-prefixes).
+No Spotify credentials belong in AquaLink.
 
 ## Use your bot's logger
 

@@ -116,7 +116,10 @@ export interface AquaOptions {
   restTimeout?: number
   /** Discord voice join deadline in ms, including the node voice PATCH. Default: 15000. */
   voiceTimeout?: number
-  /** Supply your own recommendation policy; no source-specific autoplay in core. */
+  /** Replace built-in Spotify, SoundCloud and YouTube selection. Return null to end playback.
+   * Without a callback, player.setAutoplay(true) enables the built-in policy.
+   * @example { autoplay: async player => chooseTrack(player.previous) }
+   */
   autoplay?: (player: Player) => Track | null | Promise<Track | null>
 }
 export interface NodeOptions {

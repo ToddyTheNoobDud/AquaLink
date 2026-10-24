@@ -12,6 +12,7 @@ import type {
   PlayOptions,
   QueueLike
 } from '../types/shared.ts'
+import { getAutoplayTrack, startAutoplay } from './autoplay.ts'
 import Connection from './Connection.ts'
 import Filters from './Filters.ts'
 import PlayerEvents from './PlayerEvents.ts'
@@ -307,6 +308,7 @@ export default class Player extends EventEmitter<PlayerEventMap> {
       )
     }
     const previous = this.current
+    const wasPlaying = this.playing
     this.current = next
     this.playing = true
     const userData = options.userData ?? next.userData
@@ -336,13 +338,15 @@ export default class Player extends EventEmitter<PlayerEventMap> {
     } catch (error) {
       if (this.current === next) {
         this.current = previous
-        this.playing = previous !== null
+        this.playing = wasPlaying
       }
       throw error
     }
   }
 
-  /** Stop current and keep waiting tracks. An idle player is left alone.
+  /** Stop current. Its stopped event advances the queue, autoplay or queueEnd.
+   * Resolves when the node accepts the stop; progression follows the server event.
+   * Clear the queue and disable autoplay first to end playback entirely.
    * @example await player.stop()
    */
   stop() {
@@ -353,7 +357,7 @@ export default class Player extends EventEmitter<PlayerEventMap> {
     if (this.destroyed) {
       throw new Error('Player is destroyed.')
     }
-    if (!this.current) {
+    if (!this.current || !this.playing) {
       return this
     }
     if (!this.connected || !this.guildId) {
@@ -361,10 +365,11 @@ export default class Player extends EventEmitter<PlayerEventMap> {
     }
     const current = this.current
     await this.updatePlayer({
-      track: { encoded: null }
+      track: { encoded: null },
+      paused: false
     })
     if (this.current === current) {
-      this.current = null
+      // Keep current until TrackEndEvent so the handler can finish it once.
       this.playing = false
       this.paused = false
       this.position = 0
@@ -372,18 +377,11 @@ export default class Player extends EventEmitter<PlayerEventMap> {
     return this
   }
 
-  /** Stop current and start the next waiting track. An empty/disabled queue leaves current alone.
+  /** Alias for stop. The server's stopped event advances playback, even with no waiting queue.
    * @example await player.skip()
    */
   skip() {
-    return this.runPlayback(async () => {
-      const queue = this.storedQueue
-      if (!queue?.size) {
-        return this
-      }
-      await this.stopTrack()
-      return this.startTrack()
-    })
+    return this.stop()
   }
 
   /** Set paused locally and send one update. Rejects if the node doesn't accept it.
@@ -533,25 +531,27 @@ export default class Player extends EventEmitter<PlayerEventMap> {
     })
   }
 
-  /** Enable the bot's options.autoplay callback. Enabling without a callback throws.
+  /** Enable default radio autoplay, or your options.autoplay callback when provided.
+   * Disabled by default. A custom callback returning null ends playback.
    * @example player.setAutoplay(true)
    */
   setAutoplay(enabled: boolean) {
-    if (enabled && !this.aqua.options?.autoplay) {
-      throw new Error(
-        'Supply options.autoplay from your bot before enabling autoplay.'
-      )
-    }
     this.isAutoplayEnabled = enabled
     return this
   }
 
-  /** Ask the bot's callback for one track and play it if the player is still idle. */
+  /** Select a recommendation using the previous source. Override for your own policy.
+   * See autoplay.ts for Spotify, SoundCloud and YouTube handling.
+   */
+  getAutoplayTrack(): Promise<Track | null> {
+    return getAutoplayTrack(this)
+  }
+
+  /** Try autoplay while enabled and idle. Waiting tracks take priority.
+   * Custom callbacks replace selection; failures emit autoplayFailed without retries.
+   */
   async autoplay() {
-    const track = await this.aqua.options?.autoplay?.(this)
-    if (track && !this.destroyed && !this.playing) {
-      await this.play(track)
-    }
+    await startAutoplay(this)
     return this
   }
 

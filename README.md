@@ -25,7 +25,7 @@ behavior, replace the parts you want from your bot code. No fork needed.
 - Equalizer, bassboost, nightcore, vaporwave, karaoke, 8D and other filter helpers.
 - Multiple nodes, load balancing and node reconnection with configurable retries.
 - Typed events, raw server events and custom ops for your own handlers.
-- Optional session resuming, player persistence and a bot-supplied autoplay policy.
+- Optional session resuming, player persistence and replaceable built-in autoplay.
 - ESM and CommonJS exports, TypeScript declarations and a replaceable stdout logger.
 
 REST uses native `fetch`; WebSocket connections use `ws` on both Node.js and Bun.
@@ -179,16 +179,27 @@ only change local state.
 
 | Operation | Behavior |
 | --- | --- |
-| `stop()` | Stops current and keeps the waiting tracks |
-| `skip()` | Starts the next waiting track; does nothing when none are waiting |
+| `stop()` / `skip()` | Ends current; its `stopped` event advances the queue or autoplay, or emits `queueEnd` |
 | `destroy()` | Leaves voice, clears the queue and removes the player |
-| Track finishes or fails to load | The default handler starts the next waiting track |
+| Track finishes, fails to load or is stopped | The default handler starts the next waiting track, or tries autoplay when enabled |
 | Bot is kicked from voice | Destroys the player and queue; the next explicit connection creates a new player |
 
 `player.current` holds the current track; `player.queue` holds waiting tracks.
 With `lazyloadPlayer: true`, waiting storage is created only when needed or when
 you read `player.queue`. Reading `player.hasQueue` doesn't allocate anything.
 Set `queue: false` to play without waiting storage; see the queue examples below.
+
+`stop()` resolves when the node accepts the stop. Its end event performs
+progression and clears `current`. To end playback entirely, disable autoplay,
+clear any waiting queue and then call `stop()`:
+
+```ts
+player.setAutoplay(false)
+if (player.hasQueue) {
+  player.queue.clear()
+}
+await player.stop()
+```
 
 ## Events
 
@@ -237,7 +248,7 @@ to see the overrides registered together, then copy only the ones you need.
 | [Filters](https://github.com/ToddyTheNoobDud/AquaLink/blob/v4-ts-rewrite/examples/filters.ts) | Add presets |
 | [Track](https://github.com/ToddyTheNoobDud/AquaLink/blob/v4-ts-rewrite/examples/track.ts) | Add properties and getters |
 | [Connection](https://github.com/ToddyTheNoobDud/AquaLink/blob/v4-ts-rewrite/examples/connection.ts) / [Node](https://github.com/ToddyTheNoobDud/AquaLink/blob/v4-ts-rewrite/examples/node.ts) | Extend connection behavior or node reporting |
-| [Autoplay](https://github.com/ToddyTheNoobDud/AquaLink/blob/v4-ts-rewrite/examples/autoplay.ts) | Supply your own recommendation policy |
+| [Autoplay](https://github.com/ToddyTheNoobDud/AquaLink/blob/v4-ts-rewrite/examples/autoplay.ts) | Replace the built-in recommendation policy |
 | [Logger](https://github.com/ToddyTheNoobDud/AquaLink/blob/v4-ts-rewrite/examples/logger.ts) | Route logs through Seyfert or your own logger |
 
 Register subclasses through `options.structures` before creating their instances.
@@ -260,9 +271,33 @@ storage, supply a `QueueLike` factory through `options.queue`.
 Pass `logger` to replace the native stdout logger. Your logger controls its own
 levels and output. The funny messages stay either way.
 
-Autoplay uses `options.autoplay(player)` to choose the next Track or return `null`.
-Enable it per player with `player.setAutoplay(true)`. Persistence is explicit:
-call `savePlayer(path?)` and `loadPlayers(path?)` when your bot needs them.
+Enable autoplay with `player.setAutoplay(true)`. When the queue ends, it picks
+another track using the previous source:
+
+- **YouTube / YouTube Music:** loads a YouTube radio mix.
+- **Spotify:** uses `sprec:seed_tracks=...` on NodeLink. On LavaSrc, it tries an
+  ISRC mix (or track mix without an ISRC), then `seed_tracks` if the mix is empty.
+  Local Spotify entries are matched with `spsearch:` first.
+- **SoundCloud:** searches the previous artist with `scsearch:`. This is artist
+  discovery, not SoundCloud's related-tracks API.
+- **Other sources:** matches artist/title to YouTube before loading a mix.
+
+The previous seed is excluded. Selection uses the player's node and requester,
+doesn't create queue storage, and keeps no history. Autoplay is off by default
+and doesn't schedule retries.
+Failures emit `autoplayFailed`, followed by `queueEnd` if playback stays idle.
+
+Your node needs the matching sources enabled. Spotify support comes from
+[NodeLink](https://nodelink.js.org/docs/api#recommendation-prefixes) or
+[LavaSrc](https://github.com/topi314/LavaSrc#supported-urls-and-queries);
+credentials and recommendation availability are handled there. Spotify's seed
+endpoint requires extended quota access or anonymous tokens with LavaSrc.
+
+Supply `options.autoplay(player)` or override `Player.getAutoplayTrack()` to
+replace that policy. A custom callback returns a Track or `null`; `null` ends
+playback without falling back to the built-in policy.
+
+Persistence is explicit: call `savePlayer(path?)` and `loadPlayers(path?)` when needed.
 Session resuming doesn't automatically rejoin Discord after a manual kick.
 
 All options and defaults are documented in the
@@ -291,9 +326,9 @@ queues and filter helpers. Update these parts when moving an existing bot:
 - Supply `options.send` for your Discord library and forward both voice events.
 - Await player creation, playback, controls, filter updates and destruction.
 - Look up players with `aqua.players.get(guildId)` and keep current on `player.current`.
-- Use `skip()` to advance. `stop()` keeps the waiting queue without advancing it.
+- `stop()` and `skip()` both advance through the server's `stopped` event.
 - Replace the old Plugin registry with structure overrides from your bot.
-- Supply your own autoplay policy and handle Discord messages in your bot.
+- Built-in autoplay is optional and replaceable. Handle Discord messages in your bot.
 
 HTTP/2 settings, debug trace storage and automatic node failover are no longer
 part of the client. The [examples](https://github.com/ToddyTheNoobDud/AquaLink/tree/v4-ts-rewrite/examples)
