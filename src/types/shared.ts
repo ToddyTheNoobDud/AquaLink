@@ -18,7 +18,7 @@ export type SearchSource =
   | (string & {})
 export type LoadBalancerStrategy = 'leastLoad' | 'random'
 
-/** Pino and small bot-owned loggers both fit this interface. */
+/** The built-in stdout logger and bot-owned loggers share these methods. */
 export interface Logger {
   info(fieldsOrMessage: object | string, message?: string): void
   debug(fieldsOrMessage: object | string, message?: string): void
@@ -76,9 +76,9 @@ export interface AquaOptions {
   lazyloadPlayer?: boolean
   /** Forward gateway op 4 through the guild's shard. Required for joining voice. */
   send?: (payload: VoiceUpdatePayload) => void | Promise<void>
-  /** Your logger instance. Omit it to use Pino. */
+  /** Your logger instance. Omit it to use the built-in process.stdout logger. */
   logger?: Logger
-  /** Default Pino level is info. Ignored when you supply logger. */
+  /** Default level is info; silent disables output. Ignored when you supply logger. */
   logging?: { level?: LogLevel }
   /** Retry defaults: infiniteReconnects=false, maxRetries=10. */
   nodeConfigs?: { infiniteReconnects?: boolean; maxRetries?: number }

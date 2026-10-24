@@ -1,10 +1,10 @@
 import { randomUUID } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import { readFile, rename, unlink, writeFile } from 'node:fs/promises'
-import pino from 'pino'
 import Node from '../nodes/Node.ts'
 import Player from '../player/Player.ts'
 import type { AquaEventMap } from '../shared/Events.ts'
+import createLogger from '../shared/Logger.ts'
 import Track from '../shared/Track.ts'
 import type {
   AquaOptions,
@@ -54,8 +54,7 @@ export default class AquaManager extends EventEmitter<AquaEventMap> {
     if (new Set(names).size !== names.length) {
       throw new Error('Node names must be unique.')
     }
-    this.logger =
-      options.logger ?? pino({ level: options.logging?.level ?? 'info' })
+    this.logger = options.logger ?? createLogger(options.logging?.level)
   }
 
   get nodeMap() {

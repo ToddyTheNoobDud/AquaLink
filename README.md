@@ -229,6 +229,20 @@ Server API references: [Lavalink REST](https://lavalink.dev/api/rest),
 [Lavalink WebSocket](https://lavalink.dev/api/websocket) and
 [NodeLink REST](https://nodelink.js.org/docs/api/rest).
 
+## Logging
+
+The default logger writes readable text to `process.stdout`, with a timestamp,
+level and any fields you pass. Error stacks are kept. The funny logs stay too.
+
+Set `logging: { level: 'debug' }` for event details, or use `'silent'` to turn
+logging off. The default is `'info'`; disabled levels skip formatting and writes.
+Pass your own `logger` with `info`, `debug` and `error` methods to replace it.
+Each method accepts a string or `(fields, message)`.
+
+Stdout handles buffering. There are no workers or extra log queues, and logs
+aren't deliberately dropped. A slow output destination can still block or buffer
+writes, so keep debug logging off when you don't need it.
+
 ## Optional behavior
 
 `autoResume` defaults to false. Enabling it configures server session resuming
