@@ -28,13 +28,9 @@ behavior, replace the parts you want from your bot code. No fork needed.
 - Optional session resuming, player persistence and replaceable built-in autoplay.
 - ESM and CommonJS exports, TypeScript declarations and a replaceable stdout logger.
 
-REST uses native `fetch`; WebSocket connections use `ws` on both Node.js and Bun.
-Your bot owns Discord messages, commands and any extra recovery or recommendation
-logic you want to add.
-
 ## Installation
 
-Use Node.js **22.19+** or Bun **1.4.4+**, a Lavalink v4 or NodeLink server, and
+Use Node.js **22.19+** or Bun **1.4.0+**, a Lavalink v4 or NodeLink server, and
 your preferred Discord library. Your bot needs the Guilds and GuildVoiceStates intents.
 
 | Package manager | Install v4 |
@@ -50,13 +46,12 @@ import { Aqua } from 'aqualink'
 
 CommonJS works too: `const { Aqua } = require('aqualink')`.
 
-Type declarations and method documentation are included for editor autocomplete.
+Typings and method examples are included for autocomplete.
 You don't need a separate `@types/aqualink` package. :P.
 
 ## Connect your bot
 
-This example uses your existing Seyfert client. Create Aqua once in your bot's
-setup file, here called `aqua.ts`:
+With an existing Seyfert client, create Aqua in `aqua.ts`:
 
 ```ts
 import { Aqua } from 'aqualink'
@@ -116,8 +111,8 @@ export default createEvent({
 })
 ```
 
-Use your bot's configured events directory and adjust the `aqua.ts` import to its
-location. If you already have these handlers, merge the calls into them.
+Adjust the imports to your bot's layout. If you already handle these events,
+add the AquaLink calls there.
 
 For another Discord library, provide its gateway sender through `send` and forward
 the same two incoming voice packets to `aqua.updateVoiceState()`. Keep the original
@@ -177,8 +172,7 @@ await player.stop()
 await player.destroy()
 ```
 
-Await playback controls, filter updates and destruction. Looping and shuffle
-only change local state.
+Await playback controls, filter updates and destruction.
 
 | Operation | Behavior |
 | --- | --- |
@@ -187,10 +181,9 @@ only change local state.
 | Track finishes, fails to load or is stopped | The default handler starts the next waiting track, or tries autoplay when enabled |
 | Bot is kicked from voice | Destroys the player and queue; the next explicit connection creates a new player |
 
-`player.current` holds the current track; `player.queue` holds waiting tracks.
-With `lazyloadPlayer: true`, waiting storage is created only when needed or when
-you read `player.queue`. Reading `player.hasQueue` doesn't allocate anything.
-Set `queue: false` to play without waiting storage; see the queue examples below.
+`player.current` holds the playing track; `player.queue` holds the next tracks.
+See the [queue examples](https://github.com/ToddyTheNoobDud/AquaLink/blob/v4-ts-rewrite/examples/README.md#replace-queue-storage)
+for lazy queues, custom storage and playback without a queue.
 
 `stop()` resolves when the node accepts the stop. Its end event performs
 progression and clears `current`. To end playback entirely, disable autoplay,
@@ -226,10 +219,8 @@ aqua.on('nodeCustomOp', (node, op, payload) => {
 })
 ```
 
-Aqua's track events receive the player first. Raw player events are available
-through `event` or their protocol name, such as `player.on('TrackEndEvent', ...)`.
-`trackEnd` runs before queue progression; raw events run after the handler.
-`nodeEvent` receives server events even without a matching local player.
+Aqua's track events receive the player first. To listen for raw player events,
+use `event` or the protocol name, such as `player.on('TrackEndEvent', ...)`.
 
 See [event types](https://github.com/ToddyTheNoobDud/AquaLink/blob/v4-ts-rewrite/src/shared/Events.ts)
 for listener arguments and the [custom event example](https://github.com/ToddyTheNoobDud/AquaLink/blob/v4-ts-rewrite/examples/events.ts)
@@ -237,32 +228,16 @@ for adding your own behavior.
 
 ## Make it yours
 
-Want a complete bot to read or run? See
-[Kenium-Music](https://github.com/ToddyTheNoobDud/Kenium-Music), a Discord music bot
-built with AquaLink and Seyfert.
+For a complete bot, see [Kenium-Music](https://github.com/ToddyTheNoobDud/Kenium-Music).
+It uses AquaLink with Seyfert.
 
-The [examples/ guide](https://github.com/ToddyTheNoobDud/AquaLink/blob/v4-ts-rewrite/examples/README.md)
-shows how to replace each part from your bot. Start with
+The [examples guide](https://github.com/ToddyTheNoobDud/AquaLink/blob/v4-ts-rewrite/examples/README.md)
+covers custom players, queues, events, filters and more. Start with
 [setup.ts](https://github.com/ToddyTheNoobDud/AquaLink/blob/v4-ts-rewrite/examples/setup.ts)
-to see the overrides registered together, then copy only the ones you need.
-The examples live on GitHub; the npm package contains the compiled library,
-typings, README and license.
+and copy the overrides you need.
 
-| Example | What you can change |
-| --- | --- |
-| [Player](https://github.com/ToddyTheNoobDud/AquaLink/blob/v4-ts-rewrite/examples/player.ts) | Add controls, settings or your own playback methods |
-| [PlayerEvents](https://github.com/ToddyTheNoobDud/AquaLink/blob/v4-ts-rewrite/examples/events.ts) | Extend built-in handling and add typed custom events |
-| [Queue](https://github.com/ToddyTheNoobDud/AquaLink/blob/v4-ts-rewrite/examples/queue.ts) / [QueueLike](https://github.com/ToddyTheNoobDud/AquaLink/blob/v4-ts-rewrite/examples/queue-storage.ts) | Change ordering or supply your own storage |
-| [Rest](https://github.com/ToddyTheNoobDud/AquaLink/blob/v4-ts-rewrite/examples/rest.ts) | Add routes for server plugins |
-| [Filters](https://github.com/ToddyTheNoobDud/AquaLink/blob/v4-ts-rewrite/examples/filters.ts) | Add presets |
-| [Track](https://github.com/ToddyTheNoobDud/AquaLink/blob/v4-ts-rewrite/examples/track.ts) | Add properties and getters |
-| [Connection](https://github.com/ToddyTheNoobDud/AquaLink/blob/v4-ts-rewrite/examples/connection.ts) / [Node](https://github.com/ToddyTheNoobDud/AquaLink/blob/v4-ts-rewrite/examples/node.ts) | Extend connection behavior or node reporting |
-| [Autoplay](https://github.com/ToddyTheNoobDud/AquaLink/blob/v4-ts-rewrite/examples/autoplay.ts) | Replace the built-in recommendation policy |
-| [Logger](https://github.com/ToddyTheNoobDud/AquaLink/blob/v4-ts-rewrite/examples/logger.ts) | Route logs through Seyfert or your own logger |
-
-Register subclasses through `options.structures` before creating their instances.
-Call `super` where you want to keep the default behavior. For independent queue
-storage, supply a `QueueLike` factory through `options.queue`.
+Register your subclasses through `options.structures` before creating players or
+nodes. Call `super` to keep the default behavior.
 
 ## Configuration
 
@@ -277,37 +252,19 @@ storage, supply a `QueueLike` factory through `options.queue`.
 | `leaveOnEnd` | `false` | Destroy the player when playback and its waiting queue end |
 | `logging.level` | `'info'` | Built-in log threshold; `'silent'` disables it |
 
-Pass `logger` to replace the native stdout logger. Your logger controls its own
-levels and output. The funny messages stay either way.
+Pass your own `logger` to use your bot's logging setup. The
+[logger example](https://github.com/ToddyTheNoobDud/AquaLink/blob/v4-ts-rewrite/examples/logger.ts)
+uses Seyfert.
 
-Enable autoplay with `player.setAutoplay(true)`. When the queue ends, it picks
-another track using the previous source:
+Enable autoplay with `player.setAutoplay(true)`. It uses YouTube radio mixes,
+Spotify recommendations or SoundCloud artist searches, depending on the track
+and the sources enabled on your node. Autoplay is off by default.
 
-- **YouTube / YouTube Music:** loads a YouTube radio mix.
-- **Spotify:** uses `sprec:seed_tracks=...` on NodeLink. On LavaSrc, it tries an
-  ISRC mix (or track mix without an ISRC), then `seed_tracks` if the mix is empty.
-  Local Spotify entries are matched with `spsearch:` first.
-- **SoundCloud:** searches the previous artist with `scsearch:`. This is artist
-  discovery, not SoundCloud's related-tracks API.
-- **Other sources:** matches artist/title to YouTube before loading a mix.
+To choose recommendations yourself, pass `options.autoplay` or override
+`Player.getAutoplayTrack()`. See the
+[autoplay example](https://github.com/ToddyTheNoobDud/AquaLink/blob/v4-ts-rewrite/examples/README.md#add-an-autoplay-policy).
 
-The previous seed is excluded. Selection uses the player's node and requester,
-doesn't create queue storage, and keeps no history. Autoplay is off by default
-and doesn't schedule retries.
-Failures emit `autoplayFailed`, followed by `queueEnd` if playback stays idle.
-
-Your node needs the matching sources enabled. Spotify support comes from
-[NodeLink](https://nodelink.js.org/docs/api#recommendation-prefixes) or
-[LavaSrc](https://github.com/topi314/LavaSrc#supported-urls-and-queries);
-credentials and recommendation availability are handled there. Spotify's seed
-endpoint requires extended quota access or anonymous tokens with LavaSrc.
-
-Supply `options.autoplay(player)` or override `Player.getAutoplayTrack()` to
-replace that policy. A custom callback returns a Track or `null`; `null` ends
-playback without falling back to the built-in policy.
-
-Persistence is explicit: call `savePlayer(path?)` and `loadPlayers(path?)` when needed.
-Session resuming doesn't automatically rejoin Discord after a manual kick.
+Use `savePlayer(path?)` and `loadPlayers(path?)` to save and restore players.
 
 All options and defaults are documented in the
 [TypeScript types](https://github.com/ToddyTheNoobDud/AquaLink/blob/v4-ts-rewrite/src/types/shared.ts).
@@ -315,13 +272,11 @@ All options and defaults are documented in the
 ## REST and server APIs
 
 Use `player.node.rest` or `aqua.getNode(name)?.rest` for direct requests.
-Helpers cover player/session updates, track loading and decoding, routeplanner,
-lyrics, mixers and other NodeLink endpoints. Availability depends on your server
-and its plugins.
+The helpers cover player and session updates, track loading, lyrics, mixers and
+other server endpoints. Your node must support the endpoint you're calling.
 
-`makeRequest<T>(path, method?, body?)` reads JSON or text, returns `null` for 204,
-and logs request failures before returning `undefined`. `request()` returns an
-unread `Response` and rejects on failure. Consume or cancel streaming bodies.
+`makeRequest<T>(path, method?, body?)` returns parsed JSON or text, `null` for 204,
+and `undefined` on failure. Use `request()` when you need the `Response` itself.
 
 Protocol references: [Lavalink REST](https://lavalink.dev/api/rest),
 [Lavalink WebSocket](https://lavalink.dev/api/websocket) and
@@ -329,19 +284,9 @@ Protocol references: [Lavalink REST](https://lavalink.dev/api/rest),
 
 ## Moving from v3
 
-Many familiar names remain: `Aqua`, `createConnection`, `resolve`, players,
-queues and filter helpers. Update these parts when moving an existing bot:
-
-- Supply `options.send` for your Discord library and forward both voice events.
-- Await player creation, playback, controls, filter updates and destruction.
-- Look up players with `aqua.players.get(guildId)` and keep current on `player.current`.
-- `stop()` and `skip()` both advance through the server's `stopped` event.
-- Replace the old Plugin registry with structure overrides from your bot.
-- Built-in autoplay is optional and replaceable. Handle Discord messages in your bot.
-
-HTTP/2 settings, debug trace storage and automatic node failover are no longer
-part of the client. The [examples](https://github.com/ToddyTheNoobDud/AquaLink/tree/v4-ts-rewrite/examples)
-show the v4 extension points.
+Some v3 calls and defaults have changed. Read the
+[v4 breaking changes](https://github.com/ToddyTheNoobDud/AquaLink/blob/v4-ts-rewrite/Changelog.md)
+before updating an existing bot.
 
 ## Support
 

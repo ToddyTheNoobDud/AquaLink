@@ -150,7 +150,8 @@ export default class Node extends EventEmitter {
     })
     socket.on('error', (error) => {
       if (socket === this.websocket && !this.isDestroyed) {
-        this.reportError(error)
+        // Older Bun ws clients wrap the underlying Error in an ErrorEvent.
+        this.reportError('error' in error ? error.error : error)
       }
     })
     return socket
