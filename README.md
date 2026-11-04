@@ -35,10 +35,10 @@ your preferred Discord library. Your bot needs the Guilds and GuildVoiceStates i
 
 | Package manager | Install v4 |
 | --- | --- |
-| npm | `npm install aqualink@4` |
-| Bun | `bun add aqualink@4` |
-| pnpm | `pnpm add aqualink@4` |
-| Yarn | `yarn add aqualink@4` |
+| npm | `npm install aqualink@latest` |
+| Bun | `bun add aqualink@latest` |
+| pnpm | `pnpm add aqualink@latest` |
+| Yarn | `yarn add aqualink@latest` |
 
 ```ts
 import { Aqua } from 'aqualink'
