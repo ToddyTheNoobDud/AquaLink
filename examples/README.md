@@ -1,5 +1,9 @@
 # Examples
 
+For a complete bot, see [Kenium-Music](https://github.com/ToddyTheNoobDud/Kenium-Music).
+It's built with AquaLink and Seyfert. The examples here focus on individual
+overrides you can copy into your own bot.
+
 Start with [setup.ts](setup.ts). It registers all eight structure overrides in
 one Aqua instance. Keep the overrides you need; the rest can use their defaults.
 Importing these files doesn't open sockets or start a bot.

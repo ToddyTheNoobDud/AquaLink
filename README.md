@@ -1,13 +1,13 @@
 <div align="center">
 
-<img src="https://capsule-render.vercel.app/api?type=wave&color=0099FF&height=220&section=header&text=AquaLink&fontSize=70&fontAlignY=35&fontColor=ffffff&desc=Lavalink%20v4%20%2B%20NodeLink%20Client&descSize=20&descAlignY=60" alt="AquaLink: Lavalink v4 and NodeLink client" />
+<img src="https://raw.githubusercontent.com/ToddyTheNoobDud/AquaLink/v4-ts-rewrite/assets/banner.webp" alt="hello." width="100%" />
 
 [![NPM Downloads](https://img.shields.io/npm/dw/aqualink.svg?style=for-the-badge&color=3498db)](https://www.npmjs.com/package/aqualink)
 [![NPM Version](https://img.shields.io/npm/v/aqualink?color=0061ff&label=AquaLink&style=for-the-badge&logo=npm)](https://www.npmjs.com/package/aqualink)
 [![GitHub Stars](https://img.shields.io/github/stars/ToddyTheNoobDud/AquaLink?color=00bfff&style=for-the-badge&logo=github)](https://github.com/ToddyTheNoobDud/AquaLink/stargazers)
 [![Discord](https://img.shields.io/discord/1346930640049803266?color=7289da&label=Discord&logo=discord&style=for-the-badge)](https://discord.gg/K4CVv84VBC)
 
-[Examples](https://github.com/ToddyTheNoobDud/AquaLink/tree/v4-ts-rewrite/examples) · [Support](https://discord.gg/K4CVv84VBC)
+[Examples](https://github.com/ToddyTheNoobDud/AquaLink/tree/v4-ts-rewrite/examples) · [Example bot](https://github.com/ToddyTheNoobDud/Kenium-Music) · [Support](https://discord.gg/K4CVv84VBC)
 
 </div>
 
@@ -49,6 +49,9 @@ import { Aqua } from 'aqualink'
 ```
 
 CommonJS works too: `const { Aqua } = require('aqualink')`.
+
+Type declarations and method documentation are included for editor autocomplete.
+You don't need a separate `@types/aqualink` package. :P.
 
 ## Connect your bot
 
@@ -234,10 +237,16 @@ for adding your own behavior.
 
 ## Make it yours
 
+Want a complete bot to read or run? See
+[Kenium-Music](https://github.com/ToddyTheNoobDud/Kenium-Music), a Discord music bot
+built with AquaLink and Seyfert.
+
 The [examples/ guide](https://github.com/ToddyTheNoobDud/AquaLink/blob/v4-ts-rewrite/examples/README.md)
 shows how to replace each part from your bot. Start with
 [setup.ts](https://github.com/ToddyTheNoobDud/AquaLink/blob/v4-ts-rewrite/examples/setup.ts)
 to see the overrides registered together, then copy only the ones you need.
+The examples live on GitHub; the npm package contains the compiled library,
+typings, README and license.
 
 | Example | What you can change |
 | --- | --- |

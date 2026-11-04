@@ -58,6 +58,16 @@ export default class Connection {
       await this.pendingJoin.promise
       return this
     }
+    if (
+      this.guildId === options.guildId &&
+      this.player.voiceChannel === options.voiceChannel &&
+      this.endpoint &&
+      this.token &&
+      this.sessionId &&
+      (await this.attemptResume())
+    ) {
+      return this
+    }
     this.reset()
     this.guildId = options.guildId
     this.player.voiceChannel = options.voiceChannel

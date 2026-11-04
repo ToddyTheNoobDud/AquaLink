@@ -1,7 +1,7 @@
 {
   "name": "aqualink",
   "version": "4.0.0",
-  "description": "Extensible Lavalink v4 and NodeLink client.",
+  "description": "Extensible, Performant, lightweight Lavalink v4 and NodeLink client.",
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
@@ -23,16 +23,29 @@
     "LICENSE.md"
   ],
   "scripts": {
-    "typecheck": "bun ./node_modules/typescript/bin/tsc --noEmit -p tsconfig.json"
+    "build": "bun ./build.ts",
+    "prepack": "bun run build",
+    "typecheck": "bun check"
   },
   "license": "WTFPL",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/ToddyTheNoobDud/AquaLink.git"
   },
+  "homepage": "https://github.com/ToddyTheNoobDud/AquaLink#readme",
+  "bugs": {
+    "url": "https://github.com/ToddyTheNoobDud/AquaLink/issues"
+  },
+  "keywords": [
+    "lavalink",
+    "nodelink",
+    "discord",
+    "music",
+    "typescript"
+  ],
   "engines": {
     "node": ">=22.19.0",
-    "bun": ">=1.4.4"
+    "bun": ">=1.4.0"
   },
   "devDependencies": {
     "@types/bun": "^1.4.3",
